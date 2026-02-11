@@ -42,6 +42,36 @@ kmd
 
 Launches the interactive TUI launcher. Type to search, arrow keys to navigate, Enter to launch.
 Select a folder and press Tab to browse its contents.
+By default, kmd exits after launching an item (`quit_on_launch = true`).
+
+### Use as a Global Launcher (Recommended)
+
+kmd is designed to be summoned with a hotkey, used, and then disappear. Set up a system hotkey to launch kmd instantly:
+
+**Windows (PowerToys)**
+1. Install [PowerToys](https://github.com/microsoft/PowerToys)
+2. Open PowerToys → Keyboard Manager → Remap a shortcut
+3. Map `Alt+Space` → Run `wt -w _quake kmd` (Windows Terminal quake mode)
+
+**Windows (AutoHotkey)**
+```ahk
+!Space::Run "wt" "-w _quake kmd"   ; Alt+Space → kmd in quake terminal
+```
+
+**macOS (Hammerspoon)**
+```lua
+hs.hotkey.bind({"alt"}, "space", function()
+  hs.execute("open -a Terminal kmd", true)
+end)
+```
+
+**Linux (sxhkd)**
+```
+alt + space
+    alacritty --class kmd-float -e kmd
+```
+
+> Tip: Set `quit_on_launch = false` in config.toml if you prefer kmd to stay open after launching.
 
 ### CLI Commands
 
@@ -164,7 +194,7 @@ theme = "default"
 [launcher]
 file_search_provider = "auto"  # auto | builtin | fd | everything | mdfind | locate
 max_results = 5000
-quit_on_launch = false
+quit_on_launch = true             # exit after launching (launcher mode)
 ignore_patterns = [".git", "node_modules", "target"]
 
 [keybindings]

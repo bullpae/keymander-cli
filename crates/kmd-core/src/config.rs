@@ -128,7 +128,7 @@ impl Default for LauncherConfig {
                 "Library".to_string(),
                 ".Trash".to_string(),
             ],
-            quit_on_launch: false,
+            quit_on_launch: true,
             web_services: vec![],
         }
     }
