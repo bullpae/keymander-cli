@@ -68,6 +68,8 @@ pub struct LauncherConfig {
     pub search_paths: Vec<PathBuf>,
     /// Maximum search results from file providers
     pub max_results: usize,
+    /// Maximum recursive directory depth for file scanning (default: 6)
+    pub search_depth: usize,
     /// Patterns to ignore during file indexing
     pub ignore_patterns: Vec<String>,
     /// Quit kmd after launching a program/file
@@ -83,12 +85,48 @@ impl Default for LauncherConfig {
             file_search_provider: "auto".to_string(),
             everything_path: None,
             search_paths: vec![],
-            max_results: 5000,
+            max_results: 10000,
+            search_depth: 6,
             ignore_patterns: vec![
+                // Version control
                 ".git".to_string(),
+                ".svn".to_string(),
+                // Build artifacts / package caches
                 "node_modules".to_string(),
                 "target".to_string(),
                 "__pycache__".to_string(),
+                ".tox".to_string(),
+                "dist".to_string(),
+                // Rust / Cargo
+                ".cargo".to_string(),
+                ".rustup".to_string(),
+                // Node / npm / yarn / pnpm
+                ".npm".to_string(),
+                ".yarn".to_string(),
+                ".pnpm-store".to_string(),
+                // .NET / NuGet
+                ".nuget".to_string(),
+                // Java / Gradle / Maven
+                ".gradle".to_string(),
+                ".m2".to_string(),
+                // Go
+                "go".to_string(), // ~/go module cache
+                // General caches
+                ".cache".to_string(),
+                ".local".to_string(),
+                ".tmp".to_string(),
+                // IDE / editor state
+                ".vscode".to_string(),
+                ".cursor".to_string(),
+                ".idea".to_string(),
+                ".eclipse".to_string(),
+                // Windows specific
+                "AppData".to_string(),
+                "$Recycle.Bin".to_string(),
+                "NTUSER.DAT".to_string(),
+                // macOS specific
+                "Library".to_string(),
+                ".Trash".to_string(),
             ],
             quit_on_launch: false,
             web_services: vec![],

@@ -78,31 +78,64 @@ impl Index {
         Self::default()
     }
 
-    /// Build the full index from all sources
+    /// Build the full index from all sources.
+    ///
+    /// Strategy: "priority directories first"
+    /// 1. PATH executables, system commands, OS apps (always)
+    /// 2. Priority directories (Desktop, Documents, Downloads) — guaranteed
+    /// 3. General file provider scan — fills remaining quota
+    /// 4. Deduplicate by path
     pub fn build(config: &crate::config::LauncherConfig) -> Self {
+        use std::collections::HashSet;
+
         let mut items = Vec::new();
 
         // 1. PATH executables (always included)
-        items.extend(path::collect_executables());
+        let executables = path::collect_executables();
+        tracing::info!("PATH executables: {} items", executables.len());
+        items.extend(executables);
 
         // 2. System commands (always included)
-        items.extend(system_commands::collect_system_commands());
+        let sys_cmds = system_commands::collect_system_commands();
+        tracing::info!("System commands: {} items", sys_cmds.len());
+        items.extend(sys_cmds);
 
         // 3. OS applications
-        items.extend(apps::collect_apps());
+        let apps = apps::collect_apps();
+        tracing::info!("OS applications: {} items", apps.len());
+        items.extend(apps);
 
-        // 4. File search provider
-        let provider_kind = files::detect_provider(
-            &config.file_search_provider,
-            config.everything_path.as_ref(),
-        );
+        // 4. File search: priority directories FIRST
         let provider_config = files::ProviderConfig {
             max_results: config.max_results,
+            search_depth: config.search_depth,
             search_paths: config.search_paths.clone(),
             ignore_patterns: config.ignore_patterns.clone(),
             everything_path: config.everything_path.clone(),
         };
-        items.extend(files::collect_files(provider_kind, &provider_config));
+
+        let priority_files = files::collect_priority_files(&provider_config);
+        let priority_count = priority_files.len();
+        tracing::info!("Priority directory files: {} items", priority_count);
+        items.extend(priority_files);
+
+        // 5. General file provider scan (fills remaining quota)
+        let provider_kind = files::detect_provider(
+            &config.file_search_provider,
+            config.everything_path.as_ref(),
+        );
+        tracing::info!("Detected file provider: {}", provider_kind);
+
+        let general_files =
+            files::collect_files(provider_kind, &provider_config, priority_count);
+        tracing::info!("General file scan: {} items", general_files.len());
+        items.extend(general_files);
+
+        // 6. Deduplicate by path (preserve order — priority files come first)
+        let mut seen_paths = HashSet::new();
+        items.retain(|item| seen_paths.insert(item.path.clone()));
+
+        tracing::info!("Total index items after dedup: {}", items.len());
 
         let now = chrono_now();
 
