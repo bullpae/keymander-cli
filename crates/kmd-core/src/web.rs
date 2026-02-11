@@ -83,6 +83,35 @@ pub const WEB_SERVICES: &[WebService] = &[
         url_template: "https://dict.naver.com/search?query={query}",
         description: "Search Naver Dictionary",
     },
+    // AI Services
+    WebService {
+        name: "Perplexity",
+        prefixes: &["@ai", "@pplx", "@perplexity"],
+        icon: "\u{1F916}",
+        url_template: "https://www.perplexity.ai/search?q={query}",
+        description: "Ask Perplexity AI",
+    },
+    WebService {
+        name: "ChatGPT",
+        prefixes: &["@gpt", "@chatgpt"],
+        icon: "\u{1F4AC}",
+        url_template: "https://chatgpt.com/?q={query}",
+        description: "Ask ChatGPT",
+    },
+    WebService {
+        name: "Claude",
+        prefixes: &["@claude"],
+        icon: "\u{1F9E0}",
+        url_template: "https://claude.ai/new?q={query}",
+        description: "Ask Claude AI",
+    },
+    WebService {
+        name: "Gemini",
+        prefixes: &["@gemini"],
+        icon: "\u{2728}",
+        url_template: "https://gemini.google.com/app?q={query}",
+        description: "Ask Google Gemini",
+    },
 ];
 
 /// Parse a @prefix query → (service, query_text)

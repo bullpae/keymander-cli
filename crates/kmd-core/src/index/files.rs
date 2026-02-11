@@ -177,8 +177,16 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         for entry in walker.filter_entry(|e| !is_ignored_dir(e, &ignore_set)) {
             let Ok(entry) = entry else { continue };
 
-            // Only files (skip directories)
-            if !entry.file_type().is_file() {
+            let is_file = entry.file_type().is_file();
+            let is_dir = entry.file_type().is_dir();
+
+            // Skip entries that are neither files nor directories (e.g. symlinks)
+            if !is_file && !is_dir {
+                continue;
+            }
+
+            // Skip the root priority directories themselves (depth 0)
+            if is_dir && entry.depth() == 0 {
                 continue;
             }
 
@@ -203,13 +211,17 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
             items.push(IndexItem {
                 name: name.clone(),
                 path: path_str.clone(),
-                kind: if path.is_dir() {
+                kind: if is_dir {
                     ItemKind::Directory
                 } else {
                     ItemKind::File
                 },
                 source: Source::FileProvider,
-                icon: icon_for_path(path),
+                icon: if is_dir {
+                    "\u{1F4C1}".to_string() // 📁
+                } else {
+                    icon_for_path(path)
+                },
                 keywords: path_str,
             });
 
@@ -224,7 +236,7 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         }
     }
 
-    tracing::info!("Priority directories: {} files found", items.len());
+    tracing::info!("Priority directories: {} items (files + dirs) found", items.len());
     items
 }
 
@@ -359,7 +371,15 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
         }) {
             let Ok(entry) = entry else { continue };
 
-            if !entry.file_type().is_file() {
+            let is_file = entry.file_type().is_file();
+            let is_dir = entry.file_type().is_dir();
+
+            if !is_file && !is_dir {
+                continue;
+            }
+
+            // Skip the root directories themselves (depth 0)
+            if is_dir && entry.depth() == 0 {
                 continue;
             }
 
@@ -383,9 +403,17 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
             items.push(IndexItem {
                 name: name.clone(),
                 path: path_str.clone(),
-                kind: ItemKind::File,
+                kind: if is_dir {
+                    ItemKind::Directory
+                } else {
+                    ItemKind::File
+                },
                 source: Source::FileProvider,
-                icon: icon_for_path(path),
+                icon: if is_dir {
+                    "\u{1F4C1}".to_string() // 📁
+                } else {
+                    icon_for_path(path)
+                },
                 keywords: path_str,
             });
 
@@ -656,6 +684,7 @@ fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize)
         }
 
         let path = PathBuf::from(&line);
+        let is_dir = path.is_dir();
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -665,9 +694,17 @@ fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize)
         items.push(IndexItem {
             name: name.clone(),
             path: line.clone(),
-            kind: ItemKind::File,
+            kind: if is_dir {
+                ItemKind::Directory
+            } else {
+                ItemKind::File
+            },
             source: Source::FileProvider,
-            icon: icon_for_path(&path),
+            icon: if is_dir {
+                "\u{1F4C1}".to_string() // 📁
+            } else {
+                icon_for_path(&path)
+            },
             keywords: line,
         });
 

@@ -35,11 +35,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         })
         .collect();
 
+    let title = if let Some(ref drill_path) = state.drill_path {
+        format!(" \u{1F4C2} {} ", drill_path.display())
+    } else if state.query.is_empty() && state.drill_path.is_none() && !state.results.is_empty() {
+        " \u{1F552} Recent ".to_string()
+    } else {
+        " Results ".to_string()
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Results "),
+                .title(title),
         )
         .highlight_style(theme.list_selected_style())
         .highlight_symbol("▸ ");

@@ -1,5 +1,7 @@
 //! TUI application state and main event loop
 
+use std::path::PathBuf;
+
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers,
 };
@@ -11,6 +13,7 @@ use ratatui::Terminal;
 
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
+use kmd_core::index::{ItemKind, Source, files::icon_for_path};
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
@@ -42,6 +45,20 @@ pub struct AppState {
     pub composing: Option<char>,
     /// Hangul composition engine
     composer: HangulComposer,
+    /// Folder drill-down stack: previous (query, results, selected_index) states
+    drill_stack: Vec<DrillState>,
+    /// Current drill-down directory path (None = normal search mode)
+    pub drill_path: Option<PathBuf>,
+}
+
+/// Saved state for returning from a folder drill-down
+struct DrillState {
+    query: String,
+    results: Vec<SearchResult>,
+    selected_index: usize,
+    search_mode: SearchMode,
+    /// The drill path before entering this level (None for the first drill)
+    parent_drill_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -83,6 +100,8 @@ pub async fn run_app() -> color_eyre::Result<()> {
         hangul_mode: false,
         composing: None,
         composer: HangulComposer::new(),
+        drill_stack: Vec::new(),
+        drill_path: None,
     };
 
     // Setup terminal
@@ -162,10 +181,13 @@ fn handle_key(
             state.should_quit = true;
         }
 
-        // ── Escape: clear query or quit ──
+        // ── Escape: exit drill-down → clear query → quit ──
         (KeyCode::Esc, _) => {
             flush_composer(state);
-            if state.query.is_empty() {
+            if state.drill_path.is_some() {
+                // Exit drill-down mode first
+                drill_back(state);
+            } else if state.query.is_empty() {
                 state.should_quit = true;
             } else {
                 state.query.clear();
@@ -190,6 +212,20 @@ fn handle_key(
             flush_composer(state);
             if state.selected_index + 1 < state.results.len() {
                 state.selected_index += 1;
+            }
+        }
+
+        // ── Drill into folder: Tab or Right arrow ──
+        (KeyCode::Tab, _) | (KeyCode::Right, _) => {
+            flush_composer(state);
+            drill_into_folder(state);
+        }
+
+        // ── Drill back: Left arrow ──
+        (KeyCode::Left, _) => {
+            flush_composer(state);
+            if state.drill_path.is_some() {
+                drill_back(state);
             }
         }
 
@@ -416,21 +452,144 @@ fn update_search(
     state.selected_index = 0;
 }
 
+/// Drill into the selected folder — list its contents
+fn drill_into_folder(state: &mut AppState) {
+    let selected = match state.results.get(state.selected_index) {
+        Some(r) => r,
+        None => return,
+    };
+
+    // Only drill into directories
+    if selected.item.kind != ItemKind::Directory {
+        return;
+    }
+
+    let dir_path = PathBuf::from(&selected.item.path);
+    if !dir_path.is_dir() {
+        return;
+    }
+
+    // Save current state to the drill stack
+    state.drill_stack.push(DrillState {
+        query: state.query.clone(),
+        results: state.results.clone(),
+        selected_index: state.selected_index,
+        search_mode: state.search_mode,
+        parent_drill_path: state.drill_path.clone(),
+    });
+
+    // List directory contents
+    state.results = list_directory_contents(&dir_path);
+    state.selected_index = 0;
+    state.drill_path = Some(dir_path);
+    state.search_mode = SearchMode::Contains;
+    state.query.clear();
+}
+
+/// Go back from drill-down to the previous state
+fn drill_back(state: &mut AppState) {
+    if let Some(prev) = state.drill_stack.pop() {
+        state.query = prev.query;
+        state.results = prev.results;
+        state.selected_index = prev.selected_index;
+        state.search_mode = prev.search_mode;
+        state.drill_path = prev.parent_drill_path;
+    }
+}
+
+/// List contents of a directory as SearchResults, sorted: directories first, then files
+fn list_directory_contents(dir: &PathBuf) -> Vec<SearchResult> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry
+            .file_name()
+            .to_string_lossy()
+            .to_string();
+
+        // Skip hidden files/dirs
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let is_dir = path.is_dir();
+        let path_str = path.to_string_lossy().to_string();
+
+        let item = kmd_core::IndexItem {
+            name,
+            path: path_str,
+            kind: if is_dir {
+                ItemKind::Directory
+            } else {
+                ItemKind::File
+            },
+            source: Source::FileProvider,
+            icon: if is_dir {
+                "\u{1F4C1}".to_string() // 📁
+            } else {
+                icon_for_path(&path)
+            },
+            keywords: String::new(),
+        };
+
+        let result = SearchResult { item, score: 0 };
+
+        if is_dir {
+            dirs.push(result);
+        } else {
+            files.push(result);
+        }
+    }
+
+    // Sort each group by name
+    dirs.sort_by(|a, b| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase()));
+    files.sort_by(|a, b| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase()));
+
+    // Directories first, then files
+    dirs.extend(files);
+    dirs
+}
+
 /// Load recent history into results (for empty query display)
 fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
     let history = db.query_history(20);
     state.results = history
         .into_iter()
-        .map(|h| SearchResult {
-            item: kmd_core::index::IndexItem {
-                name: h.display,
-                path: h.value,
-                kind: kmd_core::index::ItemKind::App,
-                source: kmd_core::index::Source::Path,
-                icon: "\u{1F552}".to_string(), // 🕒
-                keywords: String::new(),
-            },
-            score: h.frequency * 100,
+        .map(|h| {
+            let kind = match h.item_type.as_str() {
+                "App" => ItemKind::App,
+                "File" => ItemKind::File,
+                "Dir" => ItemKind::Directory,
+                "Exe" => ItemKind::Executable,
+                "System" => ItemKind::SystemCommand,
+                "Web" => ItemKind::WebSearch,
+                _ => ItemKind::App,
+            };
+            let path_buf = PathBuf::from(&h.value);
+            let icon = match kind {
+                ItemKind::Directory => "\u{1F4C1}".to_string(), // 📁
+                _ => icon_for_path(&path_buf),
+            };
+            // Prepend clock emoji to indicate history
+            let icon = format!("\u{1F552}{}", icon); // 🕒 + original icon
+            SearchResult {
+                item: kmd_core::IndexItem {
+                    name: h.display,
+                    path: h.value,
+                    kind,
+                    source: Source::FileProvider,
+                    icon,
+                    keywords: String::new(),
+                },
+                score: h.frequency * 100,
+            }
         })
         .collect();
 }

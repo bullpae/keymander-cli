@@ -59,8 +59,13 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     let mode_label = state.search_mode_label();
     let result_count = state.results.len();
     let lang_indicator = if state.hangul_mode { "한" } else { "EN" };
+    let nav_hints = if state.drill_path.is_some() {
+        "↑↓ navigate  Tab/→ open folder  ←/Esc back  Enter launch"
+    } else {
+        "↑↓ navigate  Tab/→ open folder  Enter launch  Esc quit  Ctrl+Space 한/EN"
+    };
     let text = format!(
-        " [{}] {} results  |  {} {}  |  ↑↓ navigate  Enter launch  Esc quit  Ctrl+Space 한/EN",
+        " [{}] {} results  |  {} {}  |  {}",
         mode_label,
         result_count,
         lang_indicator,
@@ -69,6 +74,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
         } else {
             "English mode"
         },
+        nav_hints,
     );
     let status = ratatui::widgets::Paragraph::new(text)
         .style(theme.status_style());
