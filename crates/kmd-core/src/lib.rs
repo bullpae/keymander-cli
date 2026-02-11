@@ -6,6 +6,7 @@
 pub mod action;
 pub mod config;
 pub mod db;
+pub mod hangul;
 pub mod history;
 pub mod index;
 pub mod plugin;

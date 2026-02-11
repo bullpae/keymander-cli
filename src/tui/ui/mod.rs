@@ -58,9 +58,17 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let mode_label = state.search_mode_label();
     let result_count = state.results.len();
+    let lang_indicator = if state.hangul_mode { "한" } else { "EN" };
     let text = format!(
-        " [{}] {} results  |  ↑↓ navigate  Enter launch  Esc quit  Ctrl+P preview",
-        mode_label, result_count
+        " [{}] {} results  |  {} {}  |  ↑↓ navigate  Enter launch  Esc quit  Ctrl+Space 한/EN",
+        mode_label,
+        result_count,
+        lang_indicator,
+        if state.hangul_mode {
+            "Korean mode"
+        } else {
+            "English mode"
+        },
     );
     let status = ratatui::widgets::Paragraph::new(text)
         .style(theme.status_style());

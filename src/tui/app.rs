@@ -1,6 +1,8 @@
 //! TUI application state and main event loop
 
-use crossterm::event::{KeyCode, KeyModifiers, EnableBracketedPaste, DisableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -8,6 +10,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use kmd_core::action;
+use kmd_core::hangul::{self, HangulComposer};
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
@@ -17,7 +20,7 @@ use super::ui;
 
 /// Application state
 pub struct AppState {
-    /// Current search query
+    /// Current search query (committed text only)
     pub query: String,
     /// Search results
     pub results: Vec<SearchResult>,
@@ -33,11 +36,25 @@ pub struct AppState {
     should_quit: bool,
     /// Whether to quit after launch
     quit_on_launch: bool,
+    /// Korean (Hangul) input mode
+    pub hangul_mode: bool,
+    /// Currently composing character (during Korean input)
+    pub composing: Option<char>,
+    /// Hangul composition engine
+    composer: HangulComposer,
 }
 
 impl AppState {
     pub fn search_mode_label(&self) -> &str {
         self.search_mode.label()
+    }
+
+    /// Get the effective query for display and search (query + composing char)
+    pub fn effective_query(&self) -> String {
+        match self.composing {
+            Some(c) => format!("{}{}", self.query, c),
+            None => self.query.clone(),
+        }
     }
 }
 
@@ -63,6 +80,9 @@ pub async fn run_app() -> color_eyre::Result<()> {
         search_mode: SearchMode::Fuzzy,
         should_quit: false,
         quit_on_launch: config.launcher.quit_on_launch,
+        hangul_mode: false,
+        composing: None,
+        composer: HangulComposer::new(),
     };
 
     // Setup terminal
@@ -78,21 +98,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
 
     // Initial empty results: show history
     if let Some(ref db) = db {
-        let history = db.query_history(20);
-        state.results = history
-            .into_iter()
-            .map(|h| SearchResult {
-                item: kmd_core::index::IndexItem {
-                    name: h.display,
-                    path: h.value,
-                    kind: kmd_core::index::ItemKind::App,
-                    source: kmd_core::index::Source::Path,
-                    icon: "\u{1F552}".to_string(), // 🕒
-                    keywords: String::new(),
-                },
-                score: h.frequency * 100,
-            })
-            .collect();
+        load_history_into_results(&mut state, db);
     }
 
     // Main loop
@@ -112,9 +118,6 @@ pub async fn run_app() -> color_eyre::Result<()> {
                 handle_key(&mut state, key, &mut engine, db.as_ref());
             }
             AppEvent::Paste(text) => {
-                // Handle pasted text and IME-composed input.
-                // On some terminals/OS combos, Korean IME commits arrive as Paste events
-                // when BracketedPaste is enabled.
                 handle_paste(&mut state, &text, &mut engine, db.as_ref());
             }
             AppEvent::Resize(_, _) => {
@@ -146,128 +149,139 @@ fn handle_key(
     db: Option<&kmd_core::Database>,
 ) {
     match (key.code, key.modifiers) {
-        // Quit
+        // ── Toggle Korean mode: Ctrl+Space or Right Alt ──
+        (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
+            // Flush any composing character before toggling
+            flush_composer(state);
+            state.hangul_mode = !state.hangul_mode;
+            update_search(state, engine, db);
+        }
+
+        // ── Quit ──
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             state.should_quit = true;
         }
-        // Escape: clear query or quit
+
+        // ── Escape: clear query or quit ──
         (KeyCode::Esc, _) => {
+            flush_composer(state);
             if state.query.is_empty() {
                 state.should_quit = true;
             } else {
                 state.query.clear();
                 state.results.clear();
                 state.selected_index = 0;
-
-                // Show history when query is empty
                 if let Some(db) = db {
-                    let history = db.query_history(20);
-                    state.results = history
-                        .into_iter()
-                        .map(|h| SearchResult {
-                            item: kmd_core::index::IndexItem {
-                                name: h.display,
-                                path: h.value,
-                                kind: kmd_core::index::ItemKind::App,
-                                source: kmd_core::index::Source::Path,
-                                icon: "\u{1F552}".to_string(),
-                                keywords: String::new(),
-                            },
-                            score: h.frequency * 100,
-                        })
-                        .collect();
+                    load_history_into_results(state, db);
                 }
             }
         }
-        // Navigate up
+
+        // ── Navigate up ──
         (KeyCode::Up, _) => {
+            flush_composer(state);
             if state.selected_index > 0 {
                 state.selected_index -= 1;
             }
         }
-        // Navigate down
+
+        // ── Navigate down ──
         (KeyCode::Down, _) => {
+            flush_composer(state);
             if state.selected_index + 1 < state.results.len() {
                 state.selected_index += 1;
             }
         }
-        // Toggle preview
+
+        // ── Toggle preview ──
         (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            flush_composer(state);
             state.show_preview = !state.show_preview;
         }
-        // Execute selected item
+
+        // ── Execute selected item ──
         (KeyCode::Enter, _) => {
-            if let Some(result) = state.results.get(state.selected_index) {
-                // Check for web query
-                if let Some((service, web_query)) = web::parse_web_query(&state.query) {
-                    if !web_query.is_empty() {
-                        let url = web::build_search_url(service, &web_query);
-                        let _ = action::open_url(&url);
-                        if state.quit_on_launch {
-                            state.should_quit = true;
-                        }
-                        return;
-                    }
-                }
+            flush_composer(state);
+            update_search(state, engine, db);
+            execute_selected(state, db);
+        }
 
-                // Check for URL mode
-                let (mode, normalized) = SearchMode::detect(&state.query);
-                if mode == SearchMode::Url {
-                    let _ = action::open_url(&normalized);
-                    if state.quit_on_launch {
-                        state.should_quit = true;
-                    }
-                    return;
-                }
-
-                // Execute the item
-                match action::execute(result) {
-                    action::ActionResult::Launched => {
-                        if let Some(db) = db {
-                            kmd_core::history::record_launch(
-                                db,
-                                &format!("{}", result.item.kind),
-                                &result.item.path,
-                                Some(&result.item.name),
-                            );
-                        }
-                        if state.quit_on_launch {
-                            state.should_quit = true;
-                        }
-                    }
-                    action::ActionResult::OpenedUrl(_) => {
-                        if state.quit_on_launch {
-                            state.should_quit = true;
-                        }
-                    }
-                    action::ActionResult::NeedsConfirmation(_name) => {
-                        // TODO: show confirmation dialog
-                    }
-                    action::ActionResult::Error(_e) => {
-                        // TODO: show error toast
-                    }
-                }
+        // ── Backspace ──
+        (KeyCode::Backspace, _) => {
+            if state.hangul_mode && state.composer.is_composing() {
+                // Decompose within the composing character
+                state.composer.backspace();
+                state.composing = state.composer.composing();
+                update_search(state, engine, db);
+            } else {
+                // Normal backspace: remove last committed character
+                state.query.pop();
+                update_search(state, engine, db);
             }
         }
-        // Backspace
-        (KeyCode::Backspace, _) => {
-            state.query.pop();
-            update_search(state, engine, db);
-        }
-        // Character input — accept with any modifier combination.
-        // Korean IME-committed chars may arrive with unexpected modifier flags
-        // depending on terminal emulator.
+
+        // ── Character input ──
         (KeyCode::Char(c), mods) => {
-            // Skip if Ctrl is held (except Shift+Ctrl for some edge cases)
-            // to avoid capturing Ctrl+A, Ctrl+E etc. as text input.
+            // Skip Ctrl+key and Alt+key (except for toggle handled above)
             if mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::ALT) {
                 return;
             }
-            state.query.push(c);
-            update_search(state, engine, db);
+
+            if state.hangul_mode {
+                handle_hangul_char(state, c, engine, db);
+            } else {
+                // English mode: if the system IME sent a Korean char, accept it
+                if hangul::is_korean_char(c) {
+                    state.query.push(c);
+                } else {
+                    state.query.push(c);
+                }
+                update_search(state, engine, db);
+            }
         }
+
         _ => {}
     }
+}
+
+/// Handle a character in Korean input mode
+fn handle_hangul_char(
+    state: &mut AppState,
+    c: char,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
+    // If the character is already Korean (system IME composed it), pass through
+    if hangul::is_korean_char(c) {
+        flush_composer(state);
+        state.query.push(c);
+        update_search(state, engine, db);
+        return;
+    }
+
+    // Try mapping the key to a jamo
+    if let Some(jamo) = hangul::key_to_jamo(c) {
+        let result = state.composer.process(jamo);
+        if let Some(committed) = result.committed {
+            state.query.push(committed);
+        }
+        state.composing = result.composing;
+        update_search(state, engine, db);
+    } else {
+        // Not a jamo key (number, symbol, space, etc.)
+        // Flush the composer and add the character as-is
+        flush_composer(state);
+        state.query.push(c);
+        update_search(state, engine, db);
+    }
+}
+
+/// Flush the Hangul composer — commit any composing character to the query
+fn flush_composer(state: &mut AppState) {
+    if let Some(committed) = state.composer.flush() {
+        state.query.push(committed);
+    }
+    state.composing = None;
 }
 
 /// Handle pasted text (clipboard paste or IME-composed text)
@@ -277,6 +291,9 @@ fn handle_paste(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
+    // Flush any composing character first
+    flush_composer(state);
+
     // Filter out control characters but keep all Unicode (including Korean, CJK, emoji)
     let clean: String = text.chars().filter(|c| !c.is_control()).collect();
     if clean.is_empty() {
@@ -286,56 +303,96 @@ fn handle_paste(
     update_search(state, engine, db);
 }
 
-/// Update search results based on current query
+/// Execute the currently selected item
+fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
+    if let Some(result) = state.results.get(state.selected_index) {
+        // Check for web query
+        if let Some((service, web_query)) = web::parse_web_query(&state.query) {
+            if !web_query.is_empty() {
+                let url = web::build_search_url(service, &web_query);
+                let _ = action::open_url(&url);
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+                return;
+            }
+        }
+
+        // Check for URL mode
+        let (mode, normalized) = SearchMode::detect(&state.query);
+        if mode == SearchMode::Url {
+            let _ = action::open_url(&normalized);
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+
+        // Execute the item
+        match action::execute(result) {
+            action::ActionResult::Launched => {
+                if let Some(db) = db {
+                    kmd_core::history::record_launch(
+                        db,
+                        &format!("{}", result.item.kind),
+                        &result.item.path,
+                        Some(&result.item.name),
+                    );
+                }
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+            }
+            action::ActionResult::OpenedUrl(_) => {
+                if state.quit_on_launch {
+                    state.should_quit = true;
+                }
+            }
+            action::ActionResult::NeedsConfirmation(_name) => {
+                // TODO: show confirmation dialog
+            }
+            action::ActionResult::Error(_e) => {
+                // TODO: show error toast
+            }
+        }
+    }
+}
+
+/// Update search results based on current query (including composing char)
 fn update_search(
     state: &mut AppState,
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    if state.query.is_empty() {
+    let search_query = state.effective_query();
+
+    if search_query.is_empty() {
         state.results.clear();
         state.selected_index = 0;
 
         // Show history when query is empty
         if let Some(db) = db {
-            let history = db.query_history(20);
-            state.results = history
-                .into_iter()
-                .map(|h| SearchResult {
-                    item: kmd_core::index::IndexItem {
-                        name: h.display,
-                        path: h.value,
-                        kind: kmd_core::index::ItemKind::App,
-                        source: kmd_core::index::Source::Path,
-                        icon: "\u{1F552}".to_string(),
-                        keywords: String::new(),
-                    },
-                    score: h.frequency * 100,
-                })
-                .collect();
+            load_history_into_results(state, db);
         }
         return;
     }
 
     // Check for @ web service prefix
-    if state.query.starts_with('@') {
-        if let Some((service, query)) = web::parse_web_query(&state.query) {
+    if search_query.starts_with('@') {
+        if let Some((service, query)) = web::parse_web_query(&search_query) {
             if query.is_empty() {
-                // Show available services
                 let items = web::list_services_as_items("");
                 state.results = items
                     .into_iter()
                     .map(|item| SearchResult { item, score: 0 })
                     .collect();
             } else {
-                // Show search result for this service
                 let item = web::search_result_item(service, &query);
                 state.results = vec![SearchResult { item, score: 100 }];
             }
             state.search_mode = SearchMode::Contains;
         } else {
-            // Show all services filtered
-            let filter = state.query.trim_start_matches('@');
+            let filter = search_query.trim_start_matches('@');
             let items = web::list_services_as_items(filter);
             state.results = items
                 .into_iter()
@@ -347,7 +404,7 @@ fn update_search(
         return;
     }
 
-    let (mode, mut results) = engine.search(&state.query, 50);
+    let (mode, mut results) = engine.search(&search_query, 50);
     state.search_mode = mode;
 
     // Apply history boost
@@ -357,4 +414,23 @@ fn update_search(
 
     state.results = results;
     state.selected_index = 0;
+}
+
+/// Load recent history into results (for empty query display)
+fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
+    let history = db.query_history(20);
+    state.results = history
+        .into_iter()
+        .map(|h| SearchResult {
+            item: kmd_core::index::IndexItem {
+                name: h.display,
+                path: h.value,
+                kind: kmd_core::index::ItemKind::App,
+                source: kmd_core::index::Source::Path,
+                icon: "\u{1F552}".to_string(), // 🕒
+                keywords: String::new(),
+            },
+            score: h.frequency * 100,
+        })
+        .collect();
 }
