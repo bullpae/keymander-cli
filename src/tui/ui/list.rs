@@ -4,6 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::AppState;
 use crate::tui::theme::Theme;
@@ -18,11 +19,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
             let line = Line::from(vec![
                 Span::raw(format!(" {} ", result.item.icon)),
                 Span::styled(
-                    format!("{:<30}", truncate(&result.item.name, 30)),
+                    pad_display(&truncate(&result.item.name, 30), 30),
                     theme.list_normal_style(),
                 ),
                 Span::styled(
-                    format!(" {:<8}", kind_tag),
+                    format!(" {}", pad_display(&kind_tag, 8)),
                     theme.kind_tag_style(),
                 ),
                 Span::styled(
@@ -49,11 +50,35 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-/// Truncate a string to fit within max_len, adding "..." if needed
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+/// Truncate a string to fit within max_width display columns, adding "..." if needed.
+/// Uses unicode display width so CJK characters (2 columns each) are handled correctly.
+fn truncate(s: &str, max_width: usize) -> String {
+    let width = UnicodeWidthStr::width(s);
+    if width <= max_width {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let suffix = "...";
+        let target = max_width.saturating_sub(suffix.len());
+        let mut current_width = 0;
+        let mut end = 0;
+        for (i, ch) in s.char_indices() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + cw > target {
+                break;
+            }
+            current_width += cw;
+            end = i + ch.len_utf8();
+        }
+        format!("{}{}", &s[..end], suffix)
+    }
+}
+
+/// Pad a string to exactly `width` display columns using unicode width.
+fn pad_display(s: &str, width: usize) -> String {
+    let current = UnicodeWidthStr::width(s);
+    if current >= width {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(width - current))
     }
 }
