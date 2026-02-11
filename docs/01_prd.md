@@ -73,12 +73,15 @@ Rust 기반 단일 바이너리 TUI 런처. GUI 툴킷 불필요, 터미널에�
 | 기능 | 설명 |
 |------|------|
 | 앱 검색 | OS별 설치 앱 인덱싱 및 퍼지 검색 |
-| 파일 검색 | fd/Everything/mdfind/locate/builtin 프로바이더 |
+| 파일/폴더 검색 | fd/Everything/mdfind/locate/builtin 프로바이더, 폴더도 인덱싱 |
+| 폴더 드릴다운 | 폴더 선택 후 Tab/→으로 내부 실시간 탐색, ←/Esc로 복귀 |
 | PATH 실행파일 | PATH 환경변수의 모든 실행파일 |
 | 시스템 명령 | 종료, 재시작, 잠금, 절전 등 |
 | 웹 서비스 | @g, @gh, @yt 등 10종 내장 + 커스텀 정의 |
+| AI 서비스 | @ai (Perplexity), @gpt (ChatGPT), @claude, @gemini |
 | URL 열기 | URL 자동 감지 → 브라우저 |
 | 히스토리 부스팅 | 자주 사용한 항목이 상단 노출 |
+| 최근 실행 | 빈 쿼리 시 최근 실행 항목을 올바른 아이콘과 함께 표시 |
 | 북마크 | 자주 쓰는 항목 고정 |
 
 ### 3.2 검색 모드 자동 감지
@@ -211,9 +214,32 @@ block-beta
     end
 ```
 
-- 단일 화면, 모드 전환 없음
+#### 폴더 드릴다운 화면
+
+```mermaid
+block-beta
+    columns 1
+    block:header4:1
+        H4["kmd v0.2.0 | 5997 items indexed"]
+    end
+    block:inputBar4:1
+        IB4["Search: > _"]
+    end
+    block:content4:1
+        R4a["▸ 📁 2026년_프로젝트     [Dir]  C:\Users\...\Documents"]
+        R4b["  📁 회의록              [Dir]  C:\Users\...\Documents"]
+        R4c["  📘 업무계획_r1.hwp     [File] C:\Users\...\Documents"]
+        R4d["  📊 예산.xlsx           [File] C:\Users\...\Documents"]
+    end
+    block:statusBar4:1
+        SB4["[contains] 4 results | ↑↓ navigate  Tab/→ open folder  ←/Esc back  Enter launch"]
+    end
+```
+
+- 단일 화면, 모드 전환 없음 (드릴다운은 스택 기반 상태 관리)
 - 플러그인은 prefix(`:calc`, `:todo`)로 활성화
-- 빈 쿼리 시 히스토리 표시
+- 빈 쿼리 시 히스토리 표시 (🕒 Recent 타이틀)
+- 폴더 선택 시 Tab/→로 드릴다운, ←/Esc로 복귀
 
 ---
 

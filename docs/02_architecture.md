@@ -24,7 +24,7 @@ graph TB
         Config["Config<br/>TOML load/save, get/set"]
         Plugin["Plugin<br/>Extension trait, loader, calc"]
         Action["Action<br/>execute, open_url, open_with_system"]
-        Web["Web<br/>@prefix services, URL builder"]
+        Web["Web<br/>@prefix services (14종+AI), URL builder"]
         History["History<br/>boost_results, record_launch"]
     end
 
@@ -207,7 +207,7 @@ flowchart TB
     Build --> Step1["1. path::collect_executables()<br/>PATH 환경변수 스캔<br/>중복 제거, 히든 파일 제외"]
     Build --> Step2["2. system_commands::collect()<br/>플랫폼별 정적 목록<br/>shutdown, lock, ..."]
     Build --> Step3["3. apps::collect_apps()<br/>OS별 앱 발견"]
-    Build --> Step4["4. files::collect_files()<br/>파일 프로바이더"]
+    Build --> Step4["4. files::collect_files()<br/>파일+폴더 프로바이더"]
 
     Step3 --> Win["Windows: Start Menu .lnk"]
     Step3 --> Mac["macOS: /Applications/*.app"]
@@ -249,12 +249,14 @@ stateDiagram-v2
     WaitEvent --> HandleKey: Key event
     WaitEvent --> Render: Tick / Resize
 
-    HandleKey --> Quit: Ctrl+C / Esc (빈 쿼리)
+    HandleKey --> Quit: Ctrl+C / Esc (빈 쿼리, 드릴다운 아닌 경우)
     HandleKey --> ClearQuery: Esc (쿼리 있음)
     HandleKey --> Navigate: Up / Down
     HandleKey --> TogglePreview: Ctrl+P
     HandleKey --> Execute: Enter
     HandleKey --> UpdateSearch: 문자 입력 / Backspace
+    HandleKey --> DrillInto: Tab / Right (폴더 선택 시)
+    HandleKey --> DrillBack: Left / Esc (드릴다운 중)
 
     ClearQuery --> ShowHistory: 히스토리 로드
     ShowHistory --> Render
@@ -265,6 +267,11 @@ stateDiagram-v2
     BoostResults --> Render
     Execute --> ActionExecute: action::execute()
     ActionExecute --> RecordHistory: DB 기록
+
+    DrillInto --> ListDir: read_dir(폴더) + 결과 갱신
+    ListDir --> Render
+    DrillBack --> RestoreState: drill_stack.pop()
+    RestoreState --> Render
 
     RecordHistory --> Quit: quit_on_launch
     RecordHistory --> Render: 계속

@@ -12,8 +12,11 @@ Single binary, fast startup, minimal memory — no Electron, no GUI toolkit, jus
 - **Lightweight**: ~3MB binary, ~40ms startup, <5MB RAM
 - **Portable**: Single binary + SQLite DB + TOML config = done
 - **Smart search**: Fuzzy (Nucleo), glob, regex, substring, URL detection
+- **File & folder indexing**: Indexes both files and directories with proper icons
+- **Folder drill-down**: Navigate into folders with Tab/→, go back with ←/Esc
 - **Web services**: `@g rust tutorial`, `@gh keymander`, `@yt lofi music`
-- **History-aware**: Frequently used items bubble to the top
+- **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`
+- **History-aware**: Frequently used items bubble to the top, recent launches shown on empty query
 - **Plugin system**: Extension trait + script-based plugins (JSON over stdin/stdout)
 - **Built-in calculator**: `:calc 2+3*4` → `14`
 
@@ -38,6 +41,7 @@ kmd
 ```
 
 Launches the interactive TUI launcher. Type to search, arrow keys to navigate, Enter to launch.
+Select a folder and press Tab to browse its contents.
 
 ### CLI Commands
 
@@ -102,15 +106,27 @@ kmd daemon status
 | `@map` | Google Maps |
 | `@dict` | Naver Dictionary |
 
+### AI Services
+
+| Prefix | Service |
+|--------|---------|
+| `@ai` / `@pplx` | Perplexity AI |
+| `@gpt` / `@chatgpt` | ChatGPT |
+| `@claude` | Claude AI |
+| `@gemini` | Google Gemini |
+
 ### Keybindings (TUI)
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate results |
 | `Enter` | Launch selected item |
-| `Esc` | Clear query / quit |
+| `Tab` / `→` | Drill into selected folder |
+| `←` | Go back from folder drill-down |
+| `Esc` | Exit drill-down / clear query / quit |
 | `Ctrl+C` | Quit |
 | `Ctrl+P` | Toggle preview panel |
+| `Ctrl+Space` | Toggle Korean/English input |
 
 ## Architecture
 
