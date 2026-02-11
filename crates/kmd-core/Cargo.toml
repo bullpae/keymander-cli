@@ -1,0 +1,33 @@
+[package]
+name = "kmd-core"
+version = "0.2.0-alpha.1"
+edition = "2021"
+description = "keymander core library — indexing, search, config, database"
+
+[dependencies]
+# Search
+nucleo = "0.5"
+regex = "1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Config / Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+
+# Paths
+dirs = "6"
+
+# Error
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+
+# File walking
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
