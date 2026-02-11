@@ -1,0 +1,17 @@
+---
+description: Always commit and push after completing a task
+alwaysApply: true
+---
+
+# Auto Commit & Push
+
+After completing any implementation task (feature, fix, refactor, etc.):
+
+1. **Verify** — Build succeeds (`cargo build --release`) and tests pass (`cargo test`)
+2. **Commit** — Stage changed files and commit with a conventional commit message
+   - Format: `type: short description` (feat/fix/refactor/docs/chore)
+   - Include a body listing key changes when there are multiple files
+3. **Push** — `git push origin main`
+4. **Pull first** — Before starting new work, run `git pull origin main` to sync
+
+Do NOT skip commit/push. Do NOT ask the user whether to commit — just do it after verification passes.
