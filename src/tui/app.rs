@@ -1,6 +1,6 @@
 //! TUI application state and main event loop
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, EnableBracketedPaste, DisableBracketedPaste};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -68,7 +68,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -111,6 +111,12 @@ pub async fn run_app() -> color_eyre::Result<()> {
             AppEvent::Key(key) => {
                 handle_key(&mut state, key, &mut engine, db.as_ref());
             }
+            AppEvent::Paste(text) => {
+                // Handle pasted text and IME-composed input.
+                // On some terminals/OS combos, Korean IME commits arrive as Paste events
+                // when BracketedPaste is enabled.
+                handle_paste(&mut state, &text, &mut engine, db.as_ref());
+            }
             AppEvent::Resize(_, _) => {
                 // Terminal will re-render automatically
             }
@@ -124,6 +130,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
     disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
+        DisableBracketedPaste,
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
@@ -247,13 +254,36 @@ fn handle_key(
             state.query.pop();
             update_search(state, engine, db);
         }
-        // Character input
-        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+        // Character input — accept with any modifier combination.
+        // Korean IME-committed chars may arrive with unexpected modifier flags
+        // depending on terminal emulator.
+        (KeyCode::Char(c), mods) => {
+            // Skip if Ctrl is held (except Shift+Ctrl for some edge cases)
+            // to avoid capturing Ctrl+A, Ctrl+E etc. as text input.
+            if mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::ALT) {
+                return;
+            }
             state.query.push(c);
             update_search(state, engine, db);
         }
         _ => {}
     }
+}
+
+/// Handle pasted text (clipboard paste or IME-composed text)
+fn handle_paste(
+    state: &mut AppState,
+    text: &str,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
+    // Filter out control characters but keep all Unicode (including Korean, CJK, emoji)
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    if clean.is_empty() {
+        return;
+    }
+    state.query.push_str(&clean);
+    update_search(state, engine, db);
 }
 
 /// Update search results based on current query

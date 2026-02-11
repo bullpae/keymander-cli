@@ -1,4 +1,4 @@
-//! Terminal event handling — key, mouse, resize, tick events
+//! Terminal event handling — key, mouse, resize, tick, paste events
 
 use std::time::Duration;
 
@@ -8,6 +8,9 @@ use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
 #[allow(dead_code)]
 pub enum AppEvent {
     Key(KeyEvent),
+    /// Text pasted or received from IME composition
+    /// (requires EnableBracketedPaste for IME-composed text)
+    Paste(String),
     Tick,
     Resize(u16, u16),
 }
@@ -36,6 +39,9 @@ impl EventHandler {
                         Ok(AppEvent::Tick)
                     }
                 }
+                // Paste events: captures clipboard paste and IME-composed text
+                // on terminals that support bracketed paste mode.
+                CrosstermEvent::Paste(text) => Ok(AppEvent::Paste(text)),
                 CrosstermEvent::Resize(w, h) => Ok(AppEvent::Resize(w, h)),
                 _ => Ok(AppEvent::Tick),
             }
