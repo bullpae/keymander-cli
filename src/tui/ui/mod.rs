@@ -90,6 +90,17 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
 // ── Status Bar ───────────────────────────────────────────────────────────────
 
 fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    // Show temporary status message (e.g. "Copied to clipboard") if present
+    if let Some(msg) = &state.status_message {
+        let line = Line::from(vec![
+            Span::styled(format!(" {} ", msg), theme.status_count_style()),
+        ]);
+        let status = ratatui::widgets::Paragraph::new(line)
+            .style(ratatui::style::Style::default().bg(theme.mantle));
+        frame.render_widget(status, area);
+        return;
+    }
+
     let mode_label = state.search_mode_label();
     let result_count = state.results.len();
 

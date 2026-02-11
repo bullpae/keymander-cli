@@ -14,6 +14,7 @@ use ratatui::Terminal;
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
 use kmd_core::index::{ItemKind, Source, files::icon_for_path};
+use kmd_core::plugin::builtin_calc;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
@@ -49,6 +50,8 @@ pub struct AppState {
     drill_stack: Vec<DrillState>,
     /// Current drill-down directory path (None = normal search mode)
     pub drill_path: Option<PathBuf>,
+    /// Temporary status message (e.g. "Copied to clipboard")
+    pub status_message: Option<String>,
 }
 
 /// Saved state for returning from a folder drill-down
@@ -102,6 +105,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
         composer: HangulComposer::new(),
         drill_stack: Vec::new(),
         drill_path: None,
+        status_message: None,
     };
 
     // Setup terminal
@@ -167,6 +171,9 @@ fn handle_key(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
+    // Clear any temporary status message on any key press
+    state.status_message = None;
+
     match (key.code, key.modifiers) {
         // ── Toggle Korean mode: Ctrl+Space or Right Alt ──
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
@@ -342,6 +349,15 @@ fn handle_paste(
 /// Execute the currently selected item
 fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     if let Some(result) = state.results.get(state.selected_index) {
+        // Check for calculator result — copy value to clipboard
+        if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(&result.item.path);
+                state.status_message = Some(format!("📋 Copied: {}", result.item.path));
+            }
+            return;
+        }
+
         // Check for web query
         if let Some((service, web_query)) = web::parse_web_query(&state.query) {
             if !web_query.is_empty() {
@@ -440,8 +456,33 @@ fn update_search(
         return;
     }
 
+    // Check for :calc prefix (explicit calculator mode)
+    if search_query.starts_with(":calc") {
+        let expr = search_query.strip_prefix(":calc").unwrap_or("").trim();
+        let calc = builtin_calc::CalcExtension;
+        let items = <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, expr);
+        state.results = items
+            .into_iter()
+            .map(|item| SearchResult { item, score: 1000 })
+            .collect();
+        state.selected_index = 0;
+        return;
+    }
+
     let (mode, mut results) = engine.search(&search_query, 50);
     state.search_mode = mode;
+
+    // Inline calculator: if query looks like math, prepend result
+    if builtin_calc::looks_like_math(&search_query) {
+        let calc = builtin_calc::CalcExtension;
+        let calc_items = <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, &search_query);
+        let calc_results: Vec<SearchResult> = calc_items
+            .into_iter()
+            .map(|item| SearchResult { item, score: u32::MAX })
+            .collect();
+        // Prepend calculator results before file results
+        results.splice(0..0, calc_results);
+    }
 
     // Apply history boost
     if let Some(db) = db {

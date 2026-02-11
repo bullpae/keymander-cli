@@ -240,6 +240,12 @@ impl Theme {
         Style::default().fg(self.teal)
     }
 
+    pub fn kind_calc_style(&self) -> Style {
+        Style::default()
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Fallback kind style
     pub fn kind_tag_style(&self) -> Style {
         Style::default().fg(self.overlay)

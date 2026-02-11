@@ -43,6 +43,7 @@ serde = { version = "1", features = ["derive"] }
 
 # Unicode display width (for proper CJK cursor positioning)
 unicode-width = "0.2"
+arboard = "3.6.1"
 
 [profile.release]
 opt-level = "z"

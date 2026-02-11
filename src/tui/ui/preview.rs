@@ -5,6 +5,8 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
+use kmd_core::index::ItemKind;
+
 use crate::tui::app::AppState;
 use crate::tui::theme::Theme;
 
@@ -18,57 +20,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     if let Some(result) = state.results.get(state.selected_index) {
         let item = &result.item;
 
-        let mut lines = vec![
-            // Name — large and prominent
-            Line::from(vec![
-                Span::styled(format!("{} ", item.icon), theme.preview_value_style()),
-                Span::styled(
-                    item.name.clone(),
-                    ratatui::style::Style::default()
-                        .fg(theme.text)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-            // Type
-            Line::from(vec![
-                Span::styled("  Type     ", theme.preview_label_style()),
-                Span::styled(format!("{}", item.kind), theme.preview_value_style()),
-            ]),
-            // Source
-            Line::from(vec![
-                Span::styled("  Source   ", theme.preview_label_style()),
-                Span::styled(format!("{:?}", item.source), theme.preview_dim_style()),
-            ]),
-            Line::from(""),
-            // Path
-            Line::from(vec![
-                Span::styled("  Path", theme.preview_label_style()),
-            ]),
-            Line::from(vec![
-                Span::styled(format!("  {}", item.path), theme.preview_dim_style()),
-            ]),
-        ];
-
-        // Keywords (if present)
-        if !item.keywords.is_empty() && item.keywords != item.path {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  Keywords", theme.preview_label_style()),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {}", item.keywords), theme.preview_dim_style()),
-            ]));
-        }
-
-        // Score (if nonzero)
-        if result.score > 0 {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  Score    ", theme.preview_label_style()),
-                Span::styled(format!("{}", result.score), theme.preview_value_style()),
-            ]));
-        }
+        let lines = if item.kind == ItemKind::Calculator {
+            render_calc_preview(item, &state.effective_query(), theme)
+        } else {
+            render_item_preview(item, result.score, theme)
+        };
 
         let preview = Paragraph::new(lines)
             .block(
@@ -113,4 +69,124 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 
         frame.render_widget(preview, area);
     }
+}
+
+/// Render calculator-specific preview
+fn render_calc_preview<'a>(
+    item: &kmd_core::index::IndexItem,
+    query: &str,
+    theme: &'a Theme,
+) -> Vec<Line<'a>> {
+    let mut lines = vec![
+        Line::from(""),
+        // Expression
+        Line::from(vec![
+            Span::styled("  \u{1F5A9} ", theme.preview_value_style()),  // 🖩
+            Span::styled(
+                "Calculator",
+                ratatui::style::Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Expression", theme.preview_label_style()),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("  {}", query.strip_prefix(":calc").unwrap_or(query).trim()),
+                theme.preview_value_style(),
+            ),
+        ]),
+    ];
+
+    if !item.path.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Result", theme.preview_label_style()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {}", item.path),
+                ratatui::style::Style::default()
+                    .fg(theme.green)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Press ", theme.preview_dim_style()),
+            Span::styled(
+                "Enter",
+                ratatui::style::Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(" to copy result", theme.preview_dim_style()),
+        ]));
+    }
+
+    lines
+}
+
+/// Render standard item preview
+fn render_item_preview<'a>(
+    item: &kmd_core::index::IndexItem,
+    score: u32,
+    theme: &'a Theme,
+) -> Vec<Line<'a>> {
+    let mut lines = vec![
+        // Name — large and prominent
+        Line::from(vec![
+            Span::styled(format!("{} ", item.icon), theme.preview_value_style()),
+            Span::styled(
+                item.name.clone(),
+                ratatui::style::Style::default()
+                    .fg(theme.text)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        // Type
+        Line::from(vec![
+            Span::styled("  Type     ", theme.preview_label_style()),
+            Span::styled(format!("{}", item.kind), theme.preview_value_style()),
+        ]),
+        // Source
+        Line::from(vec![
+            Span::styled("  Source   ", theme.preview_label_style()),
+            Span::styled(format!("{:?}", item.source), theme.preview_dim_style()),
+        ]),
+        Line::from(""),
+        // Path
+        Line::from(vec![
+            Span::styled("  Path", theme.preview_label_style()),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("  {}", item.path), theme.preview_dim_style()),
+        ]),
+    ];
+
+    // Keywords (if present)
+    if !item.keywords.is_empty() && item.keywords != item.path {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Keywords", theme.preview_label_style()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}", item.keywords), theme.preview_dim_style()),
+        ]));
+    }
+
+    // Score (if nonzero)
+    if score > 0 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Score    ", theme.preview_label_style()),
+            Span::styled(format!("{}", score), theme.preview_value_style()),
+        ]));
+    }
+
+    lines
 }

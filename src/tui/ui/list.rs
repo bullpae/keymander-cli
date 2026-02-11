@@ -121,6 +121,7 @@ fn kind_style_for(kind_str: &str, theme: &Theme) -> ratatui::style::Style {
         "Exe" => theme.kind_exe_style(),
         "System" => theme.kind_system_style(),
         "Web" => theme.kind_web_style(),
+        "Calc" => theme.kind_calc_style(),
         _ => theme.kind_tag_style(),
     }
 }

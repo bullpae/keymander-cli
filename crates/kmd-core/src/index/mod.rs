@@ -34,6 +34,7 @@ pub enum ItemKind {
     SystemCommand,
     WebSearch,
     Directory,
+    Calculator,
 }
 
 impl std::fmt::Display for ItemKind {
@@ -45,6 +46,7 @@ impl std::fmt::Display for ItemKind {
             Self::SystemCommand => write!(f, "System"),
             Self::WebSearch => write!(f, "Web"),
             Self::Directory => write!(f, "Dir"),
+            Self::Calculator => write!(f, "Calc"),
         }
     }
 }

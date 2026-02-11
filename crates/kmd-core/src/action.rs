@@ -32,6 +32,11 @@ pub fn execute(result: &SearchResult) -> ActionResult {
                 open_url(&result.item.path)
             }
         }
+        ItemKind::Calculator => {
+            // Calculator results are handled by the TUI (clipboard copy)
+            // This branch should not normally be reached
+            ActionResult::Launched
+        }
     }
 }
 

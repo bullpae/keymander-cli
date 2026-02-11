@@ -23,7 +23,7 @@ impl Extension for CalcExtension {
             return vec![IndexItem {
                 name: "Calculator — type a math expression".to_string(),
                 path: String::new(),
-                kind: ItemKind::WebSearch,
+                kind: ItemKind::Calculator,
                 source: Source::Plugin,
                 icon: "\u{1F5A9}".to_string(), // 🖩
                 keywords: "calculator calc math".to_string(),
@@ -32,11 +32,12 @@ impl Extension for CalcExtension {
 
         match evaluate(expr) {
             Ok(result) => {
-                let display = format!("{} = {}", expr, format_number(result));
+                let formatted = format_number(result);
+                let display = format!("= {}", formatted);
                 vec![IndexItem {
                     name: display,
-                    path: format_number(result),
-                    kind: ItemKind::WebSearch,
+                    path: formatted,
+                    kind: ItemKind::Calculator,
                     source: Source::Plugin,
                     icon: "\u{1F5A9}".to_string(),
                     keywords: format!("calc {} {}", expr, result),
@@ -46,7 +47,7 @@ impl Extension for CalcExtension {
                 vec![IndexItem {
                     name: format!("Invalid expression: {}", expr),
                     path: String::new(),
-                    kind: ItemKind::WebSearch,
+                    kind: ItemKind::Calculator,
                     source: Source::Plugin,
                     icon: "\u{274C}".to_string(), // ❌
                     keywords: String::new(),
@@ -84,16 +85,34 @@ pub fn looks_like_math(s: &str) -> bool {
         || (s.contains('(') && s.contains(')'))
 }
 
-/// Format a number nicely (remove trailing zeros for floats)
+/// Format a number nicely with thousands separators
 fn format_number(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
-        format!("{}", n as i64)
+        let i = n as i64;
+        format_with_commas(i)
     } else {
         format!("{:.6}", n)
             .trim_end_matches('0')
             .trim_end_matches('.')
             .to_string()
     }
+}
+
+/// Add comma separators to an integer (e.g. 1234567 → "1,234,567")
+fn format_with_commas(n: i64) -> String {
+    let is_negative = n < 0;
+    let s = n.unsigned_abs().to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    if is_negative {
+        result.push('-');
+    }
+    result.chars().rev().collect()
 }
 
 /// Simple recursive descent expression evaluator
@@ -338,5 +357,17 @@ mod tests {
         assert_eq!(format_number(42.0), "42");
         assert_eq!(format_number(3.14), "3.14");
         assert_eq!(format_number(0.1 + 0.2), "0.3");
+        assert_eq!(format_number(1234.0), "1,234");
+        assert_eq!(format_number(1234567.0), "1,234,567");
+        assert_eq!(format_number(-99999.0), "-99,999");
+    }
+
+    #[test]
+    fn test_calc_extension_inline() {
+        let calc = CalcExtension;
+        let results = <CalcExtension as crate::plugin::Extension>::search(&calc, "1234*1234");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "= 1,522,756");
+        assert_eq!(results[0].path, "1,522,756");
     }
 }

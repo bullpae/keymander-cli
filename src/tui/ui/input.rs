@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         vec![
             Span::styled(prompt, theme.input_prompt_style()),
             Span::styled(
-                "Type to search files, apps, @web, @ai...",
+                "Type to search, calculate, @web, @ai...",
                 theme.input_placeholder_style(),
             ),
         ]
