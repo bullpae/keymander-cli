@@ -11,7 +11,7 @@ pub struct WebService {
     pub description: &'static str,
 }
 
-/// Built-in web services (10 services)
+/// Built-in web services (14 services)
 pub const WEB_SERVICES: &[WebService] = &[
     WebService {
         name: "Google",
@@ -172,8 +172,9 @@ pub fn list_services_as_items(filter: &str) -> Vec<IndexItem> {
 /// Create a search result item for a specific web query
 pub fn search_result_item(service: &WebService, query: &str) -> IndexItem {
     let url = build_search_url(service, query);
+    let name = format!("{}: \"{}\"", service.name, query);
     IndexItem {
-        name: format!("{}: \"{}\"", service.name, query),
+        name,
         path: url.clone(),
         kind: ItemKind::WebSearch,
         source: Source::Plugin,

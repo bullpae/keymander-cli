@@ -20,8 +20,6 @@ const GREEN: Color = Color::Rgb(166, 227, 161);         // #A6E3A1
 const YELLOW: Color = Color::Rgb(249, 226, 175);        // #F9E2AF
 /// Peach — warm accent for special items
 const PEACH: Color = Color::Rgb(250, 179, 135);         // #FAB387
-/// Mauve — subtle accent for tags and metadata
-const MAUVE: Color = Color::Rgb(203, 166, 247);         // #CBA6F7
 /// Red — errors, system commands
 const RED: Color = Color::Rgb(243, 139, 168);           // #F38BA8
 /// Teal — web/URL items
@@ -37,19 +35,12 @@ const OVERLAY: Color = Color::Rgb(108, 112, 134);       // #6C7086
 const SURFACE2: Color = Color::Rgb(88, 91, 112);        // #585B70
 /// Surface 1 — medium surface for borders
 const SURFACE1: Color = Color::Rgb(69, 71, 90);         // #45475A
-/// Surface 0 — subtle surface for separators
-const SURFACE0: Color = Color::Rgb(49, 50, 68);         // #313244
-/// Base — main background (transparent/terminal default for compatibility)
-const BASE: Color = Color::Reset;
 /// Mantle — slightly darker than base for header/status
 const MANTLE: Color = Color::Rgb(24, 24, 37);           // #181825
-/// Crust — darkest, for emphasis backgrounds
-const CRUST: Color = Color::Rgb(17, 17, 27);            // #11111B
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 
 /// Theme colors and styles for the entire TUI
-#[allow(dead_code)]
 pub struct Theme {
     // Semantic colors
     pub accent: Color,
@@ -57,7 +48,6 @@ pub struct Theme {
     pub green: Color,
     pub yellow: Color,
     pub peach: Color,
-    pub mauve: Color,
     pub red: Color,
     pub teal: Color,
 
@@ -69,22 +59,17 @@ pub struct Theme {
     // Surfaces
     pub surface2: Color,
     pub surface1: Color,
-    pub surface0: Color,
-    pub base: Color,
     pub mantle: Color,
-    pub crust: Color,
 }
 
-impl Theme {
-    /// Default dark theme (Catppuccin Mocha-inspired)
-    pub fn default_theme() -> Self {
+impl Default for Theme {
+    fn default() -> Self {
         Self {
             accent: ACCENT,
             accent_dim: ACCENT_DIM,
             green: GREEN,
             yellow: YELLOW,
             peach: PEACH,
-            mauve: MAUVE,
             red: RED,
             teal: TEAL,
             text: TEXT,
@@ -92,12 +77,12 @@ impl Theme {
             overlay: OVERLAY,
             surface2: SURFACE2,
             surface1: SURFACE1,
-            surface0: SURFACE0,
-            base: BASE,
             mantle: MANTLE,
-            crust: CRUST,
         }
     }
+}
+
+impl Theme {
 
     // ── Header & Status ──────────────────────────────────────────────────
 

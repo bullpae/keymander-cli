@@ -116,7 +116,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let theme = Theme::default_theme();
+    let theme = Theme::default();
     let events = EventHandler::new(config.general.render_fps);
 
     // Initial empty results: show history
@@ -273,12 +273,8 @@ fn handle_key(
             if state.hangul_mode {
                 handle_hangul_char(state, c, engine, db);
             } else {
-                // English mode: if the system IME sent a Korean char, accept it
-                if hangul::is_korean_char(c) {
-                    state.query.push(c);
-                } else {
-                    state.query.push(c);
-                }
+                // English mode: accept all characters including system IME Korean
+                state.query.push(c);
                 update_search(state, engine, db);
             }
         }
@@ -400,11 +396,12 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
                     state.should_quit = true;
                 }
             }
-            action::ActionResult::NeedsConfirmation(_name) => {
-                // TODO: show confirmation dialog
+            action::ActionResult::NeedsConfirmation(name) => {
+                state.status_message =
+                    Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name));
             }
-            action::ActionResult::Error(_e) => {
-                // TODO: show error toast
+            action::ActionResult::Error(e) => {
+                state.status_message = Some(format!("\u{274C} Error: {}", e));
             }
         }
     }
@@ -422,11 +419,20 @@ fn update_search(
         state.results.clear();
         state.selected_index = 0;
 
-        // Show history when query is empty
-        if let Some(db) = db {
+        // In drill mode, re-list the current directory instead of loading history
+        if let Some(ref path) = state.drill_path {
+            state.results = list_directory_contents(path);
+        } else if let Some(db) = db {
+            // Show history when query is empty (normal mode only)
             load_history_into_results(state, db);
         }
         return;
+    }
+
+    // Typing while in drill mode exits drill and does a full search
+    if state.drill_path.is_some() {
+        state.drill_path = None;
+        state.drill_stack.clear();
     }
 
     // Check for @ web service prefix

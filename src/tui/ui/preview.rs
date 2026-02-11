@@ -17,29 +17,22 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         Span::styled("Preview ", theme.preview_title_style()),
     ]);
 
-    if let Some(result) = state.results.get(state.selected_index) {
-        let item = &result.item;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.preview_border_style())
+        .title(title);
 
-        let lines = if item.kind == ItemKind::Calculator {
+    let lines = if let Some(result) = state.results.get(state.selected_index) {
+        let item = &result.item;
+        if item.kind == ItemKind::Calculator {
             render_calc_preview(item, &state.effective_query(), theme)
         } else {
             render_item_preview(item, result.score, theme)
-        };
-
-        let preview = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(theme.preview_border_style())
-                    .title(title),
-            )
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(preview, area);
+        }
     } else {
         // Empty state
-        let empty_lines = vec![
+        vec![
             Line::from(""),
             Line::from(""),
             Line::from(vec![Span::styled(
@@ -55,20 +48,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
                 "    \u{2191}\u{2193} to navigate results",  // ↑↓
                 theme.preview_empty_style(),
             )]),
-        ];
+        ]
+    };
 
-        let preview = Paragraph::new(empty_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(theme.preview_border_style())
-                    .title(title),
-            )
-            .wrap(Wrap { trim: false });
+    let preview = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
 
-        frame.render_widget(preview, area);
-    }
+    frame.render_widget(preview, area);
 }
 
 /// Render calculator-specific preview
@@ -82,12 +69,7 @@ fn render_calc_preview<'a>(
         // Expression
         Line::from(vec![
             Span::styled("  \u{1F5A9} ", theme.preview_value_style()),  // 🖩
-            Span::styled(
-                "Calculator",
-                ratatui::style::Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            ),
+            Span::styled("Calculator", theme.kind_calc_style()),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -107,22 +89,12 @@ fn render_calc_preview<'a>(
             Span::styled("  Result", theme.preview_label_style()),
         ]));
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {}", item.path),
-                ratatui::style::Style::default()
-                    .fg(theme.green)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            ),
+            Span::styled(format!("  {}", item.path), theme.header_accent_style()),
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("  Press ", theme.preview_dim_style()),
-            Span::styled(
-                "Enter",
-                ratatui::style::Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            ),
+            Span::styled("Enter", theme.kind_calc_style()),
             Span::styled(" to copy result", theme.preview_dim_style()),
         ]));
     }
@@ -140,12 +112,7 @@ fn render_item_preview<'a>(
         // Name — large and prominent
         Line::from(vec![
             Span::styled(format!("{} ", item.icon), theme.preview_value_style()),
-            Span::styled(
-                item.name.clone(),
-                ratatui::style::Style::default()
-                    .fg(theme.text)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            ),
+            Span::styled(item.name.clone(), theme.list_title_style()),
         ]),
         Line::from(""),
         // Type

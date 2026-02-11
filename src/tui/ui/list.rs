@@ -61,7 +61,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         .highlight_symbol("\u{25B8} "); // ▸
 
     let mut list_state = ListState::default();
-    list_state.select(Some(state.selected_index));
+    let safe_index = if state.results.is_empty() {
+        0
+    } else {
+        state.selected_index.min(state.results.len() - 1)
+    };
+    list_state.select(if state.results.is_empty() {
+        None
+    } else {
+        Some(safe_index)
+    });
 
     frame.render_stateful_widget(list, area, &mut list_state);
 

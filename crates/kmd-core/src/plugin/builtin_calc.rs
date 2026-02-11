@@ -71,18 +71,25 @@ pub fn looks_like_math(s: &str) -> bool {
     if s.is_empty() || s.len() < 2 {
         return false;
     }
-    // Must start with a digit or parenthesis
+    // Must start with a digit, parenthesis, or unary minus
     let first = s.chars().next().unwrap();
     if !first.is_ascii_digit() && first != '(' && first != '-' {
         return false;
     }
-    // Must contain at least one operator
+    // Must contain at least one digit (avoids matching "-" or "()" alone)
+    if !s.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // Must contain at least one operator or paired parentheses
     s.contains('+')
-        || s.contains('-')
         || s.contains('*')
         || s.contains('/')
         || s.contains('%')
         || (s.contains('(') && s.contains(')'))
+        // For '-': only count as operator if it appears after a digit (not just unary)
+        || s.chars()
+            .zip(s.chars().skip(1))
+            .any(|(prev, cur)| cur == '-' && (prev.is_ascii_digit() || prev == ')'))
 }
 
 /// Format a number nicely with thousands separators

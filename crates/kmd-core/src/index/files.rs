@@ -475,8 +475,13 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
             .stderr(Stdio::null())
             .output();
 
-        if let Ok(output) = output {
-            parse_line_output_into(&output.stdout, &mut all_items, config.max_results);
+        match output {
+            Ok(output) => {
+                parse_line_output_into(&output.stdout, &mut all_items, config.max_results);
+            }
+            Err(e) => {
+                tracing::warn!("fd failed for {}: {}", dir.display(), e);
+            }
         }
 
         if all_items.len() >= config.max_results {
@@ -484,6 +489,7 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
         }
     }
 
+    tracing::info!("fd provider: {} files found", all_items.len());
     all_items
 }
 
@@ -523,9 +529,13 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
         Ok(output) => {
             let mut items = Vec::new();
             parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            tracing::info!("Everything provider: {} files found", items.len());
             items
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("Everything CLI failed: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -548,9 +558,13 @@ fn collect_spotlight(config: &ProviderConfig) -> Vec<IndexItem> {
         Ok(output) => {
             let mut items = Vec::new();
             parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            tracing::info!("Spotlight provider: {} files found", items.len());
             items
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("mdfind failed: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -579,9 +593,13 @@ fn collect_locate(config: &ProviderConfig) -> Vec<IndexItem> {
         Ok(output) => {
             let mut items = Vec::new();
             parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            tracing::info!("locate provider: {} files found", items.len());
             items
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("locate failed: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -603,11 +621,11 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
         config.search_paths.clone()
     };
 
-    // Build exclude list for PowerShell
+    // Build exclude list for PowerShell (escape single quotes)
     let exclude_dirs: String = config
         .ignore_patterns
         .iter()
-        .map(|p| format!("'{}'", p))
+        .map(|p| format!("'{}'", p.replace('\'', "''")))
         .collect::<Vec<_>>()
         .join(",");
 
@@ -640,8 +658,13 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        if let Ok(output) = cmd.output() {
-            parse_line_output_into(&output.stdout, &mut items, config.max_results);
+        match cmd.output() {
+            Ok(output) => {
+                parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            }
+            Err(e) => {
+                tracing::warn!("PowerShell scan failed for {}: {}", root.display(), e);
+            }
         }
 
         if items.len() >= config.max_results {
@@ -650,6 +673,7 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
         }
     }
 
+    tracing::info!("WinFs provider: {} files found", items.len());
     items
 }
 
