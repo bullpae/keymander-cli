@@ -7,6 +7,7 @@
 //!   kmd index        → Manage search index
 //!   kmd config       → Manage configuration
 //!   kmd history      → View/clear launch history
+//!   kmd portable     → Manage portable mode
 
 mod cmd;
 mod tui;
@@ -72,6 +73,11 @@ enum Commands {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Manage portable mode (store all data next to exe)
+    Portable {
+        #[command(subcommand)]
+        action: Option<PortableAction>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -114,6 +120,14 @@ enum DaemonAction {
     Stop,
     /// Show daemon status
     Status,
+}
+
+#[derive(Subcommand)]
+enum PortableAction {
+    /// Enable portable mode (create kmd-data/ next to exe, migrate data)
+    Enable,
+    /// Disable portable mode (migrate data to system paths, remove kmd-data/)
+    Disable,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -165,6 +179,12 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Stop => cmd::daemon::Action::Stop,
                 DaemonAction::Status => cmd::daemon::Action::Status,
             })?;
+        }
+        Some(Commands::Portable { action }) => {
+            cmd::portable::run(action.map(|a| match a {
+                PortableAction::Enable => cmd::portable::Action::Enable,
+                PortableAction::Disable => cmd::portable::Action::Disable,
+            }))?;
         }
         // No subcommand → launch TUI
         None => {

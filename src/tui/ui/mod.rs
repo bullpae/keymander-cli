@@ -166,6 +166,17 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
         ]);
     }
 
+    // Portable mode indicator
+    if state.is_portable {
+        spans.push(Span::styled(
+            "\u{2502} P ",  // │ P
+            ratatui::style::Style::default()
+                .fg(theme.peach)
+                .bg(theme.mantle)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+    }
+
     // Language indicator on the right
     let lang = if state.hangul_mode { "\u{D55C}" } else { "EN" }; // 한 / EN
     spans.push(Span::styled(

@@ -4,6 +4,7 @@ pub mod history;
 pub mod index;
 pub mod launch;
 pub mod plugin;
+pub mod portable;
 pub mod search;
 
 use std::path::PathBuf;

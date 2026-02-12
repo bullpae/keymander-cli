@@ -83,6 +83,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     /// Settings modal (None = hidden, Some = active)
     pub settings: Option<SettingsState>,
+    /// Portable mode indicator
+    pub is_portable: bool,
 }
 
 /// Saved state for returning from a folder drill-down
@@ -153,6 +155,7 @@ pub fn run_app() -> color_eyre::Result<()> {
         drill_path: None,
         status_message: None,
         settings: None,
+        is_portable: kmd_core::portable::is_portable(),
     };
 
     // Setup terminal

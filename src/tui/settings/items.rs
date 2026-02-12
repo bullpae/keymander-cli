@@ -16,6 +16,8 @@ pub enum WidgetKind {
     Select(&'static [&'static str]),
     /// Add new item to a list (used as marker)
     ListAdd,
+    /// Read-only display (not editable)
+    ReadOnly,
 }
 
 /// A single setting item displayed in the modal
@@ -139,6 +141,18 @@ pub fn items_for_tab(tab: &SettingsTab) -> Vec<SettingItem> {
             }]
         }
         SettingsTab::Display => vec![
+            SettingItem {
+                label: "Mode",
+                key: "_portable_mode",
+                widget: WidgetKind::ReadOnly,
+                description: "Portable: data next to exe. System: OS standard paths. Use 'kmd portable enable/disable' to switch.",
+            },
+            SettingItem {
+                label: "Data path",
+                key: "_data_path",
+                widget: WidgetKind::ReadOnly,
+                description: "Where config, database, and index are stored",
+            },
             SettingItem {
                 label: "Show preview",
                 key: "general.show_preview",

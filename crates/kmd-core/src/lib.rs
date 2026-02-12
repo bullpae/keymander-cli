@@ -10,6 +10,7 @@ pub mod hangul;
 pub mod history;
 pub mod index;
 pub mod plugin;
+pub mod portable;
 pub mod search;
 pub mod web;
 

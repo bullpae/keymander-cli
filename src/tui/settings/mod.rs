@@ -282,6 +282,9 @@ fn handle_enter(state: &mut SettingsState) {
             state.edit_buffer.clear();
             state.editing = true;
         }
+        items::WidgetKind::ReadOnly => {
+            // Not editable — do nothing
+        }
     }
 }
 

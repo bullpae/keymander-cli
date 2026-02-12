@@ -374,6 +374,15 @@ impl Config {
             "keybindings.toggle_preview" => {
                 Some(self.keybindings.toggle_preview.clone())
             }
+            // virtual keys (read-only, computed at runtime)
+            "_portable_mode" => {
+                if crate::portable::is_portable() {
+                    Some("Portable".to_string())
+                } else {
+                    Some("System".to_string())
+                }
+            }
+            "_data_path" => Some(Self::default_data_dir().to_string_lossy().to_string()),
             _ => None,
         }
     }
@@ -471,15 +480,45 @@ impl Config {
         Ok(())
     }
 
-    /// Return the standard config directory for kmd
-    pub fn default_config_dir() -> PathBuf {
+    /// Return the OS-standard config directory (ignoring portable mode).
+    pub fn system_config_dir() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("kmd")
     }
 
-    /// Return the standard data directory for kmd
+    /// Return the OS-standard data directory (ignoring portable mode).
+    pub fn system_data_dir() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("kmd")
+    }
+
+    /// Return the config directory for kmd.
+    ///
+    /// In portable mode (`kmd-data/` next to exe) this returns the portable
+    /// directory. Otherwise the OS-standard config location is used.
+    pub fn default_config_dir() -> PathBuf {
+        if let Some(dir) = crate::portable::portable_data_dir() {
+            if dir.is_dir() {
+                return dir;
+            }
+        }
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("kmd")
+    }
+
+    /// Return the data directory for kmd.
+    ///
+    /// In portable mode (`kmd-data/` next to exe) this returns the portable
+    /// directory. Otherwise the OS-standard data location is used.
     pub fn default_data_dir() -> PathBuf {
+        if let Some(dir) = crate::portable::portable_data_dir() {
+            if dir.is_dir() {
+                return dir;
+            }
+        }
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("kmd")

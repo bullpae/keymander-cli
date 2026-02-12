@@ -175,6 +175,7 @@ fn render_items_content(
                 }
             }
             WidgetKind::ListAdd => String::new(),
+            WidgetKind::ReadOnly => value_str.clone(),
         };
 
         let label_style = if is_selected {
