@@ -18,19 +18,37 @@ pub fn render_modal(frame: &mut Frame, area: Rect, state: &SettingsState, theme:
     // Clear the background
     frame.render_widget(Clear, modal_area);
 
-    // Outer block
+    // Outer block — branded title with two-tone colors
     let dirty_marker = if state.dirty { " *" } else { "" };
-    let title = format!(" \u{00BB} keymander Settings (F2){} ", dirty_marker);
+    let title_line = Line::from(vec![
+        Span::styled(
+            " key",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "\u{00BB}",                                          // »
+            Style::default()
+                .fg(theme.peach)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "mander",
+            Style::default()
+                .fg(theme.green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" Settings (F2){} ", dirty_marker),
+            Style::default().fg(theme.subtext),
+        ),
+    ]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.accent))
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(title_line)
         .style(Style::default().bg(theme.mantle));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);

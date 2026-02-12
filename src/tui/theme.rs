@@ -8,35 +8,35 @@
 use ratatui::style::{Color, Modifier, Style};
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
-// Inspired by modern dark themes (One Dark, Catppuccin Mocha, Raycast)
+// Inspired by modern dark themes with boosted vibrancy (Dracula, Synthwave, Raycast)
 
-/// Accent — vibrant blue-cyan for primary interactive elements
-const ACCENT: Color = Color::Rgb(116, 199, 236);       // #74C7EC — sky blue
-/// Accent dim — softer version for secondary accents
-const ACCENT_DIM: Color = Color::Rgb(137, 180, 250);    // #89B4FA — lavender blue
+/// Accent — vivid cyan for primary interactive elements
+const ACCENT: Color = Color::Rgb(86, 210, 255);         // #56D2FF — electric cyan
+/// Accent dim — lighter blue for secondary accents
+const ACCENT_DIM: Color = Color::Rgb(120, 190, 255);    // #78BEFF — bright lavender
 /// Green — success, directories, active states
-const GREEN: Color = Color::Rgb(166, 227, 161);         // #A6E3A1
+const GREEN: Color = Color::Rgb(80, 250, 123);          // #50FA7B — electric green
 /// Yellow — composing state, warnings, kind tags
-const YELLOW: Color = Color::Rgb(249, 226, 175);        // #F9E2AF
-/// Peach — warm accent for special items
-const PEACH: Color = Color::Rgb(250, 179, 135);         // #FAB387
+const YELLOW: Color = Color::Rgb(255, 230, 120);        // #FFE678 — bright gold
+/// Peach — warm accent for brand separator, special items
+const PEACH: Color = Color::Rgb(255, 165, 96);          // #FFA560 — vivid orange
 /// Red — errors, system commands
-const RED: Color = Color::Rgb(243, 139, 168);           // #F38BA8
+const RED: Color = Color::Rgb(255, 110, 140);           // #FF6E8C — vivid pink-red
 /// Teal — web/URL items
-const TEAL: Color = Color::Rgb(148, 226, 213);          // #94E2D5
+const TEAL: Color = Color::Rgb(80, 240, 210);           // #50F0D2 — bright teal
 
 /// Text — primary readable text
-const TEXT: Color = Color::Rgb(205, 214, 244);           // #CDD6F4
+const TEXT: Color = Color::Rgb(220, 228, 255);           // #DCE4FF — brighter white-blue
 /// Subtext — secondary, less important text
-const SUBTEXT: Color = Color::Rgb(166, 173, 200);       // #A6ADC8
+const SUBTEXT: Color = Color::Rgb(180, 190, 220);       // #B4BEDC — lifted subtext
 /// Overlay — muted text, hints, placeholders
-const OVERLAY: Color = Color::Rgb(108, 112, 134);       // #6C7086
+const OVERLAY: Color = Color::Rgb(130, 140, 170);       // #828CAA — more visible hints
 /// Surface 2 — lighter surface for selected items
-const SURFACE2: Color = Color::Rgb(88, 91, 112);        // #585B70
+const SURFACE2: Color = Color::Rgb(68, 72, 98);         // #444862 — selection highlight
 /// Surface 1 — medium surface for borders
-const SURFACE1: Color = Color::Rgb(69, 71, 90);         // #45475A
+const SURFACE1: Color = Color::Rgb(55, 58, 80);         // #373A50 — visible borders
 /// Mantle — slightly darker than base for header/status
-const MANTLE: Color = Color::Rgb(24, 24, 37);           // #181825
+const MANTLE: Color = Color::Rgb(20, 20, 32);           // #141420 — deep dark
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 

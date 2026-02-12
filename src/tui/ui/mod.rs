@@ -71,7 +71,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     let version = env!("CARGO_PKG_VERSION");
 
     let line = Line::from(vec![
-        Span::styled("  \u{00BB} ", theme.header_dim_style()),    // »
+        Span::styled(" ", ratatui::style::Style::default().bg(theme.mantle)),
         Span::styled(
             "key",
             ratatui::style::Style::default()
@@ -80,10 +80,11 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "\u{00B7}",                                           // ·
+            "\u{00BB}",                                           // »
             ratatui::style::Style::default()
-                .fg(theme.overlay)
-                .bg(theme.mantle),
+                .fg(theme.peach)
+                .bg(theme.mantle)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "mander ",
