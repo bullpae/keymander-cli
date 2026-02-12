@@ -114,6 +114,8 @@ impl Index {
             search_paths: config.search_paths.clone(),
             ignore_patterns: config.ignore_patterns.clone(),
             everything_path: config.everything_path.clone(),
+            scan_drives: config.scan_drives,
+            drive_scan_depth: config.drive_scan_depth,
         };
 
         let priority_files = files::collect_priority_files(&provider_config);

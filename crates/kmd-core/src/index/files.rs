@@ -57,6 +57,10 @@ pub struct ProviderConfig {
     pub search_paths: Vec<PathBuf>,
     pub ignore_patterns: Vec<String>,
     pub everything_path: Option<PathBuf>,
+    /// Auto-scan available drive roots
+    pub scan_drives: bool,
+    /// Max depth when scanning drive roots
+    pub drive_scan_depth: usize,
 }
 
 impl Default for ProviderConfig {
@@ -71,6 +75,8 @@ impl Default for ProviderConfig {
                 "target".to_string(),
             ],
             everything_path: None,
+            scan_drives: true,
+            drive_scan_depth: 3,
         }
     }
 }
@@ -79,65 +85,61 @@ impl Default for ProviderConfig {
 // Priority Directories
 // ============================================================================
 
-/// Get the platform-specific priority directories that users most likely
-/// want to search. These are scanned first to guarantee document indexing.
-pub fn priority_directories() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+/// Build the list of directories to scan, driven entirely by config.
+///
+/// 1. Start with `config.search_paths` (user-configured, visible in settings).
+/// 2. If `config.scan_drives` is true, auto-discover available drive roots
+///    that aren't already in the list.
+fn scan_directories(config: &ProviderConfig) -> Vec<(PathBuf, usize)> {
+    let mut dirs: Vec<(PathBuf, usize)> = Vec::new();
 
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            let base = PathBuf::from(&profile);
-            for name in &["Desktop", "Documents", "Downloads", "OneDrive"] {
-                let dir = base.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
-                }
-            }
-        }
-
-        // Scan all available drive roots (C:\, D:\, etc.)
-        // System directories are filtered out by ignore_patterns and is_ignored_dir.
-        for letter in 'C'..='Z' {
-            let drive = PathBuf::from(format!("{}:\\", letter));
-            if drive.is_dir() && !dirs.contains(&drive) {
-                dirs.push(drive);
-            }
+    // User-configured paths get full search_depth
+    for p in &config.search_paths {
+        if p.is_dir() {
+            dirs.push((p.clone(), config.search_depth));
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = dirs::home_dir() {
-            for name in &["Desktop", "Documents", "Downloads"] {
-                let dir = home.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
+    // Auto-discover drive roots if enabled
+    if config.scan_drives {
+        #[cfg(target_os = "windows")]
+        {
+            for letter in 'C'..='Z' {
+                let drive = PathBuf::from(format!("{}:\\", letter));
+                if drive.is_dir() && !dirs.iter().any(|(d, _)| d == &drive) {
+                    dirs.push((drive, config.drive_scan_depth));
                 }
             }
         }
-    }
 
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(home) = dirs::home_dir() {
-            for name in &["Desktop", "Documents", "Downloads"] {
-                let dir = home.join(name);
-                if dir.is_dir() {
-                    dirs.push(dir);
+        #[cfg(target_os = "macos")]
+        {
+            let volumes = PathBuf::from("/Volumes");
+            if volumes.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&volumes) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_dir() && !dirs.iter().any(|(d, _)| d == &p) {
+                            dirs.push((p, config.drive_scan_depth));
+                        }
+                    }
                 }
             }
         }
-        // XDG user directories
-        for env_key in &[
-            "XDG_DESKTOP_DIR",
-            "XDG_DOCUMENTS_DIR",
-            "XDG_DOWNLOAD_DIR",
-        ] {
-            if let Ok(val) = std::env::var(env_key) {
-                let dir = PathBuf::from(val);
-                if dir.is_dir() && !dirs.contains(&dir) {
-                    dirs.push(dir);
+
+        #[cfg(target_os = "linux")]
+        {
+            for mount_point in &["/mnt", "/media"] {
+                let mp = PathBuf::from(mount_point);
+                if mp.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&mp) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_dir() && !dirs.iter().any(|(d, _)| d == &p) {
+                                dirs.push((p, config.drive_scan_depth));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -146,20 +148,13 @@ pub fn priority_directories() -> Vec<PathBuf> {
     dirs
 }
 
-/// Collect files from priority directories using walkdir.
-/// This guarantees that user documents (Desktop, Documents, Downloads)
-/// are always in the index, regardless of the file provider used.
+/// Collect files from configured scan directories using walkdir.
+/// Each directory is scanned at its own depth (user dirs = full depth,
+/// drive roots = drive_scan_depth).
 pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
-    let mut priority_dirs = priority_directories();
+    let scan_dirs = scan_directories(config);
 
-    // Also include user-configured search_paths as priority
-    for p in &config.search_paths {
-        if p.is_dir() && !priority_dirs.contains(p) {
-            priority_dirs.push(p.clone());
-        }
-    }
-
-    if priority_dirs.is_empty() {
+    if scan_dirs.is_empty() {
         return Vec::new();
     }
 
@@ -168,19 +163,11 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut items = Vec::new();
     let mut seen_paths = HashSet::new();
 
-    for dir in &priority_dirs {
-        // Use shallower depth for drive roots (e.g. C:\, D:\) to avoid
-        // deep recursion into system directories. User directories like
-        // Desktop/Documents get the full configured depth.
-        let depth = if is_drive_root(dir) {
-            config.search_depth.min(3)
-        } else {
-            config.search_depth
-        };
-        tracing::info!("Scanning priority directory: {} (depth {})", dir.display(), depth);
+    for (dir, depth) in &scan_dirs {
+        tracing::info!("Scanning: {} (depth {})", dir.display(), depth);
 
         let walker = WalkDir::new(dir)
-            .max_depth(depth)
+            .max_depth(*depth)
             .follow_links(false)
             .into_iter();
 
@@ -195,7 +182,7 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
                 continue;
             }
 
-            // Skip the root priority directories themselves (depth 0)
+            // Skip the root scan directories themselves (depth 0)
             if is_dir && entry.depth() == 0 {
                 continue;
             }
@@ -246,7 +233,7 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         }
     }
 
-    tracing::info!("Priority directories: {} items (files + dirs) found", items.len());
+    tracing::info!("Scan directories: {} items (files + dirs) found", items.len());
     items
 }
 
@@ -327,6 +314,8 @@ pub fn collect_files(
         search_paths: config.search_paths.clone(),
         ignore_patterns: config.ignore_patterns.clone(),
         everything_path: config.everything_path.clone(),
+        scan_drives: config.scan_drives,
+        drive_scan_depth: config.drive_scan_depth,
     };
 
     tracing::info!("File provider: {} (quota: {} files)", kind, remaining);
@@ -356,8 +345,7 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut seen = HashSet::new();
 
     // Collect paths from priority dirs to skip (already indexed)
-    let priority = priority_directories();
-    let priority_set: HashSet<PathBuf> = priority.into_iter().collect();
+    let priority_set: HashSet<PathBuf> = config.search_paths.iter().cloned().collect();
 
     for root in &roots {
         let walker = WalkDir::new(root)
@@ -692,13 +680,6 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Check if a path is a drive root (e.g. "C:\", "D:\")
-fn is_drive_root(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    // Matches patterns like "C:\", "D:\"
-    s.len() <= 3 && s.ends_with('\\') || s.len() == 2 && s.ends_with(':')
-}
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
 fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool {

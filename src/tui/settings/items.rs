@@ -107,6 +107,18 @@ pub fn items_for_tab(tab: &SettingsTab) -> Vec<SettingItem> {
                 widget: WidgetKind::Toggle,
                 description: "Include folders in search index",
             },
+            SettingItem {
+                label: "Auto-scan drives",
+                key: "launcher.scan_drives",
+                widget: WidgetKind::Toggle,
+                description: "Auto-discover and scan available drive roots (C:\\, D:\\, etc.)",
+            },
+            SettingItem {
+                label: "Drive scan depth",
+                key: "launcher.drive_scan_depth",
+                widget: WidgetKind::Number,
+                description: "Max depth when scanning drive roots (default: 3, shallow to skip system dirs)",
+            },
         ],
         SettingsTab::SearchPaths => {
             // Dynamic list — items are the actual paths

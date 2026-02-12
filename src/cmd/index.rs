@@ -26,12 +26,14 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
         );
         println!("File provider: {}", provider);
 
-        let priority_dirs = kmd_core::index::files::priority_directories();
-        if !priority_dirs.is_empty() {
-            println!("Priority directories:");
-            for d in &priority_dirs {
+        if !config.launcher.search_paths.is_empty() {
+            println!("Search paths:");
+            for d in &config.launcher.search_paths {
                 println!("  {}", d.display());
             }
+        }
+        if config.launcher.scan_drives {
+            println!("Auto-scan drives: enabled (depth {})", config.launcher.drive_scan_depth);
         }
 
         println!("Building index...");

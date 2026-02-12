@@ -76,6 +76,10 @@ pub struct LauncherConfig {
     pub quit_on_launch: bool,
     /// Whether to index directories (not just files)
     pub index_directories: bool,
+    /// Auto-scan available drive roots (Windows: C:\~Z:\, macOS/Linux: /)
+    pub scan_drives: bool,
+    /// Max depth when scanning drive roots (shallow to avoid system dirs)
+    pub drive_scan_depth: usize,
     /// Search result priority weights by item kind (0-100, higher = boosted)
     pub kind_weights: KindWeights,
     /// Custom web services
@@ -88,7 +92,7 @@ impl Default for LauncherConfig {
         Self {
             file_search_provider: "auto".to_string(),
             everything_path: None,
-            search_paths: vec![],
+            search_paths: default_search_paths(),
             max_results: 10000,
             search_depth: 6,
             ignore_patterns: vec![
@@ -143,10 +147,69 @@ impl Default for LauncherConfig {
             ],
             quit_on_launch: true,
             index_directories: true,
+            scan_drives: true,
+            drive_scan_depth: 3,
             kind_weights: KindWeights::default(),
             web_services: vec![],
         }
     }
+}
+
+/// Platform-specific default search paths (user directories).
+/// These become the default for `launcher.search_paths`, editable in settings.
+fn default_search_paths() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            let base = PathBuf::from(&profile);
+            for name in &["Desktop", "Documents", "Downloads", "OneDrive"] {
+                let dir = base.join(name);
+                if dir.is_dir() {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            for name in &["Desktop", "Documents", "Downloads"] {
+                let dir = home.join(name);
+                if dir.is_dir() {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            for name in &["Desktop", "Documents", "Downloads"] {
+                let dir = home.join(name);
+                if dir.is_dir() {
+                    dirs.push(dir);
+                }
+            }
+        }
+        for env_key in &[
+            "XDG_DESKTOP_DIR",
+            "XDG_DOCUMENTS_DIR",
+            "XDG_DOWNLOAD_DIR",
+        ] {
+            if let Ok(val) = std::env::var(env_key) {
+                let dir = PathBuf::from(val);
+                if dir.is_dir() && !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+
+    dirs
 }
 
 /// Search result priority weights per item kind.
@@ -281,6 +344,8 @@ impl Config {
             "launcher.index_directories" => {
                 Some(self.launcher.index_directories.to_string())
             }
+            "launcher.scan_drives" => Some(self.launcher.scan_drives.to_string()),
+            "launcher.drive_scan_depth" => Some(self.launcher.drive_scan_depth.to_string()),
             // kind_weights
             "launcher.kind_weights.directory" => {
                 Some(self.launcher.kind_weights.directory.to_string())
@@ -356,6 +421,14 @@ impl Config {
             "launcher.index_directories" => {
                 self.launcher.index_directories =
                     value.parse().unwrap_or(self.launcher.index_directories);
+            }
+            "launcher.scan_drives" => {
+                self.launcher.scan_drives =
+                    value.parse().unwrap_or(self.launcher.scan_drives);
+            }
+            "launcher.drive_scan_depth" => {
+                self.launcher.drive_scan_depth =
+                    value.parse().unwrap_or(self.launcher.drive_scan_depth);
             }
             // kind_weights
             "launcher.kind_weights.directory" => {
@@ -439,6 +512,8 @@ mod tests {
         assert_eq!(config.keybindings.global_hotkey, "alt+space");
         assert_eq!(config.launcher.kind_weights.directory, 80);
         assert!(config.launcher.index_directories);
+        assert!(config.launcher.scan_drives);
+        assert_eq!(config.launcher.drive_scan_depth, 3);
     }
 
     #[test]
