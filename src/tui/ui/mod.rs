@@ -2,9 +2,9 @@
 //!
 //! Layout structure:
 //!   ┌──────────────────────────────────────┐
-//!   │  ◆ kmd v0.2.0  ·  5997 items        │  header (1 row)
+//!   │  ⌨ key·mander v0.2.0 · 5997 items    │  header (1 row)
 //!   ├──────────────────────────────────────┤
-//!   │  🔍 Search                           │  input (3 rows, rounded)
+//!   │  ⌨ Command                           │  input (3 rows, rounded)
 //!   │  > query_                             │
 //!   │                                      │
 //!   ├──────────────────────────────────────┤
@@ -22,6 +22,7 @@ pub mod preview;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::app::AppState;
@@ -70,8 +71,22 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     let version = env!("CARGO_PKG_VERSION");
 
     let line = Line::from(vec![
-        Span::styled(" \u{25C6} ", theme.header_accent_style()),  // ◆
-        Span::styled("kmd", theme.header_style()),
+        Span::styled(" \u{2328} ", theme.header_accent_style()),  // ⌨
+        Span::styled(
+            "key",
+            ratatui::style::Style::default()
+                .fg(theme.accent)
+                .bg(theme.mantle)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("\u{00B7}", theme.header_dim_style()),       // ·
+        Span::styled(
+            "mander",
+            ratatui::style::Style::default()
+                .fg(theme.green)
+                .bg(theme.mantle)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(format!(" v{}", version), theme.header_dim_style()),
         Span::styled("  \u{00B7}  ", theme.header_dim_style()),   // ·
         Span::styled(

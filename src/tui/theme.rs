@@ -86,11 +86,6 @@ impl Theme {
 
     // ── Header & Status ──────────────────────────────────────────────────
 
-    /// Header background
-    pub fn header_style(&self) -> Style {
-        Style::default().fg(self.accent).bg(self.mantle)
-    }
-
     /// Header version label (dimmer)
     pub fn header_dim_style(&self) -> Style {
         Style::default().fg(self.overlay).bg(self.mantle)

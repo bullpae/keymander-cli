@@ -45,10 +45,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 
     let input_line = Line::from(spans);
 
-    // Title with icon
+    // Title with keyboard icon — brand identity
     let title = Line::from(vec![
-        Span::styled(" \u{1F50D} ", theme.input_title_style()),  // 🔍
-        Span::styled("Search ", theme.input_title_style()),
+        Span::styled(" \u{2328} ", theme.input_title_style()),   // ⌨
+        Span::styled("Command ", theme.input_title_style()),
     ]);
 
     let input = Paragraph::new(input_line).block(
