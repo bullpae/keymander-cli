@@ -83,6 +83,12 @@ Rust 기반 단일 바이너리 TUI 런처. GUI 툴킷 불필요, 터미널에�
 | 히스토리 부스팅 | 자주 사용한 항목이 상단 노출 |
 | 최근 실행 | 빈 쿼리 시 최근 실행 항목을 올바른 아이콘과 함께 표시 |
 | 북마크 | 자주 쓰는 항목 고정 |
+| 인라인 계산기 | 수식 입력 시 자동 계산 결과 표시, 클립보드 복사 |
+| 설정 모달 (F2) | 6개 탭: Priority, Search, Paths, Ignore, Display, Keys |
+| 한글 입력 | 내장 2-벌식 한글 조합 엔진 (터미널 raw mode에서 동작) |
+| 검색 우선순위 | KindWeights로 항목 종류별 가중치 설정 |
+| 스캔 범위 설정 | scan_drives, drive_scan_depth, search_paths 설정 가능 |
+| 인덱스 캐시 버전 | 바이너리 업데이트 시 자동 캐시 무효화 |
 
 ### 3.2 검색 모드 자동 감지
 
@@ -149,10 +155,10 @@ flowchart LR
 block-beta
     columns 1
     block:header:1
-        H["kmd v0.2.0 | 1234 items indexed"]
+        H["⌨ key·mander v0.2.0 · 1234 items indexed"]
     end
     block:inputBar:1
-        IB["Search: > fire_"]
+        IB["⌨ Command: > fire_"]
     end
     block:content:1
         columns 2
@@ -170,7 +176,7 @@ block-beta
         end
     end
     block:statusBar:1
-        SB["[fuzzy] 4 results | ↑↓ navigate  Enter launch  Esc quit  Ctrl+P preview"]
+        SB["[fuzzy] 4 results | ↑↓ navigate  Enter launch  F2 settings  Esc quit"]
     end
 ```
 
@@ -180,10 +186,10 @@ block-beta
 block-beta
     columns 1
     block:header2:1
-        H2["kmd v0.2.0 | 1234 items indexed"]
+        H2["⌨ key·mander v0.2.0 · 1234 items indexed"]
     end
     block:inputBar2:1
-        IB2["Search: > @g rust tutorial_"]
+        IB2["⌨ Command: > @g rust tutorial_"]
     end
     block:content2:1
         R2a["▸ 🔍 Google: 'rust tutorial'  →  https://google.com/search?q=rust+tutorial"]
@@ -199,10 +205,10 @@ block-beta
 block-beta
     columns 1
     block:header3:1
-        H3["kmd v0.2.0 | 1234 items indexed"]
+        H3["⌨ key·mander v0.2.0 · 1234 items indexed"]
     end
     block:inputBar3:1
-        IB3["Search: > _"]
+        IB3["⌨ Command: > _"]
     end
     block:content3:1
         R3a["▸ 🕒 Firefox           [3x]"]

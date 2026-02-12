@@ -16,12 +16,14 @@
 
 ```mermaid
 graph TB
-    ConfigToml["config.toml"] --> General["[general]<br/>render_fps, show_preview<br/>theme, editor"]
-    ConfigToml --> Launcher["[launcher]<br/>file_search_provider<br/>max_results, search_paths<br/>ignore_patterns, web_services"]
-    ConfigToml --> Keybindings["[keybindings]<br/>global_hotkey, quit<br/>next, prev, select"]
-    Launcher --> WebService1["[[launcher.web_services]]<br/>name, prefixes<br/>url_template, icon"]
-    Launcher --> WebService2["[[launcher.web_services]]<br/>..."]
+    ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme, editor"]
+    ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
+    ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
+    ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
+    Launcher --> WebService1["[[launcher.web_services]]\nname, prefixes\nurl_template, icon"]
 ```
+
+> TUI에서 **F2** 키를 눌러 설정 모달에서 대화형으로 편집할 수 있습니다.
 
 ---
 
@@ -38,10 +40,23 @@ theme = "default"            # 테마 이름
 [launcher]
 file_search_provider = "auto"     # 파일 검색 프로바이더
 # everything_path = "C:\\Program Files\\Everything\\es.exe"
-search_paths = []                 # 검색 디렉토리 (빈 배열 = 홈 디렉토리)
-max_results = 5000                # 파일 프로바이더 최대 결과 수
-ignore_patterns = [".git", "node_modules", "target", "__pycache__"]
-quit_on_launch = false            # 실행 후 kmd 자동 종료
+# search_paths = []              # 검색 디렉토리 (기본: 플랫폼별 사용자 폴더)
+max_results = 10000               # 파일 프로바이더 최대 결과 수
+search_depth = 6                  # 최대 재귀 탐색 깊이
+ignore_patterns = [".git", "node_modules", "target", "__pycache__", "Windows", "Program Files"]
+quit_on_launch = true             # 실행 후 kmd 자동 종료
+index_directories = true          # 폴더도 인덱스에 포함
+scan_drives = true                # 드라이브 루트 자동 스캔 (C:\, D:\ 등)
+drive_scan_depth = 3              # 드라이브 루트 스캔 깊이
+
+# 검색 결과 우선순위 가중치 (0-100, 높을수록 상위 노출)
+[launcher.kind_weights]
+directory = 80
+app = 70
+file = 50
+executable = 40
+system_cmd = 30
+web_search = 20
 
 # 커스텀 웹 서비스 예시
 # [[launcher.web_services]]
@@ -80,13 +95,31 @@ toggle_preview = "ctrl+p"
 |----|------|--------|------|
 | file_search_provider | String | "auto" | 파일 검색 백엔드 |
 | everything_path | Path? | None | es.exe 경로 (Windows) |
-| search_paths | Vec\<Path\> | [] | 검색 대상 디렉토리 |
-| max_results | usize | 5000 | 최대 결과 수 |
+| search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리 (기본: Desktop, Documents, Downloads 등) |
+| max_results | usize | 10000 | 최대 인덱스 항목 수 |
+| search_depth | usize | 6 | 최대 재귀 디렉토리 탐색 깊이 |
 | ignore_patterns | Vec\<String\> | [".git", ...] | 무시 패턴 |
-| quit_on_launch | bool | false | 실행 후 종료 |
+| quit_on_launch | bool | true | 실행 후 kmd 종료 (런처 모드) |
+| index_directories | bool | true | 폴더를 검색 인덱스에 포함 |
+| scan_drives | bool | true | 드라이브 루트 자동 스캔 |
+| drive_scan_depth | usize | 3 | 드라이브 루트 스캔 깊이 |
 | web_services | Vec\<WebService\> | [] | 커스텀 웹 서비스 |
 
-### 4.3 file_search_provider 자동 감지
+### 4.3 [launcher.kind_weights]
+
+검색 결과 우선순위 가중치 (0-100). 높을수록 검색 결과에서 상위에 노출됩니다.
+F2 설정 모달의 **Priority** 탭에서 슬라이더로 조절 가능합니다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| directory | u32 | 80 | 폴더 우선순위 |
+| app | u32 | 70 | 애플리케이션 우선순위 |
+| file | u32 | 50 | 파일 우선순위 |
+| executable | u32 | 40 | PATH 실행파일 우선순위 |
+| system_cmd | u32 | 30 | 시스템 명령 우선순위 |
+| web_search | u32 | 20 | 웹 검색 우선순위 |
+
+### 4.4 file_search_provider 자동 감지
 
 ```mermaid
 flowchart TD
@@ -113,7 +146,7 @@ flowchart TD
 | `mdfind` | Spotlight (mdfind) | macOS |
 | `locate` | plocate / mlocate | Linux |
 
-### 4.4 [keybindings]
+### 4.5 [keybindings]
 
 | 키 | 기본값 | 설명 |
 |----|--------|------|

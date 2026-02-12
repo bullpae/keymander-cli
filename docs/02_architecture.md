@@ -84,16 +84,17 @@ graph LR
 
 ```mermaid
 graph TB
-    lib["lib.rs<br/>모듈 선언 + re-export"]
+    lib["lib.rs\n모듈 선언 + re-export"]
 
-    lib --> config["config.rs<br/>Config, GeneralConfig<br/>LauncherConfig, Keybindings"]
-    lib --> db["db.rs<br/>Database (SQLite)<br/>history, bookmarks, kv"]
-    lib --> search["search.rs<br/>SearchEngine (Nucleo)<br/>SearchMode, GlobMatcher"]
-    lib --> history["history.rs<br/>boost_results<br/>record_launch"]
-    lib --> action["action.rs<br/>execute, open_url<br/>open_with_system"]
-    lib --> web["web.rs<br/>WebService, parse_web_query<br/>build_search_url"]
+    lib --> config["config.rs\nConfig, GeneralConfig\nLauncherConfig, KindWeights"]
+    lib --> db["db.rs\nDatabase SQLite\nhistory, bookmarks, kv"]
+    lib --> search["search.rs\nSearchEngine Nucleo\nSearchMode, GlobMatcher"]
+    lib --> history["history.rs\nboost_results\nrecord_launch"]
+    lib --> action["action.rs\nexecute, open_url\nopen_with_system"]
+    lib --> web["web.rs\nWebService, parse_web_query\nbuild_search_url"]
+    lib --> hangul["hangul.rs\nHangulComposer\n2-벌식 한글 입력"]
 
-    lib --> indexMod["index/mod.rs<br/>Index, IndexItem<br/>ItemKind, Source"]
+    lib --> indexMod["index/mod.rs\nIndex, IndexItem\nItemKind, Source"]
     indexMod --> apps["index/apps.rs<br/>collect_apps<br/>OS별 앱 발견"]
     indexMod --> files["index/files.rs<br/>ProviderKind<br/>detect_provider, collect_files"]
     indexMod --> path["index/path.rs<br/>collect_executables<br/>PATH 스캔"]
@@ -121,14 +122,15 @@ graph TB
     cmdMod --> cmdPlugin["cmd/plugin.rs<br/>kmd plugin list"]
     cmdMod --> cmdDaemon["cmd/daemon.rs<br/>kmd daemon start/stop"]
 
-    main --> tuiMod["tui/mod.rs<br/>run()"]
-    tuiMod --> app["tui/app.rs<br/>AppState, run_app<br/>handle_key, update_search"]
-    tuiMod --> event["tui/event.rs<br/>EventHandler<br/>AppEvent"]
-    tuiMod --> theme["tui/theme.rs<br/>Theme colors/styles"]
-    tuiMod --> uiMod["tui/ui/mod.rs<br/>render() 레이아웃"]
-    uiMod --> input["tui/ui/input.rs<br/>검색 입력바"]
-    uiMod --> list["tui/ui/list.rs<br/>결과 리스트"]
-    uiMod --> preview["tui/ui/preview.rs<br/>미리보기 패널"]
+    main --> tuiMod["tui/mod.rs\nrun()"]
+    tuiMod --> app["tui/app.rs\nAppState, run_app\nhandle_key, update_search"]
+    tuiMod --> event["tui/event.rs\nEventHandler\nAppEvent"]
+    tuiMod --> theme["tui/theme.rs\nTheme colors/styles"]
+    tuiMod --> settingsMod["tui/settings/\nSettingsState, render_modal\nF2 설정 모달"]
+    tuiMod --> uiMod["tui/ui/mod.rs\nrender() 레이아웃"]
+    uiMod --> input["tui/ui/input.rs\n검색 입력바"]
+    uiMod --> list["tui/ui/list.rs\n결과 리스트"]
+    uiMod --> preview["tui/ui/preview.rs\n미리보기 패널"]
 ```
 
 ---
@@ -323,7 +325,6 @@ graph LR
 | DB | rusqlite 0.32 (bundled) | 외부 의존성 없는 SQLite, WAL 지원 |
 | CLI | clap 4 (derive) | Rust 표준 CLI 파서 |
 | 설정 | serde + toml 0.8 | 사람이 읽기 쉬운 포맷 |
-| 비동기 | tokio 1 | TUI 이벤트 루프용 |
 | 에러 | color-eyre 0.6 + thiserror 2 | 사용자 친화적 에러 메시지 |
 | 로깅 | tracing 0.1 | 구조적 로깅, 환경변수 필터 |
 | 파일 탐색 | walkdir 2 | 내장 파일 스캔 폴백용 |
