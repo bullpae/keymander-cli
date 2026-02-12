@@ -14,16 +14,25 @@ const INDEX_CACHE_FILENAME: &str = "index.json";
 /// Database filename
 const DB_FILENAME: &str = "kmd.db";
 
-/// Get or create the index, loading from cache if available
+/// Get or create the index, loading from cache if available.
+/// Auto-rebuilds when the cache version doesn't match the current binary.
 pub fn load_or_build_index(
     launcher_config: &kmd_core::config::LauncherConfig,
 ) -> kmd_core::Index {
     let cache_path = index_cache_path();
+    let expected_version = kmd_core::Index::current_version();
 
-    // Try loading cached index
+    // Try loading cached index (only if version matches)
     if cache_path.exists() {
         if let Ok(index) = kmd_core::index::store::load_index(&cache_path) {
-            return index;
+            if index.version == expected_version {
+                return index;
+            }
+            tracing::info!(
+                "Index cache version mismatch (cache={:?}, expected={:?}), rebuilding...",
+                index.version,
+                expected_version
+            );
         }
     }
 

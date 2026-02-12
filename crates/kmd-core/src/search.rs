@@ -156,8 +156,10 @@ impl SearchEngine {
             Normalization::Never,
             false,
         );
-        const NUCLEO_TICK_ITERATIONS: u64 = 10;
-        self.nucleo.tick(NUCLEO_TICK_ITERATIONS);
+        // timeout in milliseconds — wait for worker threads to finish matching.
+        // 100ms is generous enough for large indexes while staying responsive.
+        const NUCLEO_TICK_TIMEOUT_MS: u64 = 100;
+        self.nucleo.tick(NUCLEO_TICK_TIMEOUT_MS);
 
         let snapshot = self.nucleo.snapshot();
         let count = snapshot.matched_item_count().min(limit as u32);

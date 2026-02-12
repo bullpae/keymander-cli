@@ -333,18 +333,19 @@ pub fn collect_files(
 // ── Builtin (walkdir) ────────────────────────────────────
 
 fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
-    let roots: Vec<PathBuf> = if config.search_paths.is_empty() {
-        // Scan user home directory (excluding priority dirs already scanned)
-        dirs::home_dir().into_iter().collect()
-    } else {
-        config.search_paths.clone()
-    };
+    // General scan: always scan from home directory.
+    // Priority scan already covered search_paths + drive roots,
+    // so this fills in home directory content not already indexed.
+    let roots: Vec<PathBuf> = dirs::home_dir().into_iter().collect();
+    if roots.is_empty() {
+        return Vec::new();
+    }
 
     let ignore_set: HashSet<&str> = config.ignore_patterns.iter().map(|s| s.as_str()).collect();
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    // Collect paths from priority dirs to skip (already indexed)
+    // Skip directories already covered by priority/drive scan
     let priority_set: HashSet<PathBuf> = config.search_paths.iter().cloned().collect();
 
     for root in &roots {

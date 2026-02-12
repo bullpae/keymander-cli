@@ -72,6 +72,9 @@ pub struct Index {
     pub items: Vec<IndexItem>,
     /// ISO 8601 timestamp of last rebuild
     pub last_updated: Option<String>,
+    /// Version marker — cache is invalidated when this doesn't match current version
+    #[serde(default)]
+    pub version: String,
 }
 
 impl Index {
@@ -146,7 +149,15 @@ impl Index {
         Self {
             items,
             last_updated: Some(now),
+            version: Self::current_version().to_string(),
         }
+    }
+
+    /// Current cache version. Increment this when the indexing logic changes
+    /// to force cache invalidation.
+    pub fn current_version() -> &'static str {
+        // Format: "crate_version-schema_revision"
+        concat!(env!("CARGO_PKG_VERSION"), "-2")
     }
 
     /// Total number of indexed items
