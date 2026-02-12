@@ -20,7 +20,7 @@ pub fn render_modal(frame: &mut Frame, area: Rect, state: &SettingsState, theme:
 
     // Outer block
     let dirty_marker = if state.dirty { " *" } else { "" };
-    let title = format!(" \u{2328} keymander Settings (F2){} ", dirty_marker);
+    let title = format!(" \u{00BB} keymander Settings (F2){} ", dirty_marker);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
