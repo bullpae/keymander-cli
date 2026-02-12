@@ -368,7 +368,8 @@ fn handle_key(
         }
         (KeyCode::Enter, _) => {
             flush_composer(state);
-            update_search(state, engine, db);
+            // Execute the item the user is currently looking at — do NOT
+            // re-run search first, as that resets selected_index to 0.
             execute_selected(state, db);
         }
         (KeyCode::Backspace, _) => {
