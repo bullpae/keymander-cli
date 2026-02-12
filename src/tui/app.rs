@@ -19,6 +19,7 @@ use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
 use super::event::{AppEvent, EventHandler};
+use super::settings::{self, SettingsAction, SettingsState};
 use super::theme::Theme;
 use super::ui;
 
@@ -80,6 +81,8 @@ pub struct AppState {
     pub drill_path: Option<PathBuf>,
     /// Temporary status message (e.g. "Copied to clipboard")
     pub status_message: Option<String>,
+    /// Settings modal (None = hidden, Some = active)
+    pub settings: Option<SettingsState>,
 }
 
 /// Saved state for returning from a folder drill-down
@@ -123,12 +126,13 @@ fn items_to_results(
 /// Run the TUI application
 pub fn run_app() -> color_eyre::Result<()> {
     // Load config and build index
-    let config = crate::cmd::load_config()?;
+    let mut config = crate::cmd::load_config()?;
     let index = crate::cmd::load_or_build_index(&config.launcher);
     let db = crate::cmd::open_db().ok();
 
-    // Initialize search engine
+    // Initialize search engine with kind weights
     let mut engine = SearchEngine::new();
+    engine.set_kind_weights(config.launcher.kind_weights.clone());
     let total_items = index.items.len();
     engine.load(index.items);
 
@@ -148,6 +152,7 @@ pub fn run_app() -> color_eyre::Result<()> {
         drill_stack: Vec::new(),
         drill_path: None,
         status_message: None,
+        settings: None,
     };
 
     // Setup terminal
@@ -170,6 +175,10 @@ pub fn run_app() -> color_eyre::Result<()> {
     loop {
         terminal.draw(|frame| {
             ui::render(frame, &state, &theme);
+            // Render settings modal overlay on top
+            if let Some(ref settings_state) = state.settings {
+                settings::render::render_modal(frame, frame.area(), settings_state, &theme);
+            }
         })?;
 
         if state.should_quit {
@@ -178,10 +187,22 @@ pub fn run_app() -> color_eyre::Result<()> {
 
         match events.next()? {
             AppEvent::Key(key) => {
-                handle_key(&mut state, key, &mut engine, db.as_ref());
+                // Route keys to settings if modal is open
+                if state.settings.is_some() {
+                    handle_settings_key_event(
+                        &mut state,
+                        key,
+                        &mut config,
+                        &mut engine,
+                    );
+                } else {
+                    handle_key(&mut state, key, &mut engine, db.as_ref());
+                }
             }
             AppEvent::Paste(text) => {
-                handle_paste(&mut state, &text, &mut engine, db.as_ref());
+                if state.settings.is_none() {
+                    handle_paste(&mut state, &text, &mut engine, db.as_ref());
+                }
             }
             AppEvent::Resize | AppEvent::Tick => {}
         }
@@ -199,6 +220,98 @@ pub fn run_app() -> color_eyre::Result<()> {
     Ok(())
 }
 
+// ── Settings Integration ─────────────────────────────────────────────────────
+
+/// Handle a key event when the settings modal is open
+fn handle_settings_key_event(
+    state: &mut AppState,
+    key: crossterm::event::KeyEvent,
+    config: &mut kmd_core::Config,
+    engine: &mut SearchEngine,
+) {
+    // Take ownership of settings state temporarily
+    let Some(mut settings_state) = state.settings.take() else {
+        return;
+    };
+
+    let action = settings::handle_settings_key(&mut settings_state, key);
+
+    match action {
+        SettingsAction::None => {
+            // Put it back
+            state.settings = Some(settings_state);
+        }
+        SettingsAction::Close => {
+            // Discard unsaved changes, close modal
+            state.settings = None;
+        }
+        SettingsAction::Save { needs_rebuild } => {
+            // Apply the edited config
+            *config = settings_state.config.clone();
+            settings_state.dirty = false;
+
+            // Save to file
+            if let Err(e) = config.save() {
+                state.status_message =
+                    Some(format!("\u{274C} Save failed: {}", e));
+                state.settings = Some(settings_state);
+                return;
+            }
+
+            // Apply immediate settings
+            state.show_preview = config.general.show_preview;
+            state.quit_on_launch = config.launcher.quit_on_launch;
+            engine.set_kind_weights(config.launcher.kind_weights.clone());
+
+            if needs_rebuild {
+                // Rebuild index with new config
+                let index = crate::cmd::load_or_build_index(&config.launcher);
+                state.total_items = index.items.len();
+                engine.load(index.items);
+
+                // Delete old cache so it's rebuilt next time
+                let cache_path = crate::cmd::index_cache_path();
+                let _ = std::fs::remove_file(&cache_path);
+                let index = kmd_core::Index::build(&config.launcher);
+                let _ = kmd_core::index::store::save_index(&index, &cache_path);
+                state.total_items = index.items.len();
+                engine.load(index.items);
+
+                state.status_message = Some(format!(
+                    "\u{2705} Settings saved. Index rebuilt ({} items)",
+                    state.total_items
+                ));
+            } else {
+                state.status_message =
+                    Some("\u{2705} Settings saved".to_string());
+            }
+
+            // Close modal after save
+            state.settings = None;
+        }
+        SettingsAction::Reset => {
+            // Reset to defaults
+            let default_config = kmd_core::Config::default();
+            settings_state.config.launcher.kind_weights =
+                default_config.launcher.kind_weights;
+            settings_state.config.launcher.search_depth =
+                default_config.launcher.search_depth;
+            settings_state.config.launcher.max_results =
+                default_config.launcher.max_results;
+            settings_state.config.launcher.ignore_patterns =
+                default_config.launcher.ignore_patterns;
+            settings_state.config.launcher.index_directories =
+                default_config.launcher.index_directories;
+            settings_state.config.launcher.file_search_provider =
+                default_config.launcher.file_search_provider;
+            settings_state.config.general = default_config.general;
+            settings_state.config.keybindings = default_config.keybindings;
+            settings_state.dirty = true;
+            state.settings = Some(settings_state);
+        }
+    }
+}
+
 // ── Key Handling ─────────────────────────────────────────────────────────────
 
 /// Handle a key event
@@ -211,6 +324,13 @@ fn handle_key(
     state.status_message = None;
 
     match (key.code, key.modifiers) {
+        // Open settings modal
+        (KeyCode::F(2), _) => {
+            flush_composer(state);
+            let config = crate::cmd::load_config().unwrap_or_default();
+            state.settings = Some(SettingsState::new(config));
+        }
+
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
             flush_composer(state);
             state.hangul_mode = !state.hangul_mode;
@@ -603,8 +723,9 @@ fn list_directory_contents(dir: &Path) -> Vec<SearchResult> {
         }
     }
 
-    let sort_by_name =
-        |a: &SearchResult, b: &SearchResult| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase());
+    let sort_by_name = |a: &SearchResult, b: &SearchResult| {
+        a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase())
+    };
     directories.sort_by(sort_by_name);
     files.sort_by(sort_by_name);
 

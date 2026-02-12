@@ -74,6 +74,10 @@ pub struct LauncherConfig {
     pub ignore_patterns: Vec<String>,
     /// Quit kmd after launching a program/file
     pub quit_on_launch: bool,
+    /// Whether to index directories (not just files)
+    pub index_directories: bool,
+    /// Search result priority weights by item kind (0-100, higher = boosted)
+    pub kind_weights: KindWeights,
     /// Custom web services
     #[serde(default)]
     pub web_services: Vec<CustomWebService>,
@@ -129,7 +133,51 @@ impl Default for LauncherConfig {
                 ".Trash".to_string(),
             ],
             quit_on_launch: true,
+            index_directories: true,
+            kind_weights: KindWeights::default(),
             web_services: vec![],
+        }
+    }
+}
+
+/// Search result priority weights per item kind.
+/// Higher values push results toward the top (0-100 range recommended).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct KindWeights {
+    pub directory: u32,
+    pub app: u32,
+    pub file: u32,
+    pub executable: u32,
+    pub system_cmd: u32,
+    pub web_search: u32,
+}
+
+impl Default for KindWeights {
+    fn default() -> Self {
+        Self {
+            directory: 80,
+            app: 70,
+            file: 50,
+            executable: 40,
+            system_cmd: 30,
+            web_search: 20,
+        }
+    }
+}
+
+impl KindWeights {
+    /// Get the weight for a given ItemKind
+    pub fn weight_for(&self, kind: crate::index::ItemKind) -> u32 {
+        use crate::index::ItemKind;
+        match kind {
+            ItemKind::Directory => self.directory,
+            ItemKind::App => self.app,
+            ItemKind::File => self.file,
+            ItemKind::Executable => self.executable,
+            ItemKind::SystemCommand => self.system_cmd,
+            ItemKind::WebSearch => self.web_search,
+            ItemKind::Calculator => 0, // handled separately
         }
     }
 }
@@ -206,15 +254,52 @@ impl Config {
     /// Get a config value by dot-separated key path
     pub fn get_value(&self, key: &str) -> Option<String> {
         match key {
+            // general
             "general.render_fps" => Some(self.general.render_fps.to_string()),
             "general.show_preview" => Some(self.general.show_preview.to_string()),
-            "general.preview_width_percent" => Some(self.general.preview_width_percent.to_string()),
+            "general.preview_width_percent" => {
+                Some(self.general.preview_width_percent.to_string())
+            }
             "general.theme" => Some(self.general.theme.clone()),
             "general.editor" => Some(self.general.editor.clone().unwrap_or_default()),
-            "launcher.file_search_provider" => Some(self.launcher.file_search_provider.clone()),
+            // launcher
+            "launcher.file_search_provider" => {
+                Some(self.launcher.file_search_provider.clone())
+            }
             "launcher.max_results" => Some(self.launcher.max_results.to_string()),
+            "launcher.search_depth" => Some(self.launcher.search_depth.to_string()),
             "launcher.quit_on_launch" => Some(self.launcher.quit_on_launch.to_string()),
+            "launcher.index_directories" => {
+                Some(self.launcher.index_directories.to_string())
+            }
+            // kind_weights
+            "launcher.kind_weights.directory" => {
+                Some(self.launcher.kind_weights.directory.to_string())
+            }
+            "launcher.kind_weights.app" => {
+                Some(self.launcher.kind_weights.app.to_string())
+            }
+            "launcher.kind_weights.file" => {
+                Some(self.launcher.kind_weights.file.to_string())
+            }
+            "launcher.kind_weights.executable" => {
+                Some(self.launcher.kind_weights.executable.to_string())
+            }
+            "launcher.kind_weights.system_cmd" => {
+                Some(self.launcher.kind_weights.system_cmd.to_string())
+            }
+            "launcher.kind_weights.web_search" => {
+                Some(self.launcher.kind_weights.web_search.to_string())
+            }
+            // keybindings
             "keybindings.global_hotkey" => Some(self.keybindings.global_hotkey.clone()),
+            "keybindings.quit" => Some(self.keybindings.quit.clone()),
+            "keybindings.next" => Some(self.keybindings.next.clone()),
+            "keybindings.prev" => Some(self.keybindings.prev.clone()),
+            "keybindings.select" => Some(self.keybindings.select.clone()),
+            "keybindings.toggle_preview" => {
+                Some(self.keybindings.toggle_preview.clone())
+            }
             _ => None,
         }
     }
@@ -222,11 +307,13 @@ impl Config {
     /// Set a config value by dot-separated key path
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
         match key {
+            // general
             "general.render_fps" => {
                 self.general.render_fps = value.parse().unwrap_or(self.general.render_fps);
             }
             "general.show_preview" => {
-                self.general.show_preview = value.parse().unwrap_or(self.general.show_preview);
+                self.general.show_preview =
+                    value.parse().unwrap_or(self.general.show_preview);
             }
             "general.preview_width_percent" => {
                 self.general.preview_width_percent = value
@@ -241,18 +328,61 @@ impl Config {
                     Some(value.to_string())
                 };
             }
+            // launcher
             "launcher.file_search_provider" => {
                 self.launcher.file_search_provider = value.to_string();
             }
             "launcher.max_results" => {
-                self.launcher.max_results = value.parse().unwrap_or(self.launcher.max_results);
+                self.launcher.max_results =
+                    value.parse().unwrap_or(self.launcher.max_results);
+            }
+            "launcher.search_depth" => {
+                self.launcher.search_depth =
+                    value.parse().unwrap_or(self.launcher.search_depth);
             }
             "launcher.quit_on_launch" => {
                 self.launcher.quit_on_launch =
                     value.parse().unwrap_or(self.launcher.quit_on_launch);
             }
+            "launcher.index_directories" => {
+                self.launcher.index_directories =
+                    value.parse().unwrap_or(self.launcher.index_directories);
+            }
+            // kind_weights
+            "launcher.kind_weights.directory" => {
+                self.launcher.kind_weights.directory =
+                    value.parse().unwrap_or(self.launcher.kind_weights.directory);
+            }
+            "launcher.kind_weights.app" => {
+                self.launcher.kind_weights.app =
+                    value.parse().unwrap_or(self.launcher.kind_weights.app);
+            }
+            "launcher.kind_weights.file" => {
+                self.launcher.kind_weights.file =
+                    value.parse().unwrap_or(self.launcher.kind_weights.file);
+            }
+            "launcher.kind_weights.executable" => {
+                self.launcher.kind_weights.executable =
+                    value.parse().unwrap_or(self.launcher.kind_weights.executable);
+            }
+            "launcher.kind_weights.system_cmd" => {
+                self.launcher.kind_weights.system_cmd =
+                    value.parse().unwrap_or(self.launcher.kind_weights.system_cmd);
+            }
+            "launcher.kind_weights.web_search" => {
+                self.launcher.kind_weights.web_search =
+                    value.parse().unwrap_or(self.launcher.kind_weights.web_search);
+            }
+            // keybindings
             "keybindings.global_hotkey" => {
                 self.keybindings.global_hotkey = value.to_string();
+            }
+            "keybindings.quit" => self.keybindings.quit = value.to_string(),
+            "keybindings.next" => self.keybindings.next = value.to_string(),
+            "keybindings.prev" => self.keybindings.prev = value.to_string(),
+            "keybindings.select" => self.keybindings.select = value.to_string(),
+            "keybindings.toggle_preview" => {
+                self.keybindings.toggle_preview = value.to_string();
             }
             _ => return Err(ConfigError::UnknownKey(key.to_string())),
         }
@@ -298,6 +428,8 @@ mod tests {
         assert_eq!(config.general.render_fps, 30);
         assert_eq!(config.launcher.file_search_provider, "auto");
         assert_eq!(config.keybindings.global_hotkey, "alt+space");
+        assert_eq!(config.launcher.kind_weights.directory, 80);
+        assert!(config.launcher.index_directories);
     }
 
     #[test]
@@ -305,6 +437,14 @@ mod tests {
         let mut config = Config::default();
         config.set_value("general.theme", "nord").unwrap();
         assert_eq!(config.get_value("general.theme"), Some("nord".to_string()));
+
+        config
+            .set_value("launcher.kind_weights.directory", "90")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.kind_weights.directory"),
+            Some("90".to_string())
+        );
     }
 
     #[test]

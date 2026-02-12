@@ -446,6 +446,8 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
         ".".to_string(),
         "--type".to_string(),
         "f".to_string(),
+        "--type".to_string(),
+        "d".to_string(),
         "--max-results".to_string(),
         config.max_results.to_string(),
         "--max-depth".to_string(),

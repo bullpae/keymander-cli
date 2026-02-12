@@ -5,6 +5,7 @@ use std::sync::Arc;
 use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config as NucleoConfig, Nucleo};
 
+use crate::config::KindWeights;
 use crate::index::IndexItem;
 
 /// A search result wrapping an IndexItem with a relevance score
@@ -80,6 +81,7 @@ impl SearchMode {
 pub struct SearchEngine {
     nucleo: Nucleo<IndexItem>,
     all_items: Vec<IndexItem>,
+    kind_weights: KindWeights,
 }
 
 impl SearchEngine {
@@ -90,7 +92,13 @@ impl SearchEngine {
         Self {
             nucleo,
             all_items: Vec::new(),
+            kind_weights: KindWeights::default(),
         }
+    }
+
+    /// Set the kind weights for score boosting
+    pub fn set_kind_weights(&mut self, weights: KindWeights) {
+        self.kind_weights = weights;
     }
 
     /// Load items into the search engine
@@ -118,12 +126,25 @@ impl SearchEngine {
         pattern: &str,
         limit: usize,
     ) -> Vec<SearchResult> {
-        match mode {
+        let mut results = match mode {
             SearchMode::Fuzzy => self.search_fuzzy(pattern, limit),
             SearchMode::Glob => self.filter_glob(pattern, limit),
             SearchMode::Regex => self.filter_regex(pattern, limit),
             SearchMode::Contains | SearchMode::Url => self.filter_contains(pattern, limit),
+        };
+
+        // Apply kind weight boost and re-sort
+        self.apply_kind_boost(&mut results);
+        results
+    }
+
+    /// Apply kind_weights boost to search results and re-sort by score descending
+    fn apply_kind_boost(&self, results: &mut Vec<SearchResult>) {
+        for result in results.iter_mut() {
+            let boost = self.kind_weights.weight_for(result.item.kind);
+            result.score = result.score.saturating_add(boost);
         }
+        results.sort_by(|a, b| b.score.cmp(&a.score));
     }
 
     /// Fuzzy search using Nucleo
@@ -408,7 +429,7 @@ mod tests {
                 path: "/usr/bin/firefox".to_string(),
                 kind: ItemKind::App,
                 source: Source::Apps,
-                icon: "📦".to_string(),
+                icon: "\u{1F4E6}".to_string(),
                 keywords: "firefox browser web".to_string(),
             },
             IndexItem {
@@ -416,7 +437,7 @@ mod tests {
                 path: "/usr/bin/code".to_string(),
                 kind: ItemKind::App,
                 source: Source::Apps,
-                icon: "📦".to_string(),
+                icon: "\u{1F4E6}".to_string(),
                 keywords: "code editor vscode".to_string(),
             },
         ]);
@@ -425,5 +446,42 @@ mod tests {
         assert_eq!(mode, SearchMode::Fuzzy);
         assert!(!results.is_empty());
         assert_eq!(results[0].item.name, "Firefox");
+    }
+
+    #[test]
+    fn test_kind_weight_boost() {
+        use crate::index::{ItemKind, Source};
+
+        let mut engine = SearchEngine::new();
+        engine.set_kind_weights(KindWeights {
+            directory: 80,
+            app: 70,
+            file: 50,
+            ..Default::default()
+        });
+
+        engine.load(vec![
+            IndexItem {
+                name: "Downloads".to_string(),
+                path: "/home/user/Downloads".to_string(),
+                kind: ItemKind::Directory,
+                source: Source::FileProvider,
+                icon: "\u{1F4C1}".to_string(),
+                keywords: "downloads".to_string(),
+            },
+            IndexItem {
+                name: "download.txt".to_string(),
+                path: "/home/user/download.txt".to_string(),
+                kind: ItemKind::File,
+                source: Source::FileProvider,
+                icon: "\u{1F4DD}".to_string(),
+                keywords: "download text".to_string(),
+            },
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "download", 10);
+        assert_eq!(results.len(), 2);
+        // Directory should be first due to higher weight
+        assert_eq!(results[0].item.kind, ItemKind::Directory);
     }
 }

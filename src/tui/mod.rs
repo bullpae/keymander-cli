@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod event;
+pub mod settings;
 pub mod theme;
 pub mod ui;
 
