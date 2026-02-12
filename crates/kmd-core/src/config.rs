@@ -124,10 +124,19 @@ impl Default for LauncherConfig {
                 ".cursor".to_string(),
                 ".idea".to_string(),
                 ".eclipse".to_string(),
-                // Windows specific
+                // Windows specific — user profile
                 "AppData".to_string(),
                 "$Recycle.Bin".to_string(),
                 "NTUSER.DAT".to_string(),
+                // Windows specific — system directories (C:\ root)
+                "Windows".to_string(),
+                "Program Files".to_string(),
+                "Program Files (x86)".to_string(),
+                "ProgramData".to_string(),
+                "PerfLogs".to_string(),
+                "Recovery".to_string(),
+                "System Volume Information".to_string(),
+                "inetpub".to_string(),
                 // macOS specific
                 "Library".to_string(),
                 ".Trash".to_string(),

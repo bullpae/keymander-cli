@@ -94,12 +94,14 @@ pub fn priority_directories() -> Vec<PathBuf> {
                     dirs.push(dir);
                 }
             }
-            // Also check common non-C: drive roots for user data
-            for letter in ['D', 'E', 'F', 'G'] {
-                let drive = PathBuf::from(format!("{}:\\", letter));
-                if drive.is_dir() {
-                    dirs.push(drive);
-                }
+        }
+
+        // Scan all available drive roots (C:\, D:\, etc.)
+        // System directories are filtered out by ignore_patterns and is_ignored_dir.
+        for letter in 'C'..='Z' {
+            let drive = PathBuf::from(format!("{}:\\", letter));
+            if drive.is_dir() && !dirs.contains(&drive) {
+                dirs.push(drive);
             }
         }
     }
@@ -167,10 +169,18 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut seen_paths = HashSet::new();
 
     for dir in &priority_dirs {
-        tracing::info!("Scanning priority directory: {}", dir.display());
+        // Use shallower depth for drive roots (e.g. C:\, D:\) to avoid
+        // deep recursion into system directories. User directories like
+        // Desktop/Documents get the full configured depth.
+        let depth = if is_drive_root(dir) {
+            config.search_depth.min(3)
+        } else {
+            config.search_depth
+        };
+        tracing::info!("Scanning priority directory: {} (depth {})", dir.display(), depth);
 
         let walker = WalkDir::new(dir)
-            .max_depth(config.search_depth)
+            .max_depth(depth)
             .follow_links(false)
             .into_iter();
 
@@ -682,6 +692,13 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Check if a path is a drive root (e.g. "C:\", "D:\")
+fn is_drive_root(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    // Matches patterns like "C:\", "D:\"
+    s.len() <= 3 && s.ends_with('\\') || s.len() == 2 && s.ends_with(':')
+}
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
 fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool {
