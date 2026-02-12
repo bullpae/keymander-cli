@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- Gradient for the accent bar at bottom -->
+    <linearGradient id="accentBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#56D2FF"/>
+      <stop offset="100%" stop-color="#50FA7B"/>
+    </linearGradient>
+    <!-- Subtle top highlight for keycap 3D effect -->
+    <linearGradient id="keycapHighlight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3A3A58"/>
+      <stop offset="100%" stop-color="#2A2A40"/>
+    </linearGradient>
+    <!-- Subtle shadow beneath keycap -->
+    <filter id="keycapShadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background: dark rounded square -->
+  <rect x="0" y="0" width="256" height="256" rx="48" ry="48" fill="#181828"/>
+
+  <!-- Keycap body: slightly raised surface -->
+  <rect x="28" y="22" width="200" height="180" rx="24" ry="24"
+        fill="url(#keycapHighlight)" filter="url(#keycapShadow)"/>
+
+  <!-- Keycap top highlight border -->
+  <rect x="28" y="22" width="200" height="180" rx="24" ry="24"
+        fill="none" stroke="#4A4A68" stroke-width="1.5"/>
+
+  <!-- Guillemet » symbol  brand mark -->
+  <text x="128" y="148" text-anchor="middle" dominant-baseline="central"
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="130" font-weight="700" fill="#FFA560">»</text>
+
+  <!-- Accent gradient bar at bottom -->
+  <rect x="36" y="218" width="184" height="6" rx="3" ry="3"
+        fill="url(#accentBar)"/>
+</svg>
