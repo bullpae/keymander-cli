@@ -4,12 +4,12 @@
 
 pub mod app;
 pub mod event;
-pub mod ui;
 pub mod theme;
+pub mod ui;
 
 use color_eyre::Result;
 
 /// Run the TUI launcher
-pub async fn run() -> Result<()> {
-    app::run_app().await
+pub fn run() -> Result<()> {
+    app::run_app()
 }

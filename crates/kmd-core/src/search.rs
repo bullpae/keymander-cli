@@ -98,9 +98,8 @@ impl SearchEngine {
         self.all_items = items.clone();
         let injector = self.nucleo.injector();
         for item in items {
-            let search_text = format!("{} {}", item.name, item.keywords);
-            injector.push(item, |_item, cols| {
-                cols[0] = search_text.into();
+            injector.push(item, |item, cols| {
+                cols[0] = format!("{} {}", item.name, item.keywords).into();
             });
         }
     }
@@ -136,7 +135,8 @@ impl SearchEngine {
             Normalization::Never,
             false,
         );
-        self.nucleo.tick(10);
+        const NUCLEO_TICK_ITERATIONS: u64 = 10;
+        self.nucleo.tick(NUCLEO_TICK_ITERATIONS);
 
         let snapshot = self.nucleo.snapshot();
         let count = snapshot.matched_item_count().min(limit as u32);
@@ -173,13 +173,16 @@ impl SearchEngine {
 
     /// Regex filter (with ReDoS protection)
     fn filter_regex(&self, pattern: &str, limit: usize) -> Vec<SearchResult> {
-        if pattern.len() > 200 {
+        const MAX_REGEX_PATTERN_LEN: usize = 200;
+        const REGEX_SIZE_LIMIT: usize = 1 << 20; // 1 MiB
+
+        if pattern.len() > MAX_REGEX_PATTERN_LEN {
             return Vec::new();
         }
 
         let Ok(re) = regex::RegexBuilder::new(pattern)
             .case_insensitive(true)
-            .size_limit(1 << 20)
+            .size_limit(REGEX_SIZE_LIMIT)
             .build()
         else {
             return Vec::new();

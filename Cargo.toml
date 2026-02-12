@@ -22,10 +22,7 @@ kmd-core = { path = "crates/kmd-core" }
 
 # TUI
 ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
-
-# Async
-tokio = { version = "1", features = ["full"] }
+crossterm = "0.28"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

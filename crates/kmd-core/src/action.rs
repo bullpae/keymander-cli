@@ -26,7 +26,12 @@ pub fn execute(result: &SearchResult) -> ActionResult {
         }
         ItemKind::SystemCommand => execute_system_command(&result.item.name),
         ItemKind::WebSearch => {
-            if let Some(url) = result.item.keywords.split_whitespace().find(|s| s.starts_with("http")) {
+            if let Some(url) = result
+                .item
+                .keywords
+                .split_whitespace()
+                .find(|s| s.starts_with("http"))
+            {
                 open_url(url)
             } else {
                 open_url(&result.item.path)
@@ -34,7 +39,6 @@ pub fn execute(result: &SearchResult) -> ActionResult {
         }
         ItemKind::Calculator => {
             // Calculator results are handled by the TUI (clipboard copy)
-            // This branch should not normally be reached
             ActionResult::Launched
         }
     }
@@ -42,17 +46,7 @@ pub fn execute(result: &SearchResult) -> ActionResult {
 
 /// Open a file/app using the system's default handler
 pub fn open_with_system(path: &str) -> ActionResult {
-    let result = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/c", "start", "", path])
-            .spawn()
-    } else if cfg!(target_os = "macos") {
-        Command::new("open").arg(path).spawn()
-    } else {
-        Command::new("xdg-open").arg(path).spawn()
-    };
-
-    match result {
+    match spawn_open(path) {
         Ok(_) => ActionResult::Launched,
         Err(e) => ActionResult::Error(format!("Failed to open '{}': {}", path, e)),
     }
@@ -60,19 +54,22 @@ pub fn open_with_system(path: &str) -> ActionResult {
 
 /// Open a URL in the default browser
 pub fn open_url(url: &str) -> ActionResult {
-    let result = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .spawn()
-    } else if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).spawn()
-    } else {
-        Command::new("xdg-open").arg(url).spawn()
-    };
-
-    match result {
+    match spawn_open(url) {
         Ok(_) => ActionResult::OpenedUrl(url.to_string()),
         Err(e) => ActionResult::Error(format!("Failed to open URL '{}': {}", url, e)),
+    }
+}
+
+/// Spawn the platform-specific "open" command for a path or URL
+fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
+    if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/c", "start", "", target])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(target).spawn()
+    } else {
+        Command::new("xdg-open").arg(target).spawn()
     }
 }
 
@@ -91,9 +88,7 @@ fn execute_system_command(display_name: &str) -> ActionResult {
 
 /// Actually run a system command (after confirmation if needed)
 pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> ActionResult {
-    let result = Command::new(cmd.command).args(cmd.args).spawn();
-
-    match result {
+    match Command::new(cmd.command).args(cmd.args).spawn() {
         Ok(_) => ActionResult::Launched,
         Err(e) => ActionResult::Error(format!(
             "Failed to execute '{}': {}",

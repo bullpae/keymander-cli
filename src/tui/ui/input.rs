@@ -61,25 +61,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 
     frame.render_widget(input, area);
 
-    // Place cursor (only when not showing placeholder)
-    if !is_empty || state.composing.is_some() {
-        let mode_width = UnicodeWidthStr::width(prompt);
+    // Place cursor
+    let mode_width = UnicodeWidthStr::width(prompt);
+    let cursor_y = area.y + 1;
+    let cursor_x = if !is_empty || state.composing.is_some() {
         let query_width = UnicodeWidthStr::width(state.query.as_str());
         let composing_width = state
             .composing
             .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1))
             .unwrap_or(0);
-
-        let cursor_x = area.x + 1 + (mode_width + query_width + composing_width) as u16;
-        let cursor_y = area.y + 1;
-        if cursor_x < area.x + area.width - 1 {
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
+        area.x + 1 + (mode_width + query_width + composing_width) as u16
     } else {
-        // Cursor at start of input (after prompt)
-        let mode_width = UnicodeWidthStr::width(prompt);
-        let cursor_x = area.x + 1 + mode_width as u16;
-        let cursor_y = area.y + 1;
+        area.x + 1 + mode_width as u16
+    };
+    let max_x = area.x + area.width.saturating_sub(1);
+    if cursor_x <= max_x {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }

@@ -1,6 +1,6 @@
 //! TUI application state and main event loop
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers,
@@ -13,7 +13,7 @@ use ratatui::Terminal;
 
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
-use kmd_core::index::{ItemKind, Source, files::icon_for_path};
+use kmd_core::index::{files::icon_for_path, ItemKind, Source};
 use kmd_core::plugin::builtin_calc;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
@@ -21,6 +21,34 @@ use kmd_core::web;
 use super::event::{AppEvent, EventHandler};
 use super::theme::Theme;
 use super::ui;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/// Max results returned by fuzzy search
+const SEARCH_RESULT_LIMIT: usize = 50;
+
+/// Max history entries shown when query is empty
+const HISTORY_DISPLAY_LIMIT: usize = 20;
+
+/// Score for web service list items (@ prefix browsing)
+const SCORE_WEB_LIST: u32 = 0;
+
+/// Score for a specific web search result
+const SCORE_WEB_SEARCH: u32 = 100;
+
+/// Score for explicit calculator results (:calc prefix)
+const SCORE_CALC: u32 = 1000;
+
+/// Score for inline calculator results (always on top)
+const SCORE_CALC_INLINE: u32 = u32::MAX;
+
+/// Score for directory listing items
+const SCORE_DIR_LISTING: u32 = 0;
+
+/// Multiplier for history frequency → score
+const HISTORY_SCORE_MULTIPLIER: u32 = 100;
+
+// ── Application State ────────────────────────────────────────────────────────
 
 /// Application state
 pub struct AppState {
@@ -46,7 +74,7 @@ pub struct AppState {
     pub composing: Option<char>,
     /// Hangul composition engine
     composer: HangulComposer,
-    /// Folder drill-down stack: previous (query, results, selected_index) states
+    /// Folder drill-down stack
     drill_stack: Vec<DrillState>,
     /// Current drill-down directory path (None = normal search mode)
     pub drill_path: Option<PathBuf>,
@@ -60,7 +88,6 @@ struct DrillState {
     results: Vec<SearchResult>,
     selected_index: usize,
     search_mode: SearchMode,
-    /// The drill path before entering this level (None for the first drill)
     parent_drill_path: Option<PathBuf>,
 }
 
@@ -78,8 +105,23 @@ impl AppState {
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Wrap items into SearchResults with a uniform score
+fn items_to_results(
+    items: impl IntoIterator<Item = kmd_core::IndexItem>,
+    score: u32,
+) -> Vec<SearchResult> {
+    items
+        .into_iter()
+        .map(|item| SearchResult { item, score })
+        .collect()
+}
+
+// ── Main Loop ────────────────────────────────────────────────────────────────
+
 /// Run the TUI application
-pub async fn run_app() -> color_eyre::Result<()> {
+pub fn run_app() -> color_eyre::Result<()> {
     // Load config and build index
     let config = crate::cmd::load_config()?;
     let index = crate::cmd::load_or_build_index(&config.launcher);
@@ -126,7 +168,6 @@ pub async fn run_app() -> color_eyre::Result<()> {
 
     // Main loop
     loop {
-        // Render
         terminal.draw(|frame| {
             ui::render(frame, &state, &theme);
         })?;
@@ -135,7 +176,6 @@ pub async fn run_app() -> color_eyre::Result<()> {
             break;
         }
 
-        // Handle events
         match events.next()? {
             AppEvent::Key(key) => {
                 handle_key(&mut state, key, &mut engine, db.as_ref());
@@ -143,12 +183,7 @@ pub async fn run_app() -> color_eyre::Result<()> {
             AppEvent::Paste(text) => {
                 handle_paste(&mut state, &text, &mut engine, db.as_ref());
             }
-            AppEvent::Resize(_, _) => {
-                // Terminal will re-render automatically
-            }
-            AppEvent::Tick => {
-                // Nothing to do on tick
-            }
+            AppEvent::Resize | AppEvent::Tick => {}
         }
     }
 
@@ -164,6 +199,8 @@ pub async fn run_app() -> color_eyre::Result<()> {
     Ok(())
 }
 
+// ── Key Handling ─────────────────────────────────────────────────────────────
+
 /// Handle a key event
 fn handle_key(
     state: &mut AppState,
@@ -171,117 +208,91 @@ fn handle_key(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    // Clear any temporary status message on any key press
     state.status_message = None;
 
     match (key.code, key.modifiers) {
-        // ── Toggle Korean mode: Ctrl+Space or Right Alt ──
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
-            // Flush any composing character before toggling
             flush_composer(state);
             state.hangul_mode = !state.hangul_mode;
             update_search(state, engine, db);
         }
-
-        // ── Quit ──
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             state.should_quit = true;
         }
-
-        // ── Escape: exit drill-down → clear query → quit ──
-        (KeyCode::Esc, _) => {
-            flush_composer(state);
-            if state.drill_path.is_some() {
-                // Exit drill-down mode first
-                drill_back(state);
-            } else if state.query.is_empty() {
-                state.should_quit = true;
-            } else {
-                state.query.clear();
-                state.results.clear();
-                state.selected_index = 0;
-                if let Some(db) = db {
-                    load_history_into_results(state, db);
-                }
-            }
-        }
-
-        // ── Navigate up ──
+        (KeyCode::Esc, _) => handle_escape(state, db),
         (KeyCode::Up, _) => {
             flush_composer(state);
             if state.selected_index > 0 {
                 state.selected_index -= 1;
             }
         }
-
-        // ── Navigate down ──
         (KeyCode::Down, _) => {
             flush_composer(state);
             if state.selected_index + 1 < state.results.len() {
                 state.selected_index += 1;
             }
         }
-
-        // ── Drill into folder: Tab or Right arrow ──
         (KeyCode::Tab, _) | (KeyCode::Right, _) => {
             flush_composer(state);
             drill_into_folder(state);
         }
-
-        // ── Drill back: Left arrow ──
         (KeyCode::Left, _) => {
             flush_composer(state);
             if state.drill_path.is_some() {
                 drill_back(state);
             }
         }
-
-        // ── Toggle preview ──
         (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
             flush_composer(state);
             state.show_preview = !state.show_preview;
         }
-
-        // ── Execute selected item ──
         (KeyCode::Enter, _) => {
             flush_composer(state);
             update_search(state, engine, db);
             execute_selected(state, db);
         }
-
-        // ── Backspace ──
         (KeyCode::Backspace, _) => {
             if state.hangul_mode && state.composer.is_composing() {
-                // Decompose within the composing character
                 state.composer.backspace();
                 state.composing = state.composer.composing();
-                update_search(state, engine, db);
             } else {
-                // Normal backspace: remove last committed character
                 state.query.pop();
-                update_search(state, engine, db);
             }
+            update_search(state, engine, db);
         }
-
-        // ── Character input ──
         (KeyCode::Char(c), mods) => {
-            // Skip Ctrl+key and Alt+key (except for toggle handled above)
             if mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::ALT) {
                 return;
             }
-
             if state.hangul_mode {
                 handle_hangul_char(state, c, engine, db);
             } else {
-                // English mode: accept all characters including system IME Korean
                 state.query.push(c);
                 update_search(state, engine, db);
             }
         }
-
         _ => {}
     }
 }
+
+/// Handle Escape: exit drill-down → clear query → quit
+fn handle_escape(state: &mut AppState, db: Option<&kmd_core::Database>) {
+    flush_composer(state);
+    if state.drill_path.is_some() {
+        drill_back(state);
+    } else if state.query.is_empty() {
+        state.should_quit = true;
+    } else {
+        state.query.clear();
+        state.results.clear();
+        state.selected_index = 0;
+        if let Some(db) = db {
+            load_history_into_results(state, db);
+        }
+    }
+}
+
+// ── Korean Input ─────────────────────────────────────────────────────────────
 
 /// Handle a character in Korean input mode
 fn handle_hangul_char(
@@ -290,29 +301,20 @@ fn handle_hangul_char(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    // If the character is already Korean (system IME composed it), pass through
     if hangul::is_korean_char(c) {
         flush_composer(state);
         state.query.push(c);
-        update_search(state, engine, db);
-        return;
-    }
-
-    // Try mapping the key to a jamo
-    if let Some(jamo) = hangul::key_to_jamo(c) {
+    } else if let Some(jamo) = hangul::key_to_jamo(c) {
         let result = state.composer.process(jamo);
         if let Some(committed) = result.committed {
             state.query.push(committed);
         }
         state.composing = result.composing;
-        update_search(state, engine, db);
     } else {
-        // Not a jamo key (number, symbol, space, etc.)
-        // Flush the composer and add the character as-is
         flush_composer(state);
         state.query.push(c);
-        update_search(state, engine, db);
     }
+    update_search(state, engine, db);
 }
 
 /// Flush the Hangul composer — commit any composing character to the query
@@ -330,10 +332,7 @@ fn handle_paste(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    // Flush any composing character first
     flush_composer(state);
-
-    // Filter out control characters but keep all Unicode (including Korean, CJK, emoji)
     let clean: String = text.chars().filter(|c| !c.is_control()).collect();
     if clean.is_empty() {
         return;
@@ -342,70 +341,76 @@ fn handle_paste(
     update_search(state, engine, db);
 }
 
+// ── Execute ──────────────────────────────────────────────────────────────────
+
 /// Execute the currently selected item
 fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
-    if let Some(result) = state.results.get(state.selected_index) {
-        // Check for calculator result — copy value to clipboard
-        if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let _ = clipboard.set_text(&result.item.path);
-                state.status_message = Some(format!("📋 Copied: {}", result.item.path));
-            }
-            return;
-        }
+    let Some(result) = state.results.get(state.selected_index) else {
+        return;
+    };
 
-        // Check for web query
-        if let Some((service, web_query)) = web::parse_web_query(&state.query) {
-            if !web_query.is_empty() {
-                let url = web::build_search_url(service, &web_query);
-                let _ = action::open_url(&url);
-                if state.quit_on_launch {
-                    state.should_quit = true;
-                }
-                return;
-            }
+    // Calculator result → copy to clipboard
+    if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(&result.item.path);
+            state.status_message = Some(format!("\u{1F4CB} Copied: {}", result.item.path));
         }
+        return;
+    }
 
-        // Check for URL mode
-        let (mode, normalized) = SearchMode::detect(&state.query);
-        if mode == SearchMode::Url {
-            let _ = action::open_url(&normalized);
+    // Web query
+    if let Some((service, web_query)) = web::parse_web_query(&state.query) {
+        if !web_query.is_empty() {
+            let url = web::build_search_url(service, &web_query);
+            let _ = action::open_url(&url);
             if state.quit_on_launch {
                 state.should_quit = true;
             }
             return;
         }
+    }
 
-        // Execute the item
-        match action::execute(result) {
-            action::ActionResult::Launched => {
-                if let Some(db) = db {
-                    kmd_core::history::record_launch(
-                        db,
-                        &format!("{}", result.item.kind),
-                        &result.item.path,
-                        Some(&result.item.name),
-                    );
-                }
-                if state.quit_on_launch {
-                    state.should_quit = true;
-                }
+    // URL mode
+    let (mode, normalized) = SearchMode::detect(&state.query);
+    if mode == SearchMode::Url {
+        let _ = action::open_url(&normalized);
+        if state.quit_on_launch {
+            state.should_quit = true;
+        }
+        return;
+    }
+
+    // Normal execution
+    match action::execute(result) {
+        action::ActionResult::Launched => {
+            if let Some(db) = db {
+                kmd_core::history::record_launch(
+                    db,
+                    &result.item.kind.to_string(),
+                    &result.item.path,
+                    Some(&result.item.name),
+                );
             }
-            action::ActionResult::OpenedUrl(_) => {
-                if state.quit_on_launch {
-                    state.should_quit = true;
-                }
+            if state.quit_on_launch {
+                state.should_quit = true;
             }
-            action::ActionResult::NeedsConfirmation(name) => {
-                state.status_message =
-                    Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name));
+        }
+        action::ActionResult::OpenedUrl(_) => {
+            if state.quit_on_launch {
+                state.should_quit = true;
             }
-            action::ActionResult::Error(e) => {
-                state.status_message = Some(format!("\u{274C} Error: {}", e));
-            }
+        }
+        action::ActionResult::NeedsConfirmation(name) => {
+            state.status_message =
+                Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name));
+        }
+        action::ActionResult::Error(e) => {
+            state.status_message = Some(format!("\u{274C} Error: {}", e));
         }
     }
 }
+
+// ── Search ───────────────────────────────────────────────────────────────────
 
 /// Update search results based on current query (including composing char)
 fn update_search(
@@ -413,20 +418,10 @@ fn update_search(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    let search_query = state.effective_query();
+    let query = state.effective_query();
 
-    if search_query.is_empty() {
-        state.results.clear();
-        state.selected_index = 0;
-
-        // In drill mode, re-list the current directory instead of loading history
-        if let Some(ref path) = state.drill_path {
-            state.results = list_directory_contents(path);
-        } else if let Some(db) = db {
-            // Show history when query is empty (normal mode only)
-            load_history_into_results(state, db);
-        }
-        return;
+    if query.is_empty() {
+        return handle_empty_query(state, db);
     }
 
     // Typing while in drill mode exits drill and does a full search
@@ -435,58 +430,72 @@ fn update_search(
         state.drill_stack.clear();
     }
 
-    // Check for @ web service prefix
-    if search_query.starts_with('@') {
-        if let Some((service, query)) = web::parse_web_query(&search_query) {
-            if query.is_empty() {
-                let items = web::list_services_as_items("");
-                state.results = items
-                    .into_iter()
-                    .map(|item| SearchResult { item, score: 0 })
-                    .collect();
-            } else {
-                let item = web::search_result_item(service, &query);
-                state.results = vec![SearchResult { item, score: 100 }];
-            }
-            state.search_mode = SearchMode::Contains;
+    if query.starts_with('@') {
+        return handle_web_query(&query, state);
+    }
+
+    if query.starts_with(":calc") {
+        return handle_calc_query(&query, state);
+    }
+
+    handle_main_search(&query, state, engine, db);
+}
+
+/// Empty query: show drill directory contents or recent history
+fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
+    state.results.clear();
+    state.selected_index = 0;
+
+    if let Some(ref path) = state.drill_path {
+        state.results = list_directory_contents(path);
+    } else if let Some(db) = db {
+        load_history_into_results(state, db);
+    }
+}
+
+/// Handle @prefix web service queries
+fn handle_web_query(query: &str, state: &mut AppState) {
+    if let Some((service, q)) = web::parse_web_query(query) {
+        if q.is_empty() {
+            state.results = items_to_results(web::list_services_as_items(""), SCORE_WEB_LIST);
         } else {
-            let filter = search_query.trim_start_matches('@');
-            let items = web::list_services_as_items(filter);
-            state.results = items
-                .into_iter()
-                .map(|item| SearchResult { item, score: 0 })
-                .collect();
-            state.search_mode = SearchMode::Contains;
+            let item = web::search_result_item(service, &q);
+            state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
         }
-        state.selected_index = 0;
-        return;
+    } else {
+        let filter = query.trim_start_matches('@');
+        state.results = items_to_results(web::list_services_as_items(filter), SCORE_WEB_LIST);
     }
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
 
-    // Check for :calc prefix (explicit calculator mode)
-    if search_query.starts_with(":calc") {
-        let expr = search_query.strip_prefix(":calc").unwrap_or("").trim();
-        let calc = builtin_calc::CalcExtension;
-        let items = <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, expr);
-        state.results = items
-            .into_iter()
-            .map(|item| SearchResult { item, score: 1000 })
-            .collect();
-        state.selected_index = 0;
-        return;
-    }
+/// Handle :calc prefix (explicit calculator mode)
+fn handle_calc_query(query: &str, state: &mut AppState) {
+    let expr = query.strip_prefix(":calc").unwrap_or("").trim();
+    let calc = builtin_calc::CalcExtension;
+    let items =
+        <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, expr);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.selected_index = 0;
+}
 
-    let (mode, mut results) = engine.search(&search_query, 50);
+/// Main fuzzy search with optional inline calculator and history boost
+fn handle_main_search(
+    query: &str,
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
+    let (mode, mut results) = engine.search(query, SEARCH_RESULT_LIMIT);
     state.search_mode = mode;
 
-    // Inline calculator: if query looks like math, prepend result
-    if builtin_calc::looks_like_math(&search_query) {
+    // Inline calculator: prepend result if query looks like math
+    if builtin_calc::looks_like_math(query) {
         let calc = builtin_calc::CalcExtension;
-        let calc_items = <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, &search_query);
-        let calc_results: Vec<SearchResult> = calc_items
-            .into_iter()
-            .map(|item| SearchResult { item, score: u32::MAX })
-            .collect();
-        // Prepend calculator results before file results
+        let calc_items =
+            <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, query);
+        let calc_results = items_to_results(calc_items, SCORE_CALC_INLINE);
         results.splice(0..0, calc_results);
     }
 
@@ -499,14 +508,14 @@ fn update_search(
     state.selected_index = 0;
 }
 
+// ── Drill-Down ───────────────────────────────────────────────────────────────
+
 /// Drill into the selected folder — list its contents
 fn drill_into_folder(state: &mut AppState) {
-    let selected = match state.results.get(state.selected_index) {
-        Some(r) => r,
-        None => return,
+    let Some(selected) = state.results.get(state.selected_index) else {
+        return;
     };
 
-    // Only drill into directories
     if selected.item.kind != ItemKind::Directory {
         return;
     }
@@ -525,7 +534,6 @@ fn drill_into_folder(state: &mut AppState) {
         parent_drill_path: state.drill_path.clone(),
     });
 
-    // List directory contents
     state.results = list_directory_contents(&dir_path);
     state.selected_index = 0;
     state.drill_path = Some(dir_path);
@@ -538,15 +546,15 @@ fn drill_back(state: &mut AppState) {
     if let Some(prev) = state.drill_stack.pop() {
         state.query = prev.query;
         state.results = prev.results;
-        state.selected_index = prev.selected_index;
+        state.selected_index = prev.selected_index.min(state.results.len().saturating_sub(1));
         state.search_mode = prev.search_mode;
         state.drill_path = prev.parent_drill_path;
     }
 }
 
 /// List contents of a directory as SearchResults, sorted: directories first, then files
-fn list_directory_contents(dir: &PathBuf) -> Vec<SearchResult> {
-    let mut dirs = Vec::new();
+fn list_directory_contents(dir: &Path) -> Vec<SearchResult> {
+    let mut directories = Vec::new();
     let mut files = Vec::new();
 
     let entries = match std::fs::read_dir(dir) {
@@ -556,10 +564,7 @@ fn list_directory_contents(dir: &PathBuf) -> Vec<SearchResult> {
 
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         // Skip hidden files/dirs
         if name.starts_with('.') {
@@ -586,27 +591,32 @@ fn list_directory_contents(dir: &PathBuf) -> Vec<SearchResult> {
             keywords: String::new(),
         };
 
-        let result = SearchResult { item, score: 0 };
+        let result = SearchResult {
+            item,
+            score: SCORE_DIR_LISTING,
+        };
 
         if is_dir {
-            dirs.push(result);
+            directories.push(result);
         } else {
             files.push(result);
         }
     }
 
-    // Sort each group by name
-    dirs.sort_by(|a, b| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase()));
-    files.sort_by(|a, b| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase()));
+    let sort_by_name =
+        |a: &SearchResult, b: &SearchResult| a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase());
+    directories.sort_by(sort_by_name);
+    files.sort_by(sort_by_name);
 
-    // Directories first, then files
-    dirs.extend(files);
-    dirs
+    directories.extend(files);
+    directories
 }
+
+// ── History ──────────────────────────────────────────────────────────────────
 
 /// Load recent history into results (for empty query display)
 fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
-    let history = db.query_history(20);
+    let history = db.query_history(HISTORY_DISPLAY_LIMIT);
     state.results = history
         .into_iter()
         .map(|h| {
@@ -621,10 +631,9 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
             };
             let path_buf = PathBuf::from(&h.value);
             let icon = match kind {
-                ItemKind::Directory => "\u{1F4C1}".to_string(), // 📁
+                ItemKind::Directory => "\u{1F4C1}".to_string(),
                 _ => icon_for_path(&path_buf),
             };
-            // Prepend clock emoji to indicate history
             let icon = format!("\u{1F552}{}", icon); // 🕒 + original icon
             SearchResult {
                 item: kmd_core::IndexItem {
@@ -635,7 +644,7 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
                     icon,
                     keywords: String::new(),
                 },
-                score: h.frequency * 100,
+                score: h.frequency * HISTORY_SCORE_MULTIPLIER,
             }
         })
         .collect();

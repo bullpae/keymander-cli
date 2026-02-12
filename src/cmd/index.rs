@@ -4,7 +4,7 @@ use color_eyre::Result;
 
 pub fn run(rebuild: bool, stats: bool) -> Result<()> {
     let config = super::load_config()?;
-    let cache_path = kmd_core::Config::default_data_dir().join("index.json");
+    let cache_path = super::index_cache_path();
 
     if stats && !rebuild {
         // Show stats for existing index

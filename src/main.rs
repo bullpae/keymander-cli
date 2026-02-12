@@ -168,8 +168,7 @@ fn main() -> color_eyre::Result<()> {
         }
         // No subcommand → launch TUI
         None => {
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(tui::run())?;
+            tui::run()?;
         }
     }
 

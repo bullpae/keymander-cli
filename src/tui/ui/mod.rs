@@ -75,7 +75,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
         Span::styled(format!(" v{}", version), theme.header_dim_style()),
         Span::styled("  \u{00B7}  ", theme.header_dim_style()),   // ·
         Span::styled(
-            format!("{}", state.total_items),
+            state.total_items.to_string(),
             theme.header_accent_style(),
         ),
         Span::styled(" items indexed", theme.header_dim_style()),
@@ -111,7 +111,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
         Span::styled(format!(" {} ", mode_label), theme.status_mode_style()),
         Span::styled(" ", theme.status_style()),
         // Result count
-        Span::styled(format!("{}", result_count), theme.status_count_style()),
+        Span::styled(result_count.to_string(), theme.status_count_style()),
         Span::styled(" results ", theme.status_style()),
         Span::styled("\u{2502} ", theme.status_style()),  // │
     ];

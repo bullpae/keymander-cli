@@ -8,6 +8,12 @@ pub mod search;
 
 use std::path::PathBuf;
 
+/// Index cache filename
+const INDEX_CACHE_FILENAME: &str = "index.json";
+
+/// Database filename
+const DB_FILENAME: &str = "kmd.db";
+
 /// Get or create the index, loading from cache if available
 pub fn load_or_build_index(
     launcher_config: &kmd_core::config::LauncherConfig,
@@ -33,13 +39,13 @@ pub fn load_or_build_index(
 }
 
 /// Path to the index cache file
-fn index_cache_path() -> PathBuf {
-    kmd_core::Config::default_data_dir().join("index.json")
+pub(crate) fn index_cache_path() -> PathBuf {
+    kmd_core::Config::default_data_dir().join(INDEX_CACHE_FILENAME)
 }
 
 /// Open the database
 pub fn open_db() -> color_eyre::Result<kmd_core::Database> {
-    let db_path = kmd_core::Config::default_data_dir().join("kmd.db");
+    let db_path = kmd_core::Config::default_data_dir().join(DB_FILENAME);
     let db = kmd_core::Database::open(&db_path)?;
     Ok(db)
 }
