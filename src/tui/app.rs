@@ -182,20 +182,23 @@ pub fn run_app(
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // Final centering after the alternate screen buffer is active.
-    // The console may have changed size when entering the alternate screen,
-    // so we re-centre now with the definitive window dimensions.
-    #[cfg(windows)]
-    if center_window {
-        crate::win_console::center();
-    }
-
     let theme = Theme::default();
     let events = EventHandler::new(config.general.render_fps);
 
     // Initial empty results: show history
     if let Some(ref db) = db {
         load_history_into_results(&mut state, db);
+    }
+
+    // Draw the first frame, then re-centre.
+    // By this point the console window has its final dimensions after
+    // EnterAlternateScreen, so MoveWindow will place it precisely.
+    terminal.draw(|frame| {
+        ui::render(frame, &state, &theme);
+    })?;
+    #[cfg(windows)]
+    if center_window {
+        crate::win_console::center();
     }
 
     // Main loop
