@@ -153,10 +153,11 @@ fn main() -> color_eyre::Result<()> {
             }
         };
 
-    // ── 3. Show console + set up UTF-8 / VT processing ──────────────────
+    // ── 3. Show console + center + set up UTF-8 / VT processing ────────
     #[cfg(windows)]
     if owns_console {
         win_console::show();
+        win_console::center();
     }
     #[cfg(windows)]
     win_console::setup();
@@ -248,6 +249,18 @@ mod win_console {
     const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
     const CP_UTF8: u32 = 65001;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+    const SM_CXSCREEN: i32 = 0;
+    const SM_CYSCREEN: i32 = 1;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+
+    #[repr(C)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
 
     /// Check if we are the only process on this console.
     /// If true, the OS created the console for us (hotkey/shortcut launch).
@@ -275,6 +288,42 @@ mod win_console {
             if !hwnd.is_null() {
                 ShowWindow(hwnd, SW_SHOW);
             }
+        }
+    }
+
+    /// Center the console window on the primary monitor.
+    pub fn center() {
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            if hwnd.is_null() {
+                return;
+            }
+
+            let screen_w = GetSystemMetrics(SM_CXSCREEN);
+            let screen_h = GetSystemMetrics(SM_CYSCREEN);
+            if screen_w == 0 || screen_h == 0 {
+                return;
+            }
+
+            let mut rc = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+            if GetWindowRect(hwnd, &mut rc) == 0 {
+                return;
+            }
+
+            let win_w = rc.right - rc.left;
+            let win_h = rc.bottom - rc.top;
+            let x = (screen_w - win_w) / 2;
+            let y = (screen_h - win_h) / 2;
+
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER,
+            );
         }
     }
 
@@ -307,5 +356,16 @@ mod win_console {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn ShowWindow(hwnd: *mut std::ffi::c_void, cmd_show: i32) -> i32;
+        fn GetSystemMetrics(index: i32) -> i32;
+        fn GetWindowRect(hwnd: *mut std::ffi::c_void, rect: *mut Rect) -> i32;
+        fn SetWindowPos(
+            hwnd: *mut std::ffi::c_void,
+            insert_after: *mut std::ffi::c_void,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
     }
 }
