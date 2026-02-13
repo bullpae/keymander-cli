@@ -9,13 +9,6 @@
 //!   kmd history      → View/clear launch history
 //!   kmd portable     → Manage portable mode
 
-// ── Windows: no console window in release ────────────────────────────────────
-// In release builds the exe starts as a "GUI" app so Windows does NOT allocate
-// a console window.  We create one ourselves only when we actually need it
-// (TUI mode or CLI subcommands).  This makes the toggle-off path completely
-// invisible — no flash at all.
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-
 mod cmd;
 mod tui;
 
@@ -138,24 +131,37 @@ enum PortableAction {
 }
 
 fn main() -> color_eyre::Result<()> {
-    // ── 1. Single-instance check (BEFORE any console/window work) ────────
-    // This runs before a console exists (on release Windows builds).
-    // Toggle-off path: signal existing instance → exit.  Zero visual artefacts.
+    // ── 1. Hide console for toggle-off path (Windows only) ───────────────
+    // If launched from a shortcut/hotkey, we own the console window.
+    // Hide it immediately so the toggle-off path is invisible.
+    // If launched from cmd.exe/powershell, we share their console — don't hide.
+    #[cfg(windows)]
+    let owns_console = win_console::is_sole_console_owner();
+    #[cfg(windows)]
+    if owns_console {
+        win_console::hide();
+    }
+
+    // ── 2. Single-instance check ─────────────────────────────────────────
     let data_dir = kmd_core::Config::default_data_dir();
     let instance_guard =
         match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
             kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
             kmd_core::single_instance::InstanceAction::SignalledExisting => {
-                // Existing instance was told to quit — we're done.
+                // Existing instance was told to quit — exit with hidden console.
                 return Ok(());
             }
         };
 
-    // ── 2. Ensure we have a console (Windows release builds only) ────────
-    #[cfg(all(windows, not(debug_assertions)))]
-    ensure_console();
+    // ── 3. Show console + set up UTF-8 / VT processing ──────────────────
+    #[cfg(windows)]
+    if owns_console {
+        win_console::show();
+    }
+    #[cfg(windows)]
+    win_console::setup();
 
-    // ── 3. Normal startup ────────────────────────────────────────────────
+    // ── 4. Normal startup ────────────────────────────────────────────────
     color_eyre::install()?;
 
     tracing_subscriber::fmt()
@@ -220,98 +226,86 @@ fn main() -> color_eyre::Result<()> {
 }
 
 // ── Windows console management ───────────────────────────────────────────────
+//
+// Strategy: normal CONSOLE subsystem (no windows_subsystem = "windows").
+//
+// When launched from a **shortcut / hotkey**, the OS creates a console window.
+// We immediately hide it, do the single-instance check, and only show it if
+// we actually need to render the TUI.  This keeps the toggle-off path nearly
+// invisible (just a 1-2 frame flash at worst — set shortcut "Run: Minimized"
+// to eliminate even that).
+//
+// When launched from **cmd.exe / PowerShell**, we share the parent terminal.
+// No window is created or hidden.
+//
+// This avoids AllocConsole() which creates a bare-bones conhost with broken
+// alternate-screen-buffer support.
 
-/// Attach to the parent terminal (for CLI commands run from cmd/powershell)
-/// or allocate a brand-new console (for TUI launched via hotkey).
-///
-/// Because `windows_subsystem = "windows"` starts with NO standard handles,
-/// we must explicitly open CONIN$/CONOUT$ and wire them up via SetStdHandle.
-/// Without this, crossterm cannot read keyboard input or write to the screen.
-#[cfg(all(windows, not(debug_assertions)))]
-fn ensure_console() {
-    // Win32 constants
-    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
-    const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
+#[cfg(windows)]
+mod win_console {
+    const SW_HIDE: i32 = 0;
+    const SW_SHOW: i32 = 5;
     const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
-    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
-    const GENERIC_READ_WRITE: u32 = 0xC000_0000; // GENERIC_READ | GENERIC_WRITE
-    const FILE_SHARE_RW: u32 = 3; // FILE_SHARE_READ | FILE_SHARE_WRITE
-    const OPEN_EXISTING: u32 = 3;
     const CP_UTF8: u32 = 65001;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
-    const INVALID_HANDLE: isize = -1;
 
-    // "CONIN$\0" and "CONOUT$\0" as UTF-16
-    const CONIN: [u16; 7] = [b'C' as u16, b'O' as u16, b'N' as u16, b'I' as u16, b'N' as u16, b'$' as u16, 0];
-    const CONOUT: [u16; 8] = [b'C' as u16, b'O' as u16, b'N' as u16, b'O' as u16, b'U' as u16, b'T' as u16, b'$' as u16, 0];
+    /// Check if we are the only process on this console.
+    /// If true, the OS created the console for us (hotkey/shortcut launch).
+    /// If false, we share a parent terminal (cmd.exe, powershell, etc.).
+    pub fn is_sole_console_owner() -> bool {
+        let mut pids = [0u32; 16];
+        let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 16) };
+        count <= 1
+    }
 
-    unsafe {
-        // 1. Attach to parent console or create a new one
-        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-            AllocConsole();
-        }
-
-        // 2. Open console I/O handles directly
-        //    (windows_subsystem = "windows" starts with null std handles)
-        let conin = CreateFileW(
-            CONIN.as_ptr(),
-            GENERIC_READ_WRITE,
-            FILE_SHARE_RW,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            std::ptr::null_mut(),
-        );
-        let conout = CreateFileW(
-            CONOUT.as_ptr(),
-            GENERIC_READ_WRITE,
-            FILE_SHARE_RW,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            std::ptr::null_mut(),
-        );
-
-        // 3. Wire up standard handles so Rust's std::io and crossterm can use them
-        if conin as isize != INVALID_HANDLE {
-            SetStdHandle(STD_INPUT_HANDLE, conin);
-        }
-        if conout as isize != INVALID_HANDLE {
-            SetStdHandle(STD_OUTPUT_HANDLE, conout);
-            SetStdHandle(STD_ERROR_HANDLE, conout);
-        }
-
-        // 4. Set UTF-8 code page for proper Unicode rendering
-        SetConsoleOutputCP(CP_UTF8);
-        SetConsoleCP(CP_UTF8);
-
-        // 5. Enable VT processing so ANSI escape sequences work
-        //    (alternate screen, cursor positioning, colors, etc.)
-        if conout as isize != INVALID_HANDLE {
-            let mut mode: u32 = 0;
-            GetConsoleMode(conout, &mut mode);
-            SetConsoleMode(conout, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    /// Hide the console window immediately (minimize toggle-off flash).
+    pub fn hide() {
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            if !hwnd.is_null() {
+                ShowWindow(hwnd, SW_HIDE);
+            }
         }
     }
-}
 
-#[cfg(all(windows, not(debug_assertions)))]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn AttachConsole(process_id: u32) -> i32;
-    fn AllocConsole() -> i32;
-    fn CreateFileW(
-        file_name: *const u16,
-        desired_access: u32,
-        share_mode: u32,
-        security_attributes: *const std::ffi::c_void,
-        creation_disposition: u32,
-        flags_and_attributes: u32,
-        template_file: *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void;
-    fn SetStdHandle(std_handle: u32, handle: *mut std::ffi::c_void) -> i32;
-    fn SetConsoleOutputCP(code_page: u32) -> i32;
-    fn SetConsoleCP(code_page: u32) -> i32;
-    fn GetConsoleMode(handle: *mut std::ffi::c_void, mode: *mut u32) -> i32;
-    fn SetConsoleMode(handle: *mut std::ffi::c_void, mode: u32) -> i32;
+    /// Show the console window (for TUI / CLI output).
+    pub fn show() {
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            if !hwnd.is_null() {
+                ShowWindow(hwnd, SW_SHOW);
+            }
+        }
+    }
+
+    /// Set UTF-8 code page and enable VT processing for ANSI sequences.
+    pub fn setup() {
+        unsafe {
+            SetConsoleOutputCP(CP_UTF8);
+            SetConsoleCP(CP_UTF8);
+
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if !handle.is_null() && handle as isize != -1 {
+                let mut mode: u32 = 0;
+                GetConsoleMode(handle, &mut mode);
+                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn GetStdHandle(std_handle: u32) -> *mut std::ffi::c_void;
+        fn GetConsoleMode(handle: *mut std::ffi::c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: *mut std::ffi::c_void, mode: u32) -> i32;
+        fn SetConsoleOutputCP(code_page: u32) -> i32;
+        fn SetConsoleCP(code_page: u32) -> i32;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn ShowWindow(hwnd: *mut std::ffi::c_void, cmd_show: i32) -> i32;
+    }
 }

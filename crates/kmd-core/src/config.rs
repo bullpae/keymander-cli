@@ -63,54 +63,16 @@ impl Default for GeneralConfig {
 
 /// Auto-detect whether the terminal likely supports emoji.
 ///
-/// On Windows we check two things:
-/// 1. WT_SESSION env var (set by Windows Terminal)
-/// 2. Whether the console window title matches our own exe — this indicates
-///    AllocConsole() created it (hotkey launch), which is always legacy conhost
-///    even if WT_SESSION is inherited from the parent process.
+/// On Windows, checks for the WT_SESSION environment variable which is set
+/// by Windows Terminal.  Now that we use a real console (no AllocConsole),
+/// this accurately reflects whether we're in Windows Terminal or conhost.
 fn detect_emoji_support() -> bool {
     if cfg!(windows) {
-        // WT_SESSION must be set AND we must be running inside the actual
-        // Windows Terminal (not in a console we allocated ourselves).
-        // When AllocConsole() creates a console, it's always legacy conhost.
-        if std::env::var("WT_SESSION").is_err() {
-            return false;
-        }
-        // If we're a windows_subsystem="windows" app that called AllocConsole,
-        // the console title is set to our exe path.  A real terminal session
-        // would have a different title (e.g. "cmd" or the WT tab title).
-        #[cfg(windows)]
-        {
-            let title = get_console_title_win();
-            if let Some(t) = title {
-                let t_lower = t.to_lowercase();
-                if t_lower.contains("kmd.exe") || t_lower.contains("kmd") && t_lower.contains("release") {
-                    return false; // AllocConsole'd console — not real WT
-                }
-            }
-        }
-        true
+        std::env::var("WT_SESSION").is_ok()
     } else {
         // macOS and modern Linux terminals generally support emoji
         true
     }
-}
-
-#[cfg(windows)]
-fn get_console_title_win() -> Option<String> {
-    let mut buf = [0u16; 256];
-    let len = unsafe { GetConsoleTitleW(buf.as_mut_ptr(), buf.len() as u32) };
-    if len == 0 {
-        None
-    } else {
-        Some(String::from_utf16_lossy(&buf[..len as usize]))
-    }
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetConsoleTitleW(buffer: *mut u16, size: u32) -> u32;
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
