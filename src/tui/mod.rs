@@ -9,8 +9,9 @@ pub mod theme;
 pub mod ui;
 
 use color_eyre::Result;
+use kmd_core::single_instance::Guard;
 
 /// Run the TUI launcher
-pub fn run() -> Result<()> {
-    app::run_app()
+pub fn run(instance_guard: Option<Guard>) -> Result<()> {
+    app::run_app(instance_guard)
 }

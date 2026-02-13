@@ -1,11 +1,12 @@
 //! Single-instance guard with toggle behavior.
 //!
-//! When the TUI starts:
+//! When `kmd` starts:
 //!   1. Check for `kmd.lock` — if another instance is alive, signal it to quit
 //!   2. The *new* process creates a `kmd.quit` signal file, waits briefly, then exits
 //!   3. The *existing* process detects `kmd.quit` in its event loop and exits gracefully
 //!
-//! On Windows the new process hides its console window immediately so no flash is visible.
+//! Combined with `windows_subsystem = "windows"` in release builds, the toggle-off
+//! path is completely invisible — no console window is ever created.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,10 +76,6 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
             if pid != std::process::id() && is_process_alive(pid) {
                 // ── Another instance is alive — signal it to quit ────────
 
-                // On Windows: hide our console window immediately so no flash
-                #[cfg(windows)]
-                hide_console_window();
-
                 // Write the quit signal file
                 let _ = fs::write(&quit_signal_path, "quit");
 
@@ -111,31 +108,6 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
         lock_path,
         quit_signal_path,
     })
-}
-
-// ── Windows: hide console window ─────────────────────────────────────────────
-
-#[cfg(windows)]
-fn hide_console_window() {
-    const SW_HIDE: i32 = 0;
-    unsafe {
-        let hwnd = GetConsoleWindow();
-        if !hwnd.is_null() {
-            ShowWindow(hwnd, SW_HIDE);
-        }
-    }
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetConsoleWindow() -> *mut std::ffi::c_void;
-}
-
-#[cfg(windows)]
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn ShowWindow(hwnd: *mut std::ffi::c_void, cmd_show: i32) -> i32;
 }
 
 // ── Platform-specific process helpers ────────────────────────────────────────

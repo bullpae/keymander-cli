@@ -9,6 +9,13 @@
 //!   kmd history      → View/clear launch history
 //!   kmd portable     → Manage portable mode
 
+// ── Windows: no console window in release ────────────────────────────────────
+// In release builds the exe starts as a "GUI" app so Windows does NOT allocate
+// a console window.  We create one ourselves only when we actually need it
+// (TUI mode or CLI subcommands).  This makes the toggle-off path completely
+// invisible — no flash at all.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod cmd;
 mod tui;
 
@@ -131,9 +138,26 @@ enum PortableAction {
 }
 
 fn main() -> color_eyre::Result<()> {
+    // ── 1. Single-instance check (BEFORE any console/window work) ────────
+    // This runs before a console exists (on release Windows builds).
+    // Toggle-off path: signal existing instance → exit.  Zero visual artefacts.
+    let data_dir = kmd_core::Config::default_data_dir();
+    let instance_guard =
+        match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
+            kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
+            kmd_core::single_instance::InstanceAction::SignalledExisting => {
+                // Existing instance was told to quit — we're done.
+                return Ok(());
+            }
+        };
+
+    // ── 2. Ensure we have a console (Windows release builds only) ────────
+    #[cfg(all(windows, not(debug_assertions)))]
+    ensure_console();
+
+    // ── 3. Normal startup ────────────────────────────────────────────────
     color_eyre::install()?;
 
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -186,11 +210,35 @@ fn main() -> color_eyre::Result<()> {
                 PortableAction::Disable => cmd::portable::Action::Disable,
             }))?;
         }
-        // No subcommand → launch TUI
+        // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {
-            tui::run()?;
+            tui::run(instance_guard)?;
         }
     }
 
     Ok(())
+}
+
+// ── Windows console management ───────────────────────────────────────────────
+
+/// Attach to the parent terminal (for CLI commands run from cmd/powershell)
+/// or allocate a brand-new console (for TUI launched via hotkey).
+#[cfg(all(windows, not(debug_assertions)))]
+fn ensure_console() {
+    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
+
+    unsafe {
+        // Try attaching to the terminal that launched us (e.g. cmd, powershell)
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            // No parent console (launched from hotkey/shortcut) → create one
+            AllocConsole();
+        }
+    }
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn AttachConsole(process_id: u32) -> i32;
+    fn AllocConsole() -> i32;
 }

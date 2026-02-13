@@ -125,18 +125,11 @@ fn items_to_results(
 
 // ── Main Loop ────────────────────────────────────────────────────────────────
 
-/// Run the TUI application
-pub fn run_app() -> color_eyre::Result<()> {
-    // ── Single-instance toggle ──────────────────────────────────────────
-    // Check BEFORE any terminal setup so the "toggle off" path is invisible.
-    let data_dir = kmd_core::Config::default_data_dir();
-    let instance_guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
-        kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
-        kmd_core::single_instance::InstanceAction::SignalledExisting => {
-            // Existing instance was told to quit. Exit silently.
-            return Ok(());
-        }
-    };
+/// Run the TUI application.
+///
+/// `instance_guard` is the single-instance RAII guard obtained in `main()`.
+/// The event loop checks it on every tick for external quit signals.
+pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> color_eyre::Result<()> {
 
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
@@ -221,9 +214,11 @@ pub fn run_app() -> color_eyre::Result<()> {
             AppEvent::Resize => {}
             AppEvent::Tick => {
                 // Check if another instance requested us to quit
-                if instance_guard.should_quit() {
-                    instance_guard.consume_quit_signal();
-                    state.should_quit = true;
+                if let Some(ref guard) = instance_guard {
+                    if guard.should_quit() {
+                        guard.consume_quit_signal();
+                        state.should_quit = true;
+                    }
                 }
             }
         }
