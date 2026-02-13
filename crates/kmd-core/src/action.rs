@@ -45,6 +45,10 @@ pub fn execute(result: &SearchResult) -> ActionResult {
             // Emoji results are handled by the TUI (clipboard copy)
             ActionResult::Launched
         }
+        ItemKind::Shell => {
+            // Shell commands are handled by the TUI (execute + show output)
+            ActionResult::Launched
+        }
     }
 }
 

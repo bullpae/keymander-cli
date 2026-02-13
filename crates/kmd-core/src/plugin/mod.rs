@@ -5,6 +5,7 @@
 
 pub mod builtin_calc;
 pub mod builtin_emoji;
+pub mod builtin_shell;
 pub mod loader;
 pub mod protocol;
 

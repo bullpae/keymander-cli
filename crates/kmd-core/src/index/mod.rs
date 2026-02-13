@@ -36,6 +36,7 @@ pub enum ItemKind {
     Directory,
     Calculator,
     Emoji,
+    Shell,
 }
 
 impl std::fmt::Display for ItemKind {
@@ -49,6 +50,7 @@ impl std::fmt::Display for ItemKind {
             Self::Directory => write!(f, "Dir"),
             Self::Calculator => write!(f, "Calc"),
             Self::Emoji => write!(f, "Emoji"),
+            Self::Shell => write!(f, "Shell"),
         }
     }
 }

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod daemon;
+pub mod emoji;
 pub mod history;
 pub mod index;
 pub mod launch;

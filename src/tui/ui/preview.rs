@@ -27,6 +27,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         let item = &result.item;
         if item.kind == ItemKind::Calculator {
             render_calc_preview(item, &state.effective_query(), theme)
+        } else if item.kind == ItemKind::Emoji {
+            render_emoji_preview(item, theme)
+        } else if item.kind == ItemKind::Shell {
+            render_shell_preview(item, theme)
         } else {
             render_item_preview(item, result.score, theme)
         }
@@ -98,6 +102,145 @@ fn render_calc_preview<'a>(
             Span::styled(" to copy result", theme.preview_dim_style()),
         ]));
     }
+
+    lines
+}
+
+/// Render emoji-specific preview — large emoji with name and category
+fn render_emoji_preview<'a>(
+    item: &kmd_core::index::IndexItem,
+    theme: &'a Theme,
+) -> Vec<Line<'a>> {
+    // item.path = emoji char, item.name = "😀 grinning face"
+    // item.keywords = "grinning face Smileys & Emotion: face-smiling"
+    let emoji = &item.path;
+    let name = item
+        .name
+        .strip_prefix(emoji)
+        .unwrap_or(&item.name)
+        .trim();
+
+    // Try to extract category from keywords (after the name)
+    let category = item
+        .keywords
+        .strip_prefix(name)
+        .unwrap_or("")
+        .trim();
+
+    let mut lines = vec![
+        Line::from(""),
+        // Large emoji display
+        Line::from(vec![
+            Span::styled(format!("    {}", emoji), theme.header_accent_style()),
+        ]),
+        Line::from(""),
+        // Name
+        Line::from(vec![
+            Span::styled("  Name", theme.preview_label_style()),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("  {}", name), theme.preview_value_style()),
+        ]),
+    ];
+
+    if !category.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Category", theme.preview_label_style()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}", category), theme.preview_dim_style()),
+        ]));
+    }
+
+    // Unicode codepoints
+    let codepoints: String = emoji
+        .chars()
+        .map(|c| format!("U+{:04X}", c as u32))
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Codepoint", theme.preview_label_style()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {}", codepoints), theme.preview_dim_style()),
+    ]));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Press ", theme.preview_dim_style()),
+        Span::styled("Enter", theme.kind_calc_style()),
+        Span::styled(" to copy emoji", theme.preview_dim_style()),
+    ]));
+
+    lines
+}
+
+/// Render shell command preview
+fn render_shell_preview<'a>(
+    item: &kmd_core::index::IndexItem,
+    theme: &'a Theme,
+) -> Vec<Line<'a>> {
+    let is_quick_action = !item.name.contains("Run:");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(format!("  {} ", item.icon), theme.preview_value_style()),
+            Span::styled(
+                if is_quick_action { "Quick Action" } else { "Shell Command" },
+                theme.kind_calc_style(),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    if is_quick_action {
+        // Quick action: show name and description
+        let name = item
+            .name
+            .strip_prefix(&item.icon)
+            .unwrap_or(&item.name)
+            .trim();
+        lines.push(Line::from(vec![
+            Span::styled("  Action", theme.preview_label_style()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}", name), theme.preview_value_style()),
+        ]));
+        if !item.keywords.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  Description", theme.preview_label_style()),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", item.keywords), theme.preview_dim_style()),
+            ]));
+        }
+    } else {
+        // Raw command
+        lines.push(Line::from(vec![
+            Span::styled("  Command", theme.preview_label_style()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}", item.path), theme.preview_value_style()),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Press ", theme.preview_dim_style()),
+        Span::styled("Enter", theme.kind_calc_style()),
+        Span::styled(
+            if is_quick_action {
+                " to execute & copy result"
+            } else {
+                " to run command & copy output"
+            },
+            theme.preview_dim_style(),
+        ),
+    ]));
 
     lines
 }

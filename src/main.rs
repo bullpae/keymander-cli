@@ -7,6 +7,7 @@
 //!   kmd index        → Manage search index
 //!   kmd config       → Manage configuration
 //!   kmd history      → View/clear launch history
+//!   kmd emoji <q>    → Search and copy Unicode emoji
 //!   kmd portable     → Manage portable mode
 
 mod cmd;
@@ -77,6 +78,20 @@ enum Commands {
     Portable {
         #[command(subcommand)]
         action: Option<PortableAction>,
+    },
+    /// Search and copy Unicode emoji
+    Emoji {
+        /// Search query (e.g. "fire", "heart", "smile")
+        query: Option<String>,
+        /// Only list results, don't copy to clipboard
+        #[arg(short, long)]
+        list: bool,
+        /// Output results as JSON
+        #[arg(short, long)]
+        json: bool,
+        /// Copy the Nth result to clipboard (default: 1)
+        #[arg(short, long)]
+        copy: Option<usize>,
     },
 }
 
@@ -216,6 +231,9 @@ fn main() -> color_eyre::Result<()> {
                 PortableAction::Enable => cmd::portable::Action::Enable,
                 PortableAction::Disable => cmd::portable::Action::Disable,
             }))?;
+        }
+        Some(Commands::Emoji { query, list, json, copy }) => {
+            cmd::emoji::run(query.as_deref().unwrap_or(""), list, json, copy)?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {

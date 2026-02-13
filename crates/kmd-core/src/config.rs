@@ -255,6 +255,7 @@ impl KindWeights {
             ItemKind::WebSearch => self.web_search,
             ItemKind::Calculator => 0, // handled separately
             ItemKind::Emoji => 0,     // handled separately
+            ItemKind::Shell => 0,     // handled separately
         }
     }
 }
