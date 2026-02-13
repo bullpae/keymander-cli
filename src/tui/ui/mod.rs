@@ -159,7 +159,13 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     }
 
     // Language indicator on the right
-    let lang = if state.hangul_mode { "\u{D55C}" } else { "EN" }; // 한 / EN
+    let lang = if state.hangul_mode && state.hangul_auto {
+        "\u{D55C}\u{2022}"  // 한• (auto)
+    } else if state.hangul_mode {
+        "\u{D55C}"  // 한
+    } else {
+        "EN"
+    };
     spans.push(Span::styled(
         format!("\u{2502} {} ", lang),  // │
         if state.hangul_mode {

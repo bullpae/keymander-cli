@@ -71,6 +71,8 @@ pub struct AppState {
     quit_on_launch: bool,
     /// Korean (Hangul) input mode
     pub hangul_mode: bool,
+    /// Whether hangul mode was auto-activated (e.g. by :emoji prefix)
+    pub hangul_auto: bool,
     /// Currently composing character (during Korean input)
     pub composing: Option<char>,
     /// Hangul composition engine
@@ -155,6 +157,7 @@ pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> colo
         should_quit: false,
         quit_on_launch: config.launcher.quit_on_launch,
         hangul_mode: false,
+        hangul_auto: false,
         composing: None,
         composer: HangulComposer::new(),
         drill_stack: Vec::new(),
@@ -350,6 +353,8 @@ fn handle_key(
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
             flush_composer(state);
             state.hangul_mode = !state.hangul_mode;
+            // Manual toggle overrides auto mode
+            state.hangul_auto = false;
             update_search(state, engine, db);
         }
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -423,6 +428,11 @@ fn handle_escape(state: &mut AppState, db: Option<&kmd_core::Database>) {
         state.query.clear();
         state.results.clear();
         state.selected_index = 0;
+        // Deactivate auto-hangul when query is cleared
+        if state.hangul_auto {
+            state.hangul_mode = false;
+            state.hangul_auto = false;
+        }
         if let Some(db) = db {
             load_history_into_results(state, db);
         }
@@ -604,8 +614,19 @@ fn update_search(
         return handle_calc_query(&query, state);
     }
 
-    if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
+    let is_emoji_prefix = query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e";
+    if is_emoji_prefix {
+        // Auto-activate built-in Hangul mode for real-time Korean search
+        if !state.hangul_mode && !state.hangul_auto {
+            state.hangul_mode = true;
+            state.hangul_auto = true;
+        }
         return handle_emoji_query(&query, state);
+    } else if state.hangul_auto {
+        // Left emoji prefix — auto-deactivate hangul mode
+        flush_composer(state);
+        state.hangul_mode = false;
+        state.hangul_auto = false;
     }
 
     if query.starts_with('!') {
