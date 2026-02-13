@@ -16,9 +16,10 @@ use crate::tui::theme::Theme;
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     // Calculate available width for dynamic column sizing
     let inner_width = area.width.saturating_sub(4) as usize; // borders + highlight symbol
+    let icon_col = 4; // " XX " — space + 2-char icon + space
     let name_width = (inner_width * 35 / 100).max(15).min(40);
     let kind_width = 8;
-    let path_width = inner_width.saturating_sub(name_width + kind_width + 8); // icon + spacing
+    let path_width = inner_width.saturating_sub(name_width + kind_width + icon_col + 2);
 
     let items: Vec<ListItem> = state
         .results
@@ -104,13 +105,13 @@ fn build_title<'a>(state: &AppState, theme: &'a Theme) -> Line<'a> {
         let path_str = drill_path.display().to_string();
         let display = truncate(&path_str, 50);
         Line::from(vec![
-            Span::styled(" \u{1F4C2} ", theme.list_title_style()),  // 📂
+            Span::styled(" >> ", theme.list_title_style()),
             Span::styled(display, theme.list_title_style()),
             Span::raw(" "),
         ])
     } else if state.query.is_empty() && state.drill_path.is_none() && !state.results.is_empty() {
         Line::from(vec![
-            Span::styled(" \u{1F552} ", theme.list_title_style()),  // 🕒
+            Span::styled(" * ", theme.list_title_style()),
             Span::styled("Recent", theme.list_title_style()),
             Span::raw(" "),
         ])

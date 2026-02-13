@@ -468,7 +468,7 @@ mod tests {
                 path: "/home/user/Downloads".to_string(),
                 kind: ItemKind::Directory,
                 source: Source::FileProvider,
-                icon: "\u{1F4C1}".to_string(),
+                icon: ">>".to_string(),
                 keywords: "downloads".to_string(),
             },
             IndexItem {

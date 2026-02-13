@@ -269,7 +269,7 @@ fn handle_settings_key_event(
             // Save to file
             if let Err(e) = config.save() {
                 state.status_message =
-                    Some(format!("\u{274C} Save failed: {}", e));
+                    Some(format!("[!] Save failed: {}", e));
                 state.settings = Some(settings_state);
                 return;
             }
@@ -294,12 +294,12 @@ fn handle_settings_key_event(
                 engine.load(index.items);
 
                 state.status_message = Some(format!(
-                    "\u{2705} Settings saved. Index rebuilt ({} items)",
+                    "[ok] Settings saved. Index rebuilt ({} items)",
                     state.total_items
                 ));
             } else {
                 state.status_message =
-                    Some("\u{2705} Settings saved".to_string());
+                    Some("[ok] Settings saved".to_string());
             }
 
             // Close modal after save
@@ -490,7 +490,7 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("\u{1F4CB} Copied: {}", result.item.path));
+            state.status_message = Some(format!("Copied: {}", result.item.path));
         }
         return;
     }
@@ -539,10 +539,10 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         }
         action::ActionResult::NeedsConfirmation(name) => {
             state.status_message =
-                Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name));
+                Some(format!("[!] Confirmation needed: {}", name));
         }
         action::ActionResult::Error(e) => {
-            state.status_message = Some(format!("\u{274C} Error: {}", e));
+            state.status_message = Some(format!("[err] {}", e));
         }
     }
 }
@@ -721,7 +721,7 @@ fn list_directory_contents(dir: &Path) -> Vec<SearchResult> {
             },
             source: Source::FileProvider,
             icon: if is_dir {
-                "\u{1F4C1}".to_string() // 📁
+                ">>".to_string()
             } else {
                 icon_for_path(&path)
             },
@@ -768,11 +768,11 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
                 _ => ItemKind::App,
             };
             let path_buf = PathBuf::from(&h.value);
-            let icon = match kind {
-                ItemKind::Directory => "\u{1F4C1}".to_string(),
+            let base_icon = match kind {
+                ItemKind::Directory => ">>".to_string(),
                 _ => icon_for_path(&path_buf),
             };
-            let icon = format!("\u{1F552}{}", icon); // 🕒 + original icon
+            let icon = format!("*{}", &base_icon[..1]); // * prefix for history items
             SearchResult {
                 item: kmd_core::IndexItem {
                     name: h.display,

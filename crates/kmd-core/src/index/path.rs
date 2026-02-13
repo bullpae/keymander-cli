@@ -58,7 +58,7 @@ pub fn collect_executables() -> Vec<IndexItem> {
                     path: full_path.clone(),
                     kind: ItemKind::Executable,
                     source: Source::Path,
-                    icon: "\u{26A1}".to_string(), // ⚡
+                    icon: "Ex".to_string(),
                     keywords: full_path,
                 });
             }

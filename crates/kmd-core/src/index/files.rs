@@ -215,7 +215,7 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
                 },
                 source: Source::FileProvider,
                 icon: if is_dir {
-                    "\u{1F4C1}".to_string() // 📁
+                    ">>".to_string()
                 } else {
                     icon_for_path(path)
                 },
@@ -409,7 +409,7 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
                 },
                 source: Source::FileProvider,
                 icon: if is_dir {
-                    "\u{1F4C1}".to_string() // 📁
+                    ">>".to_string()
                 } else {
                     icon_for_path(path)
                 },
@@ -726,7 +726,7 @@ fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize)
             },
             source: Source::FileProvider,
             icon: if is_dir {
-                "\u{1F4C1}".to_string() // 📁
+                ">>".to_string()
             } else {
                 icon_for_path(&path)
             },
@@ -802,6 +802,9 @@ fn find_everything_cli(configured: Option<&PathBuf>) -> Option<PathBuf> {
 }
 
 /// Determine icon by file extension
+/// Icon width in display columns — all icons are exactly this wide.
+pub const ICON_WIDTH: usize = 2;
+
 pub fn icon_for_path(path: &Path) -> String {
     let ext = path
         .extension()
@@ -809,65 +812,58 @@ pub fn icon_for_path(path: &Path) -> String {
         .unwrap_or("")
         .to_lowercase();
 
+    // All icons are exactly 2 display columns (1 fullwidth or 2 ASCII chars).
+    // Using simple Unicode symbols that render correctly in ALL terminals
+    // including Windows legacy console (conhost).
     match ext.as_str() {
         // Programming
-        "rs" => "\u{1F980}".to_string(),                           // 🦀
-        "py" | "pyw" => "\u{1F40D}".to_string(),                   // 🐍
-        "js" | "ts" | "jsx" | "tsx" | "mjs" => "\u{1F4DC}".to_string(), // 📜
-        "go" => "\u{1F535}".to_string(),                            // 🔵
-        "java" | "kt" | "kts" => "\u{2615}".to_string(),           // ☕
-        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "\u{2699}\u{FE0F}".to_string(), // ⚙️
-        "cs" => "\u{1F7E3}".to_string(),                           // 🟣
-        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "\u{1F41A}".to_string(), // 🐚
+        "rs" => "Rs".to_string(),
+        "py" | "pyw" => "Py".to_string(),
+        "js" | "ts" | "jsx" | "tsx" | "mjs" => "Js".to_string(),
+        "go" => "Go".to_string(),
+        "java" | "kt" | "kts" => "Jv".to_string(),
+        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "C+".to_string(),
+        "cs" => "C#".to_string(),
+        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "$>".to_string(),
 
         // Documents — Text
-        "md" | "txt" | "rtf" | "log" => "\u{1F4DD}".to_string(),   // 📝
-        "pdf" => "\u{1F4D5}".to_string(),                          // 📕
+        "md" | "txt" | "rtf" | "log" => "Tx".to_string(),
+        "pdf" => "Pd".to_string(),
 
         // Documents — Korean / Office
-        "hwp" | "hwpx" => "\u{1F4D8}".to_string(),                 // 📘
-        "doc" | "docx" | "odt" => "\u{1F4C4}".to_string(),         // 📄
-        "xls" | "xlsx" | "ods" | "csv" => "\u{1F4CA}".to_string(), // 📊
-        "ppt" | "pptx" | "odp" => "\u{1F4CA}".to_string(),         // 📊
+        "hwp" | "hwpx" => "Hw".to_string(),
+        "doc" | "docx" | "odt" => "Dc".to_string(),
+        "xls" | "xlsx" | "ods" | "csv" => "Xl".to_string(),
+        "ppt" | "pptx" | "odp" => "Pt".to_string(),
 
         // Data / Config
-        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => {
-            "\u{1F4CB}".to_string() // 📋
-        }
-        "sql" | "db" | "sqlite" | "sqlite3" => "\u{1F5C3}\u{FE0F}".to_string(), // 🗃️
-        "html" | "htm" | "css" | "scss" | "less" => "\u{1F310}".to_string(), // 🌐
+        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "{}".to_string(),
+        "sql" | "db" | "sqlite" | "sqlite3" => "Db".to_string(),
+        "html" | "htm" | "css" | "scss" | "less" => "<>".to_string(),
 
         // Images
         "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => {
-            "\u{1F5BC}\u{FE0F}".to_string() // 🖼️
+            "Im".to_string()
         }
 
         // Audio
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => {
-            "\u{1F3B5}".to_string() // 🎵
-        }
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "Au".to_string(),
 
         // Video
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => {
-            "\u{1F3AC}".to_string() // 🎬
-        }
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "Vd".to_string(),
 
         // Archives
-        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => {
-            "\u{1F4E6}".to_string() // 📦
-        }
+        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "Pk".to_string(),
 
         // Executables / Installers
-        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => {
-            "\u{1F4E6}".to_string() // 📦
-        }
+        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "Ex".to_string(),
 
         // Fonts
-        "ttf" | "otf" | "woff" | "woff2" => "\u{1F524}".to_string(), // 🔤
+        "ttf" | "otf" | "woff" | "woff2" => "Ft".to_string(),
 
         // Directory
-        "" if path.is_dir() => "\u{1F4C1}".to_string(), // 📁
+        "" if path.is_dir() => ">>".to_string(),
 
-        _ => "\u{1F4C4}".to_string(), // 📄
+        _ => "--".to_string(),
     }
 }

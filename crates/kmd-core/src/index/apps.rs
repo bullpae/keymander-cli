@@ -116,7 +116,7 @@ fn scan_lnk_dir(
             path: full_path.clone(),
             kind: ItemKind::App,
             source: Source::Apps,
-            icon: "\u{1F4E6}".to_string(), // 📦
+            icon: "Ap".to_string(),
             keywords: full_path,
         });
     }
@@ -169,7 +169,7 @@ fn collect_macos_apps() -> Vec<IndexItem> {
                 path: full_path.clone(),
                 kind: ItemKind::App,
                 source: Source::Apps,
-                icon: "\u{1F4E6}".to_string(), // 📦
+                icon: "Ap".to_string(),
                 keywords: full_path,
             });
         }

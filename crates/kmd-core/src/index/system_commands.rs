@@ -17,7 +17,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Shutdown",
         keywords: &["shutdown", "poweroff", "종료", "시스템종료"],
-        icon: "\u{23FB}",
+        icon: "!!",
         command: "shutdown",
         args: &["/s", "/t", "0"],
         confirm: true,
@@ -25,7 +25,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Restart",
         keywords: &["restart", "reboot", "재시작"],
-        icon: "\u{1F504}",
+        icon: "<>",
         command: "shutdown",
         args: &["/r", "/t", "0"],
         confirm: true,
@@ -33,7 +33,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Sleep",
         keywords: &["sleep", "suspend", "절전"],
-        icon: "\u{1F4A4}",
+        icon: "Zz",
         command: "rundll32",
         args: &["powrprof.dll,SetSuspendState", "0,1,0"],
         confirm: false,
@@ -41,7 +41,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Lock Screen",
         keywords: &["lock", "잠금", "lockscreen"],
-        icon: "\u{1F512}",
+        icon: "Lk",
         command: "rundll32",
         args: &["user32.dll,LockWorkStation"],
         confirm: false,
@@ -49,7 +49,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Logout",
         keywords: &["logout", "logoff", "로그아웃"],
-        icon: "\u{1F6AA}",
+        icon: "->",
         command: "shutdown",
         args: &["/l"],
         confirm: true,
@@ -57,7 +57,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Settings",
         keywords: &["settings", "설정", "windowssettings"],
-        icon: "\u{2699}\u{FE0F}",
+        icon: "**",
         command: "cmd",
         args: &["/c", "start", "ms-settings:"],
         confirm: false,
@@ -65,7 +65,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Task Manager",
         keywords: &["taskmgr", "taskmanager", "작업관리자"],
-        icon: "\u{1F4CA}",
+        icon: "Tm",
         command: "taskmgr",
         args: &[],
         confirm: false,
@@ -73,7 +73,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Recycle Bin",
         keywords: &["trash", "recyclebin", "휴지통"],
-        icon: "\u{1F5D1}\u{FE0F}",
+        icon: "Rb",
         command: "explorer",
         args: &["shell:RecycleBinFolder"],
         confirm: false,
@@ -85,7 +85,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Shutdown",
         keywords: &["shutdown", "poweroff", "종료"],
-        icon: "\u{23FB}",
+        icon: "!!",
         command: "osascript",
         args: &["-e", "tell app \"System Events\" to shut down"],
         confirm: true,
@@ -93,7 +93,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Restart",
         keywords: &["restart", "reboot", "재시작"],
-        icon: "\u{1F504}",
+        icon: "<>",
         command: "osascript",
         args: &["-e", "tell app \"System Events\" to restart"],
         confirm: true,
@@ -101,7 +101,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Sleep",
         keywords: &["sleep", "suspend", "절전"],
-        icon: "\u{1F4A4}",
+        icon: "Zz",
         command: "pmset",
         args: &["sleepnow"],
         confirm: false,
@@ -109,7 +109,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Lock Screen",
         keywords: &["lock", "잠금"],
-        icon: "\u{1F512}",
+        icon: "Lk",
         command: "pmset",
         args: &["displaysleepnow"],
         confirm: false,
@@ -117,7 +117,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Logout",
         keywords: &["logout", "로그아웃"],
-        icon: "\u{1F6AA}",
+        icon: "->",
         command: "osascript",
         args: &["-e", "tell app \"System Events\" to log out"],
         confirm: true,
@@ -129,7 +129,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Shutdown",
         keywords: &["shutdown", "poweroff", "종료"],
-        icon: "\u{23FB}",
+        icon: "!!",
         command: "systemctl",
         args: &["poweroff"],
         confirm: true,
@@ -137,7 +137,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Restart",
         keywords: &["restart", "reboot", "재시작"],
-        icon: "\u{1F504}",
+        icon: "<>",
         command: "systemctl",
         args: &["reboot"],
         confirm: true,
@@ -145,7 +145,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Sleep",
         keywords: &["sleep", "suspend", "절전"],
-        icon: "\u{1F4A4}",
+        icon: "Zz",
         command: "systemctl",
         args: &["suspend"],
         confirm: false,
@@ -153,7 +153,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Lock Screen",
         keywords: &["lock", "잠금"],
-        icon: "\u{1F512}",
+        icon: "Lk",
         command: "loginctl",
         args: &["lock-session"],
         confirm: false,
@@ -161,7 +161,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "Logout",
         keywords: &["logout", "로그아웃"],
-        icon: "\u{1F6AA}",
+        icon: "->",
         command: "loginctl",
         args: &["terminate-user", "--"],
         confirm: true,
@@ -169,7 +169,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
     SystemCommand {
         display_name: "File Manager",
         keywords: &["files", "filemanager", "파일관리자"],
-        icon: "\u{1F4C1}",
+        icon: ">>",
         command: "xdg-open",
         args: &["."],
         confirm: false,

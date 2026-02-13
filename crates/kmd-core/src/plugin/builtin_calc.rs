@@ -25,7 +25,7 @@ impl Extension for CalcExtension {
                 path: String::new(),
                 kind: ItemKind::Calculator,
                 source: Source::Plugin,
-                icon: "\u{1F5A9}".to_string(), // 🖩
+                icon: "=#".to_string(),
                 keywords: "calculator calc math".to_string(),
             }];
         }
@@ -39,7 +39,7 @@ impl Extension for CalcExtension {
                     path: formatted,
                     kind: ItemKind::Calculator,
                     source: Source::Plugin,
-                    icon: "\u{1F5A9}".to_string(),
+                    icon: "=#".to_string(),
                     keywords: format!("calc {} {}", expr, result),
                 }]
             }
@@ -49,7 +49,7 @@ impl Extension for CalcExtension {
                     path: String::new(),
                     kind: ItemKind::Calculator,
                     source: Source::Plugin,
-                    icon: "\u{274C}".to_string(), // ❌
+                    icon: "!!".to_string(),
                     keywords: String::new(),
                 }]
             }

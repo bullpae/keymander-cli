@@ -13,7 +13,7 @@ use crate::tui::theme::Theme;
 /// Render the preview panel for the selected item
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let title = Line::from(vec![
-        Span::styled(" \u{1F50E} ", theme.preview_title_style()),  // 🔎
+        Span::styled(" ? ", theme.preview_title_style()),
         Span::styled("Preview ", theme.preview_title_style()),
     ]);
 
@@ -68,7 +68,7 @@ fn render_calc_preview<'a>(
         Line::from(""),
         // Expression
         Line::from(vec![
-            Span::styled("  \u{1F5A9} ", theme.preview_value_style()),  // 🖩
+            Span::styled("  =# ", theme.preview_value_style()),
             Span::styled("Calculator", theme.kind_calc_style()),
         ]),
         Line::from(""),
