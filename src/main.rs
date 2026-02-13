@@ -156,8 +156,8 @@ fn main() -> color_eyre::Result<()> {
     // ── 3. Show console + center + set up UTF-8 / VT processing ────────
     #[cfg(windows)]
     if owns_console {
-        win_console::show();
-        win_console::center();
+        win_console::center(); // position while still hidden
+        win_console::show();   // appear already centered
     }
     #[cfg(windows)]
     win_console::setup();
