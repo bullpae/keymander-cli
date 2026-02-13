@@ -190,15 +190,18 @@ pub fn run_app(
         load_history_into_results(&mut state, db);
     }
 
-    // Draw the first frame, then re-centre.
-    // By this point the console window has its final dimensions after
-    // EnterAlternateScreen, so MoveWindow will place it precisely.
+    // Draw the first frame while the window is still hidden.
+    // This fills the console buffer with TUI content so the user
+    // sees a fully rendered screen the moment the window appears.
     terminal.draw(|frame| {
         ui::render(frame, &state, &theme);
     })?;
+
+    // Show the terminal window (it was hidden in main() for hotkey launch).
+    // Centering is handled by Windows Terminal's `centerOnLaunch` setting.
     #[cfg(windows)]
     if center_window {
-        crate::win_console::center();
+        crate::win_console::show();
     }
 
     // Main loop

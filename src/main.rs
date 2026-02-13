@@ -146,11 +146,13 @@ enum PortableAction {
 }
 
 fn main() -> color_eyre::Result<()> {
-    // ── 0. DPI awareness (Windows only) ──────────────────────────────────
-    // Must be set before any GetSystemMetrics / GetWindowRect calls so
-    // coordinates are in real (physical) pixels, not DPI-scaled.
+    // ── 0. Capture the real terminal window (Windows only) ───────────────
+    // On Windows 11 with Windows Terminal as default, GetConsoleWindow()
+    // returns an internal pseudo-console handle (0×0 rect).  The actual
+    // visible window belongs to Windows Terminal.  We capture it via
+    // GetForegroundWindow() right at startup, before anything changes.
     #[cfg(windows)]
-    win_console::set_dpi_aware();
+    win_console::capture_terminal_window();
 
     // ── 1. Hide console for toggle-off path (Windows only) ───────────────
     // If launched from a shortcut/hotkey, we own the console window.
@@ -174,13 +176,9 @@ fn main() -> color_eyre::Result<()> {
             }
         };
 
-    // ── 3. Show console centred + set up UTF-8 / VT processing ─────────
-    // Use SetWindowPlacement to atomically show AND position the window.
-    // This overrides conhost's async cascade placement reliably.
-    #[cfg(windows)]
-    if owns_console {
-        win_console::show_centered();
-    }
+    // ── 3. Set up UTF-8 / VT processing ─────────────────────────────────
+    // Window centering is handled by Windows Terminal's `centerOnLaunch`
+    // setting.  We just need to show the window when the TUI is ready.
     #[cfg(windows)]
     win_console::setup();
 
@@ -196,6 +194,13 @@ fn main() -> color_eyre::Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // For non-TUI commands launched from a hotkey/shortcut, we need the
+    // console visible for output.  TUI mode keeps it hidden until ready.
+    #[cfg(windows)]
+    if owns_console && cli.command.is_some() {
+        win_console::show();
+    }
 
     match cli.command {
         Some(Commands::Search { query, limit, json }) => {
@@ -260,210 +265,92 @@ fn main() -> color_eyre::Result<()> {
 
 // ── Windows console management ───────────────────────────────────────────────
 //
-// Strategy: normal CONSOLE subsystem (no windows_subsystem = "windows").
+// On Windows 11, the default terminal is Windows Terminal (wt.exe).
+// `GetConsoleWindow()` returns an internal pseudo-console handle (rect 0×0),
+// not the actual visible window.  We capture the real HWND via
+// `GetForegroundWindow()` at process start.
 //
-// When launched from a **shortcut / hotkey**, the OS creates a console window.
-// We immediately hide it, do the single-instance check, and only show it if
-// we actually need to render the TUI.  This keeps the toggle-off path nearly
-// invisible (just a 1-2 frame flash at worst — set shortcut "Run: Minimized"
-// to eliminate even that).
+// Window **centering** is delegated to Windows Terminal's `centerOnLaunch`
+// setting (set in WT's settings.json).  Trying to `MoveWindow` from our
+// process is unreliable because WT creates and positions its window before
+// our main() runs — any repositioning from our side is a visible race.
 //
-// When launched from **cmd.exe / PowerShell**, we share the parent terminal.
-// No window is created or hidden.
-//
-// This avoids AllocConsole() which creates a bare-bones conhost with broken
-// alternate-screen-buffer support.
+// The captured HWND is used only for hide/show:
+// - **Hotkey launch**: hide immediately, do single-instance check, show
+//   after TUI renders the first frame.  Toggle-off path: the second
+//   instance hides + signals quit + exits — no visible flash.
+// - **cmd.exe / PowerShell**: shared terminal, no hide/show needed.
 
 #[cfg(windows)]
 mod win_console {
     use std::ffi::c_void;
+    use std::sync::atomic::{AtomicIsize, Ordering};
 
-    // ── Win32 constants ──────────────────────────────────────────────────
     const SW_HIDE: i32 = 0;
-    const SW_SHOWNORMAL: u32 = 1;
     const SW_SHOW: i32 = 5;
     const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
     const CP_UTF8: u32 = 65001;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
-    const SM_CXSCREEN: i32 = 0;
-    const SM_CYSCREEN: i32 = 1;
-    const PROCESS_PER_MONITOR_DPI_AWARE: u32 = 2;
 
-    // ── Win32 structs ────────────────────────────────────────────────────
-    #[repr(C)]
-    struct Rect {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
+    // ── Terminal window handle ───────────────────────────────────────────
+    //
+    // On Windows 11, the default terminal is Windows Terminal (wt.exe).
+    // `GetConsoleWindow()` returns an internal pseudo-console handle
+    // (rect 0×0), not the actual visible window.
+    //
+    // We capture the real window via `GetForegroundWindow()` at process
+    // start, when the newly-created terminal window is the foreground.
+    //
+    // Window **centering** is handled by Windows Terminal's own
+    // `centerOnLaunch` setting — trying to `MoveWindow` from our process
+    // is a race against WT's own window management.
+    //
+    // The captured HWND is used only for hide/show (toggle-off path).
 
-    #[repr(C)]
-    struct Point {
-        x: i32,
-        y: i32,
-    }
+    static TERMINAL_HWND: AtomicIsize = AtomicIsize::new(0);
 
-    /// WINDOWPLACEMENT — the authoritative way to control a window's
-    /// normal/minimized/maximized position.  Unlike SetWindowPos, the
-    /// window manager honours this even during async layout operations
-    /// (like the conhost cascade placement).
-    #[repr(C)]
-    struct WindowPlacement {
-        length: u32,
-        flags: u32,
-        show_cmd: u32,
-        pt_min_position: Point,
-        pt_max_position: Point,
-        rc_normal_position: Rect,
-    }
-
-    // ── Public API ───────────────────────────────────────────────────────
-
-    /// Declare DPI awareness so GetSystemMetrics / GetWindowRect use
-    /// consistent (real-pixel) coordinates regardless of display scaling.
-    /// Call this at the very start of the process.
-    pub fn set_dpi_aware() {
-        // SAFETY: both functions are safe to call once at startup.
+    /// Capture the actual terminal window handle.
+    /// Must be called as early as possible in main().
+    pub fn capture_terminal_window() {
         unsafe {
-            let result = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
-            if result != 0 {
-                SetProcessDPIAware();
+            let fg = GetForegroundWindow();
+            let hwnd = if !fg.is_null() { fg } else { GetConsoleWindow() };
+            if !hwnd.is_null() {
+                TERMINAL_HWND.store(hwnd as isize, Ordering::SeqCst);
             }
         }
     }
 
+    /// Get the stored terminal window handle.
+    fn terminal_hwnd() -> *mut c_void {
+        let v = TERMINAL_HWND.load(Ordering::SeqCst);
+        if v != 0 {
+            v as *mut c_void
+        } else {
+            unsafe { GetConsoleWindow() }
+        }
+    }
+
     /// Check if we are the only process on this console.
-    /// If true, the OS created the console for us (hotkey/shortcut launch).
-    /// If false, we share a parent terminal (cmd.exe, powershell, etc.).
     pub fn is_sole_console_owner() -> bool {
         let mut pids = [0u32; 16];
         let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 16) };
         count <= 1
     }
 
-    /// Hide the console window immediately (minimize toggle-off flash).
+    /// Hide the terminal window immediately.
     pub fn hide() {
-        unsafe {
-            let hwnd = GetConsoleWindow();
-            if !hwnd.is_null() {
-                ShowWindow(hwnd, SW_HIDE);
-            }
+        let hwnd = terminal_hwnd();
+        if !hwnd.is_null() {
+            unsafe { ShowWindow(hwnd, SW_HIDE); }
         }
     }
 
-    /// Show the console window.
-    #[allow(dead_code)]
+    /// Show the terminal window.
     pub fn show() {
-        unsafe {
-            let hwnd = GetConsoleWindow();
-            if !hwnd.is_null() {
-                ShowWindow(hwnd, SW_SHOW);
-            }
-        }
-    }
-
-    /// Show the console window at the exact centre of the primary monitor
-    /// using `SetWindowPlacement`.
-    ///
-    /// Unlike `SetWindowPos`, `SetWindowPlacement` sets the *intended*
-    /// normal-position of the window.  The window manager respects this
-    /// even when conhost.exe is still applying its cascade placement
-    /// asynchronously.
-    ///
-    /// `rcNormalPosition` uses **workspace coordinates** (screen minus
-    /// taskbar), so we use `SystemParametersInfoW(SPI_GETWORKAREA)` to
-    /// get the usable area.
-    pub fn show_centered() {
-        unsafe {
-            let hwnd = GetConsoleWindow();
-            if hwnd.is_null() {
-                return;
-            }
-
-            // Get usable work-area (excludes taskbar).
-            let mut work = Rect { left: 0, top: 0, right: 0, bottom: 0 };
-            SystemParametersInfoW(
-                0x0030, // SPI_GETWORKAREA
-                0,
-                &mut work as *mut Rect as *mut c_void,
-                0,
-            );
-            let area_w = work.right - work.left;
-            let area_h = work.bottom - work.top;
-            if area_w <= 0 || area_h <= 0 {
-                // Fallback: just show normally.
-                ShowWindow(hwnd, SW_SHOW);
-                return;
-            }
-
-            // Get the current placement to learn the window size.
-            let mut wp = std::mem::zeroed::<WindowPlacement>();
-            wp.length = std::mem::size_of::<WindowPlacement>() as u32;
-            if GetWindowPlacement(hwnd, &mut wp) == 0 {
-                ShowWindow(hwnd, SW_SHOW);
-                return;
-            }
-
-            let win_w = wp.rc_normal_position.right - wp.rc_normal_position.left;
-            let win_h = wp.rc_normal_position.bottom - wp.rc_normal_position.top;
-            if win_w <= 0 || win_h <= 0 {
-                ShowWindow(hwnd, SW_SHOW);
-                return;
-            }
-
-            // Compute centred position in workspace coordinates.
-            let x = work.left + (area_w - win_w) / 2;
-            let y = work.top + (area_h - win_h) / 2;
-
-            wp.show_cmd = SW_SHOWNORMAL;
-            wp.rc_normal_position = Rect {
-                left: x,
-                top: y,
-                right: x + win_w,
-                bottom: y + win_h,
-            };
-
-            SetWindowPlacement(hwnd, &wp);
-        }
-    }
-
-    /// Centre the console window on the primary monitor.
-    ///
-    /// Uses `MoveWindow` which simultaneously sets position **and** size,
-    /// sending `WM_WINDOWPOSCHANGED` synchronously.  This is more
-    /// reliable than `SetWindowPos` for console windows because conhost
-    /// cannot override a `MoveWindow` call the way it can override
-    /// `SetWindowPos` with `SWP_NOSIZE`.
-    pub fn center() {
-        unsafe {
-            let hwnd = GetConsoleWindow();
-            if hwnd.is_null() {
-                return;
-            }
-
-            let screen_w = GetSystemMetrics(SM_CXSCREEN);
-            let screen_h = GetSystemMetrics(SM_CYSCREEN);
-            if screen_w == 0 || screen_h == 0 {
-                return;
-            }
-
-            let mut rc = Rect { left: 0, top: 0, right: 0, bottom: 0 };
-            if GetWindowRect(hwnd, &mut rc) == 0 {
-                return;
-            }
-
-            let win_w = rc.right - rc.left;
-            let win_h = rc.bottom - rc.top;
-            if win_w <= 0 || win_h <= 0 {
-                return;
-            }
-
-            let x = (screen_w - win_w) / 2;
-            let y = (screen_h - win_h) / 2;
-
-            // MoveWindow sets position + size and repaints synchronously.
-            MoveWindow(hwnd, x, y, win_w, win_h, 1);
+        let hwnd = terminal_hwnd();
+        if !hwnd.is_null() {
+            unsafe { ShowWindow(hwnd, SW_SHOW); }
         }
     }
 
@@ -498,17 +385,6 @@ mod win_console {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn ShowWindow(hwnd: *mut c_void, cmd_show: i32) -> i32;
-        fn GetSystemMetrics(index: i32) -> i32;
-        fn GetWindowRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
-        fn MoveWindow(hwnd: *mut c_void, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
-        fn GetWindowPlacement(hwnd: *mut c_void, wp: *mut WindowPlacement) -> i32;
-        fn SetWindowPlacement(hwnd: *mut c_void, wp: *const WindowPlacement) -> i32;
-        fn SystemParametersInfoW(action: u32, param: u32, data: *mut c_void, ini: u32) -> i32;
-        fn SetProcessDPIAware() -> i32;
-    }
-
-    #[link(name = "shcore")]
-    unsafe extern "system" {
-        fn SetProcessDpiAwareness(value: u32) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
     }
 }
