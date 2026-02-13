@@ -20,9 +20,11 @@ pub mod input;
 pub mod list;
 pub mod preview;
 
+/// Minimum terminal width to show the preview panel
+const MIN_PREVIEW_WIDTH: u16 = 80;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::app::AppState;
@@ -47,7 +49,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
     input::render(frame, chunks[1], state, theme);
 
     // Content: list only, or list + preview
-    if state.show_preview && area.width > 80 {
+    if state.show_preview && area.width > MIN_PREVIEW_WIDTH {
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -70,37 +72,16 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
 fn render_header(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let version = env!("CARGO_PKG_VERSION");
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" ", ratatui::style::Style::default().bg(theme.mantle)),
-        Span::styled(
-            "key",
-            ratatui::style::Style::default()
-                .fg(theme.accent)
-                .bg(theme.mantle)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "\u{00BB}",                                           // »
-            ratatui::style::Style::default()
-                .fg(theme.peach)
-                .bg(theme.mantle)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "mander ",
-            ratatui::style::Style::default()
-                .fg(theme.green)
-                .bg(theme.mantle)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!("v{}", version), theme.header_dim_style()),
-        Span::styled("  \u{00B7}  ", theme.header_dim_style()),   // ·
-        Span::styled(
-            state.total_items.to_string(),
-            theme.header_accent_style(),
-        ),
-        Span::styled(" items indexed", theme.header_dim_style()),
-    ]);
+    ];
+    spans.extend(theme.brand_spans());
+    spans.push(Span::styled(" ", ratatui::style::Style::default().bg(theme.mantle)));
+    spans.push(Span::styled(format!("v{}", version), theme.header_dim_style()));
+    spans.push(Span::styled("  \u{00B7}  ", theme.header_dim_style()));  // ·
+    spans.push(Span::styled(state.total_items.to_string(), theme.header_accent_style()));
+    spans.push(Span::styled(" items indexed", theme.header_dim_style()));
+    let line = Line::from(spans);
 
     let header = ratatui::widgets::Paragraph::new(line).style(
         ratatui::style::Style::default().bg(theme.mantle),

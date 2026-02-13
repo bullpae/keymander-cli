@@ -16,6 +16,10 @@ use walkdir::WalkDir;
 
 use super::{IndexItem, ItemKind, Source};
 
+/// Windows process creation flag to suppress console window popup.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 // ============================================================================
 // Public Types
 // ============================================================================
@@ -162,9 +166,10 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
     }
 
     let ignore_set: HashSet<&str> = config.ignore_patterns.iter().map(|s| s.as_str()).collect();
+    let limit = config.max_results / 2; // Reserve half for general scan
 
     let mut items = Vec::new();
-    let mut seen_paths = HashSet::new();
+    let mut seen = HashSet::new();
 
     for (dir, depth) in &scan_dirs {
         tracing::info!("Scanning: {} (depth {})", dir.display(), depth);
@@ -172,66 +177,12 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         let walker = WalkDir::new(dir)
             .max_depth(*depth)
             .follow_links(false)
-            .into_iter();
+            .into_iter()
+            .filter_entry(|e| !is_ignored_dir(e, &ignore_set));
 
-        for entry in walker.filter_entry(|e| !is_ignored_dir(e, &ignore_set)) {
-            let Ok(entry) = entry else { continue };
+        walkdir_into_items(walker, &mut items, &mut seen, limit, config.use_emoji);
 
-            let is_file = entry.file_type().is_file();
-            let is_dir = entry.file_type().is_dir();
-
-            // Skip entries that are neither files nor directories (e.g. symlinks)
-            if !is_file && !is_dir {
-                continue;
-            }
-
-            // Skip the root scan directories themselves (depth 0)
-            if is_dir && entry.depth() == 0 {
-                continue;
-            }
-
-            let path = entry.path();
-            let path_str = path.to_string_lossy().to_string();
-
-            // Deduplicate
-            if !seen_paths.insert(path_str.clone()) {
-                continue;
-            }
-
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            if name.is_empty() || name.starts_with('.') {
-                continue;
-            }
-
-            items.push(IndexItem {
-                name: name.clone(),
-                path: path_str.clone(),
-                kind: if is_dir {
-                    ItemKind::Directory
-                } else {
-                    ItemKind::File
-                },
-                source: Source::FileProvider,
-                icon: if is_dir {
-                    dir_icon(config.use_emoji)
-                } else {
-                    icon_for_path(path, config.use_emoji)
-                },
-                keywords: path_str,
-            });
-
-            // Reserve space for general scan: use half of max_results for priority
-            if items.len() >= config.max_results / 2 {
-                break;
-            }
-        }
-
-        if items.len() >= config.max_results / 2 {
+        if items.len() >= limit {
             break;
         }
     }
@@ -346,84 +297,28 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
     }
 
     let ignore_set: HashSet<&str> = config.ignore_patterns.iter().map(|s| s.as_str()).collect();
+    let priority_set: HashSet<PathBuf> = config.search_paths.iter().cloned().collect();
+
     let mut items = Vec::new();
     let mut seen = HashSet::new();
-
-    // Skip directories already covered by priority/drive scan
-    let priority_set: HashSet<PathBuf> = config.search_paths.iter().cloned().collect();
 
     for root in &roots {
         let walker = WalkDir::new(root)
             .max_depth(config.search_depth)
             .follow_links(false)
-            .into_iter();
-
-        for entry in walker.filter_entry(|e| {
-            // Skip ignored directories
-            if is_ignored_dir(e, &ignore_set) {
-                return false;
-            }
-            // Skip priority directories (already scanned)
-            if e.file_type().is_dir() {
-                let p = e.path().to_path_buf();
-                if priority_set.contains(&p) {
+            .into_iter()
+            .filter_entry(|e| {
+                if is_ignored_dir(e, &ignore_set) {
                     return false;
                 }
-            }
-            true
-        }) {
-            let Ok(entry) = entry else { continue };
-
-            let is_file = entry.file_type().is_file();
-            let is_dir = entry.file_type().is_dir();
-
-            if !is_file && !is_dir {
-                continue;
-            }
-
-            // Skip the root directories themselves (depth 0)
-            if is_dir && entry.depth() == 0 {
-                continue;
-            }
-
-            let path = entry.path();
-            let path_str = path.to_string_lossy().to_string();
-
-            if !seen.insert(path_str.clone()) {
-                continue;
-            }
-
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            if name.is_empty() || name.starts_with('.') {
-                continue;
-            }
-
-            items.push(IndexItem {
-                name: name.clone(),
-                path: path_str.clone(),
-                kind: if is_dir {
-                    ItemKind::Directory
-                } else {
-                    ItemKind::File
-                },
-                source: Source::FileProvider,
-                icon: if is_dir {
-                    dir_icon(config.use_emoji)
-                } else {
-                    icon_for_path(path, config.use_emoji)
-                },
-                keywords: path_str,
+                // Skip priority directories (already scanned)
+                if e.file_type().is_dir() && priority_set.contains(&e.path().to_path_buf()) {
+                    return false;
+                }
+                true
             });
 
-            if items.len() >= config.max_results {
-                break;
-            }
-        }
+        walkdir_into_items(walker, &mut items, &mut seen, config.max_results, config.use_emoji);
 
         if items.len() >= config.max_results {
             break;
@@ -527,7 +422,7 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
     match cmd.output() {
@@ -660,7 +555,7 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
         match cmd.output() {
@@ -685,6 +580,65 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Shared walkdir entry → IndexItem conversion.
+/// Processes entries from a walkdir iterator, deduplicates, and appends to `items`.
+fn walkdir_into_items<I>(
+    walker: I,
+    items: &mut Vec<IndexItem>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+    use_emoji: bool,
+) where
+    I: Iterator<Item = walkdir::Result<walkdir::DirEntry>>,
+{
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+
+        let is_file = entry.file_type().is_file();
+        let is_dir = entry.file_type().is_dir();
+
+        // Skip entries that are neither files nor directories (e.g. symlinks)
+        if !is_file && !is_dir {
+            continue;
+        }
+        // Skip the root scan directory itself (depth 0)
+        if is_dir && entry.depth() == 0 {
+            continue;
+        }
+
+        let path = entry.path();
+        let path_str = path.to_string_lossy().to_string();
+
+        // Deduplicate
+        if !seen.insert(path_str.clone()) {
+            continue;
+        }
+
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+
+        items.push(IndexItem {
+            name: name.clone(),
+            path: path_str.clone(),
+            kind: if is_dir { ItemKind::Directory } else { ItemKind::File },
+            source: Source::FileProvider,
+            icon: if is_dir { dir_icon(use_emoji) } else { icon_for_path(path, use_emoji) },
+            keywords: path_str,
+        });
+
+        if items.len() >= limit {
+            break;
+        }
+    }
+}
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
 fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool {
@@ -805,9 +759,49 @@ fn find_everything_cli(configured: Option<&PathBuf>) -> Option<PathBuf> {
     None
 }
 
-/// Determine icon by file extension
 /// Icon width in display columns — all icons are exactly this wide.
 pub const ICON_WIDTH: usize = 2;
+
+// ── Icon mapping table (emoji, ASCII) ────────────────────────────────────────
+
+/// (extensions, emoji, ascii)
+const ICON_TABLE: &[(&[&str], &str, &str)] = &[
+    // Programming
+    (&["rs"],                                          "\u{1F980}", "Rs"), // 🦀
+    (&["py", "pyw"],                                   "\u{1F40D}", "Py"), // 🐍
+    (&["js", "ts", "jsx", "tsx", "mjs"],               "\u{1F4DC}", "Js"), // 📜
+    (&["go"],                                          "\u{1F535}", "Go"), // 🔵
+    (&["java", "kt", "kts"],                           "\u{2615}",  "Jv"), // ☕
+    (&["c", "cpp", "h", "hpp", "cc", "cxx"],           "\u{2699}",  "C+"), // ⚙
+    (&["cs"],                                          "\u{1F7E3}", "C#"), // 🟣
+    (&["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"], "\u{1F41A}", "$>"), // 🐚
+    // Documents
+    (&["md", "txt", "rtf", "log"],                     "\u{1F4DD}", "Tx"), // 📝
+    (&["pdf"],                                         "\u{1F4D5}", "Pd"), // 📕
+    (&["hwp", "hwpx"],                                 "\u{1F4D8}", "Hw"), // 📘
+    (&["doc", "docx", "odt"],                          "\u{1F4C4}", "Dc"), // 📄
+    (&["xls", "xlsx", "ods", "csv"],                   "\u{1F4CA}", "Xl"), // 📊
+    (&["ppt", "pptx", "odp"],                          "\u{1F4CA}", "Pt"), // 📊
+    // Data / Config
+    (&["json", "yaml", "yml", "toml", "xml", "ini", "conf"], "\u{1F4CB}", "{}"), // 📋
+    (&["sql", "db", "sqlite", "sqlite3"],              "\u{1F5C3}", "Db"), // 🗃
+    (&["html", "htm", "css", "scss", "less"],          "\u{1F310}", "<>"), // 🌐
+    // Media
+    (&["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "tiff"], "\u{1F5BC}", "Im"), // 🖼
+    (&["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"], "\u{1F3B5}", "Au"), // 🎵
+    (&["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"], "\u{1F3AC}", "Vd"), // 🎬
+    // Archives
+    (&["zip", "tar", "gz", "7z", "rar", "bz2", "xz", "zst"], "\u{1F4E6}", "Pk"), // 📦
+    // Executables / Installers
+    (&["exe", "msi", "appimage", "deb", "rpm", "dmg"], "\u{1F4E6}", "Ex"), // 📦
+    // Fonts
+    (&["ttf", "otf", "woff", "woff2"],                "\u{1F524}", "Ft"), // 🔤
+];
+
+const DEFAULT_EMOJI: &str = "\u{1F4C4}"; // 📄
+const DEFAULT_ASCII: &str = "--";
+const DIR_EMOJI: &str = "\u{1F4C1}";     // 📁
+const DIR_ASCII: &str = ">>";
 
 /// Get an icon for a file path.  When `use_emoji` is true, rich emoji icons
 /// are returned (requires a modern terminal like Windows Terminal, iTerm2,
@@ -820,85 +814,20 @@ pub fn icon_for_path(path: &Path, use_emoji: bool) -> String {
         .unwrap_or("")
         .to_lowercase();
 
-    if use_emoji {
-        icon_emoji(&ext, path)
-    } else {
-        icon_ascii(&ext, path)
+    if ext.is_empty() && path.is_dir() {
+        return dir_icon(use_emoji);
     }
-}
 
-// ── Emoji icon set (modern terminals) ────────────────────────────────────────
-
-fn icon_emoji(ext: &str, path: &Path) -> String {
-    match ext {
-        // Programming
-        "rs" => "\u{1F980}".into(),                                    // 🦀
-        "py" | "pyw" => "\u{1F40D}".into(),                           // 🐍
-        "js" | "ts" | "jsx" | "tsx" | "mjs" => "\u{1F4DC}".into(),    // 📜
-        "go" => "\u{1F535}".into(),                                    // 🔵
-        "java" | "kt" | "kts" => "\u{2615}".into(),                   // ☕
-        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "\u{2699}".into(), // ⚙
-        "cs" => "\u{1F7E3}".into(),                                    // 🟣
-        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "\u{1F41A}".into(), // 🐚
-        // Documents
-        "md" | "txt" | "rtf" | "log" => "\u{1F4DD}".into(),           // 📝
-        "pdf" => "\u{1F4D5}".into(),                                   // 📕
-        "hwp" | "hwpx" => "\u{1F4D8}".into(),                         // 📘
-        "doc" | "docx" | "odt" => "\u{1F4C4}".into(),                 // 📄
-        "xls" | "xlsx" | "ods" | "csv" => "\u{1F4CA}".into(),         // 📊
-        "ppt" | "pptx" | "odp" => "\u{1F4CA}".into(),                 // 📊
-        // Data / Config
-        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "\u{1F4CB}".into(), // 📋
-        "sql" | "db" | "sqlite" | "sqlite3" => "\u{1F5C3}".into(),    // 🗃
-        "html" | "htm" | "css" | "scss" | "less" => "\u{1F310}".into(), // 🌐
-        // Media
-        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => "\u{1F5BC}".into(), // 🖼
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "\u{1F3B5}".into(), // 🎵
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "\u{1F3AC}".into(), // 🎬
-        // Archives / Executables
-        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "\u{1F4E6}".into(), // 📦
-        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "\u{1F4E6}".into(), // 📦
-        // Fonts
-        "ttf" | "otf" | "woff" | "woff2" => "\u{1F524}".into(),       // 🔤
-        // Directory
-        "" if path.is_dir() => "\u{1F4C1}".into(),                    // 📁
-        _ => "\u{1F4C4}".into(),                                       // 📄
+    for &(exts, emoji, ascii) in ICON_TABLE {
+        if exts.iter().any(|e| *e == ext) {
+            return if use_emoji { emoji } else { ascii }.into();
+        }
     }
-}
 
-// ── ASCII icon set (legacy terminals) ────────────────────────────────────────
-
-fn icon_ascii(ext: &str, path: &Path) -> String {
-    match ext {
-        "rs" => "Rs".into(),
-        "py" | "pyw" => "Py".into(),
-        "js" | "ts" | "jsx" | "tsx" | "mjs" => "Js".into(),
-        "go" => "Go".into(),
-        "java" | "kt" | "kts" => "Jv".into(),
-        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "C+".into(),
-        "cs" => "C#".into(),
-        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "$>".into(),
-        "md" | "txt" | "rtf" | "log" => "Tx".into(),
-        "pdf" => "Pd".into(),
-        "hwp" | "hwpx" => "Hw".into(),
-        "doc" | "docx" | "odt" => "Dc".into(),
-        "xls" | "xlsx" | "ods" | "csv" => "Xl".into(),
-        "ppt" | "pptx" | "odp" => "Pt".into(),
-        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "{}".into(),
-        "sql" | "db" | "sqlite" | "sqlite3" => "Db".into(),
-        "html" | "htm" | "css" | "scss" | "less" => "<>".into(),
-        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => "Im".into(),
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "Au".into(),
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "Vd".into(),
-        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "Pk".into(),
-        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "Ex".into(),
-        "ttf" | "otf" | "woff" | "woff2" => "Ft".into(),
-        "" if path.is_dir() => ">>".into(),
-        _ => "--".into(),
-    }
+    if use_emoji { DEFAULT_EMOJI } else { DEFAULT_ASCII }.into()
 }
 
 /// Directory icon appropriate for the given mode.
 pub fn dir_icon(use_emoji: bool) -> String {
-    if use_emoji { "\u{1F4C1}".into() } else { ">>".into() }
+    if use_emoji { DIR_EMOJI.into() } else { DIR_ASCII.into() }
 }

@@ -266,6 +266,8 @@ mod win_console {
     /// If true, the OS created the console for us (hotkey/shortcut launch).
     /// If false, we share a parent terminal (cmd.exe, powershell, etc.).
     pub fn is_sole_console_owner() -> bool {
+        // SAFETY: GetConsoleProcessList writes up to `count` PIDs into a
+        // stack-allocated buffer; 16 slots is more than enough for our check.
         let mut pids = [0u32; 16];
         let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 16) };
         count <= 1
@@ -273,6 +275,8 @@ mod win_console {
 
     /// Hide the console window immediately (minimize toggle-off flash).
     pub fn hide() {
+        // SAFETY: GetConsoleWindow returns the HWND of the current console or NULL.
+        // ShowWindow is safe to call with a valid HWND.
         unsafe {
             let hwnd = GetConsoleWindow();
             if !hwnd.is_null() {
@@ -283,6 +287,7 @@ mod win_console {
 
     /// Show the console window (for TUI / CLI output).
     pub fn show() {
+        // SAFETY: same as hide() — valid HWND or early return on NULL.
         unsafe {
             let hwnd = GetConsoleWindow();
             if !hwnd.is_null() {
@@ -293,6 +298,9 @@ mod win_console {
 
     /// Center the console window on the primary monitor.
     pub fn center() {
+        // SAFETY: All Win32 calls are guarded by null/zero checks.
+        // GetWindowRect writes into a stack-allocated Rect.
+        // SetWindowPos only repositions without resizing (SWP_NOSIZE).
         unsafe {
             let hwnd = GetConsoleWindow();
             if hwnd.is_null() {
@@ -329,6 +337,9 @@ mod win_console {
 
     /// Set UTF-8 code page and enable VT processing for ANSI sequences.
     pub fn setup() {
+        // SAFETY: SetConsoleOutputCP/SetConsoleCP accept a code-page ID.
+        // GetStdHandle returns a pseudo-handle or INVALID_HANDLE_VALUE (-1).
+        // GetConsoleMode/SetConsoleMode operate on a valid console handle.
         unsafe {
             SetConsoleOutputCP(CP_UTF8);
             SetConsoleCP(CP_UTF8);
@@ -336,8 +347,9 @@ mod win_console {
             let handle = GetStdHandle(STD_OUTPUT_HANDLE);
             if !handle.is_null() && handle as isize != -1 {
                 let mut mode: u32 = 0;
-                GetConsoleMode(handle, &mut mode);
-                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                if GetConsoleMode(handle, &mut mode) != 0 {
+                    SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
             }
         }
     }

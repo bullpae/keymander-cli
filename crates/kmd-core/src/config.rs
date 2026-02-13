@@ -296,7 +296,7 @@ impl Default for KeybindingsConfig {
 impl Config {
     /// Load config from a directory (reads config.toml)
     pub fn load(config_dir: &Path) -> Result<Self, ConfigError> {
-        let config_path = config_dir.join("config.toml");
+        let config_path = config_dir.join(crate::CONFIG_FILENAME);
         let mut config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .map_err(|e| ConfigError::Io(config_path.clone(), e))?;
@@ -329,156 +329,86 @@ impl Config {
 
     /// Get a config value by dot-separated key path
     pub fn get_value(&self, key: &str) -> Option<String> {
+        // Macro to reduce duplication between get/set match arms
+        macro_rules! get {
+            ($field:expr) => { Some($field.to_string()) };
+            (str $field:expr) => { Some($field.clone()) };
+            (opt $field:expr) => { Some($field.clone().unwrap_or_default()) };
+        }
         match key {
             // general
-            "general.render_fps" => Some(self.general.render_fps.to_string()),
-            "general.show_preview" => Some(self.general.show_preview.to_string()),
-            "general.preview_width_percent" => {
-                Some(self.general.preview_width_percent.to_string())
-            }
-            "general.theme" => Some(self.general.theme.clone()),
-            "general.editor" => Some(self.general.editor.clone().unwrap_or_default()),
+            "general.render_fps"            => get!(self.general.render_fps),
+            "general.show_preview"          => get!(self.general.show_preview),
+            "general.preview_width_percent" => get!(self.general.preview_width_percent),
+            "general.theme"                 => get!(str self.general.theme),
+            "general.editor"                => get!(opt self.general.editor),
+            "general.emoji_icons"           => get!(self.general.emoji_icons),
             // launcher
-            "launcher.file_search_provider" => {
-                Some(self.launcher.file_search_provider.clone())
-            }
-            "launcher.max_results" => Some(self.launcher.max_results.to_string()),
-            "launcher.search_depth" => Some(self.launcher.search_depth.to_string()),
-            "launcher.quit_on_launch" => Some(self.launcher.quit_on_launch.to_string()),
-            "launcher.index_directories" => {
-                Some(self.launcher.index_directories.to_string())
-            }
-            "launcher.scan_drives" => Some(self.launcher.scan_drives.to_string()),
-            "launcher.drive_scan_depth" => Some(self.launcher.drive_scan_depth.to_string()),
+            "launcher.file_search_provider" => get!(str self.launcher.file_search_provider),
+            "launcher.max_results"          => get!(self.launcher.max_results),
+            "launcher.search_depth"         => get!(self.launcher.search_depth),
+            "launcher.quit_on_launch"       => get!(self.launcher.quit_on_launch),
+            "launcher.index_directories"    => get!(self.launcher.index_directories),
+            "launcher.scan_drives"          => get!(self.launcher.scan_drives),
+            "launcher.drive_scan_depth"     => get!(self.launcher.drive_scan_depth),
             // kind_weights
-            "launcher.kind_weights.directory" => {
-                Some(self.launcher.kind_weights.directory.to_string())
-            }
-            "launcher.kind_weights.app" => {
-                Some(self.launcher.kind_weights.app.to_string())
-            }
-            "launcher.kind_weights.file" => {
-                Some(self.launcher.kind_weights.file.to_string())
-            }
-            "launcher.kind_weights.executable" => {
-                Some(self.launcher.kind_weights.executable.to_string())
-            }
-            "launcher.kind_weights.system_cmd" => {
-                Some(self.launcher.kind_weights.system_cmd.to_string())
-            }
-            "launcher.kind_weights.web_search" => {
-                Some(self.launcher.kind_weights.web_search.to_string())
-            }
+            "launcher.kind_weights.directory"   => get!(self.launcher.kind_weights.directory),
+            "launcher.kind_weights.app"         => get!(self.launcher.kind_weights.app),
+            "launcher.kind_weights.file"        => get!(self.launcher.kind_weights.file),
+            "launcher.kind_weights.executable"  => get!(self.launcher.kind_weights.executable),
+            "launcher.kind_weights.system_cmd"  => get!(self.launcher.kind_weights.system_cmd),
+            "launcher.kind_weights.web_search"  => get!(self.launcher.kind_weights.web_search),
             // keybindings
-            "keybindings.global_hotkey" => Some(self.keybindings.global_hotkey.clone()),
-            "keybindings.quit" => Some(self.keybindings.quit.clone()),
-            "keybindings.next" => Some(self.keybindings.next.clone()),
-            "keybindings.prev" => Some(self.keybindings.prev.clone()),
-            "keybindings.select" => Some(self.keybindings.select.clone()),
-            "keybindings.toggle_preview" => {
-                Some(self.keybindings.toggle_preview.clone())
-            }
+            "keybindings.global_hotkey"    => get!(str self.keybindings.global_hotkey),
+            "keybindings.quit"             => get!(str self.keybindings.quit),
+            "keybindings.next"             => get!(str self.keybindings.next),
+            "keybindings.prev"             => get!(str self.keybindings.prev),
+            "keybindings.select"           => get!(str self.keybindings.select),
+            "keybindings.toggle_preview"   => get!(str self.keybindings.toggle_preview),
             // virtual keys (read-only, computed at runtime)
-            "_portable_mode" => {
-                if crate::portable::is_portable() {
-                    Some("Portable".to_string())
-                } else {
-                    Some("System".to_string())
-                }
-            }
-            "_data_path" => Some(Self::default_data_dir().to_string_lossy().to_string()),
+            "_portable_mode" => Some(if crate::portable::is_portable() { "Portable" } else { "System" }.into()),
+            "_data_path"     => Some(Self::default_data_dir().to_string_lossy().to_string()),
             _ => None,
         }
     }
 
     /// Set a config value by dot-separated key path
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
+        /// Parse `value` into the same type as `current`, returning `current` on failure.
+        fn parse_or<T: std::str::FromStr>(value: &str, current: T) -> T {
+            value.parse().unwrap_or(current)
+        }
+
         match key {
             // general
-            "general.render_fps" => {
-                self.general.render_fps = value.parse().unwrap_or(self.general.render_fps);
-            }
-            "general.show_preview" => {
-                self.general.show_preview =
-                    value.parse().unwrap_or(self.general.show_preview);
-            }
-            "general.preview_width_percent" => {
-                self.general.preview_width_percent = value
-                    .parse()
-                    .unwrap_or(self.general.preview_width_percent);
-            }
-            "general.theme" => self.general.theme = value.to_string(),
-            "general.editor" => {
-                self.general.editor = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.to_string())
-                };
-            }
+            "general.render_fps"            => self.general.render_fps = parse_or(value, self.general.render_fps),
+            "general.show_preview"          => self.general.show_preview = parse_or(value, self.general.show_preview),
+            "general.preview_width_percent" => self.general.preview_width_percent = parse_or(value, self.general.preview_width_percent),
+            "general.theme"                 => self.general.theme = value.to_string(),
+            "general.editor"                => self.general.editor = if value.is_empty() { None } else { Some(value.to_string()) },
+            "general.emoji_icons"           => self.general.emoji_icons = parse_or(value, self.general.emoji_icons),
             // launcher
-            "launcher.file_search_provider" => {
-                self.launcher.file_search_provider = value.to_string();
-            }
-            "launcher.max_results" => {
-                self.launcher.max_results =
-                    value.parse().unwrap_or(self.launcher.max_results);
-            }
-            "launcher.search_depth" => {
-                self.launcher.search_depth =
-                    value.parse().unwrap_or(self.launcher.search_depth);
-            }
-            "launcher.quit_on_launch" => {
-                self.launcher.quit_on_launch =
-                    value.parse().unwrap_or(self.launcher.quit_on_launch);
-            }
-            "launcher.index_directories" => {
-                self.launcher.index_directories =
-                    value.parse().unwrap_or(self.launcher.index_directories);
-            }
-            "launcher.scan_drives" => {
-                self.launcher.scan_drives =
-                    value.parse().unwrap_or(self.launcher.scan_drives);
-            }
-            "launcher.drive_scan_depth" => {
-                self.launcher.drive_scan_depth =
-                    value.parse().unwrap_or(self.launcher.drive_scan_depth);
-            }
+            "launcher.file_search_provider" => self.launcher.file_search_provider = value.to_string(),
+            "launcher.max_results"          => self.launcher.max_results = parse_or(value, self.launcher.max_results),
+            "launcher.search_depth"         => self.launcher.search_depth = parse_or(value, self.launcher.search_depth),
+            "launcher.quit_on_launch"       => self.launcher.quit_on_launch = parse_or(value, self.launcher.quit_on_launch),
+            "launcher.index_directories"    => self.launcher.index_directories = parse_or(value, self.launcher.index_directories),
+            "launcher.scan_drives"          => self.launcher.scan_drives = parse_or(value, self.launcher.scan_drives),
+            "launcher.drive_scan_depth"     => self.launcher.drive_scan_depth = parse_or(value, self.launcher.drive_scan_depth),
             // kind_weights
-            "launcher.kind_weights.directory" => {
-                self.launcher.kind_weights.directory =
-                    value.parse().unwrap_or(self.launcher.kind_weights.directory);
-            }
-            "launcher.kind_weights.app" => {
-                self.launcher.kind_weights.app =
-                    value.parse().unwrap_or(self.launcher.kind_weights.app);
-            }
-            "launcher.kind_weights.file" => {
-                self.launcher.kind_weights.file =
-                    value.parse().unwrap_or(self.launcher.kind_weights.file);
-            }
-            "launcher.kind_weights.executable" => {
-                self.launcher.kind_weights.executable =
-                    value.parse().unwrap_or(self.launcher.kind_weights.executable);
-            }
-            "launcher.kind_weights.system_cmd" => {
-                self.launcher.kind_weights.system_cmd =
-                    value.parse().unwrap_or(self.launcher.kind_weights.system_cmd);
-            }
-            "launcher.kind_weights.web_search" => {
-                self.launcher.kind_weights.web_search =
-                    value.parse().unwrap_or(self.launcher.kind_weights.web_search);
-            }
+            "launcher.kind_weights.directory"   => self.launcher.kind_weights.directory = parse_or(value, self.launcher.kind_weights.directory),
+            "launcher.kind_weights.app"         => self.launcher.kind_weights.app = parse_or(value, self.launcher.kind_weights.app),
+            "launcher.kind_weights.file"        => self.launcher.kind_weights.file = parse_or(value, self.launcher.kind_weights.file),
+            "launcher.kind_weights.executable"  => self.launcher.kind_weights.executable = parse_or(value, self.launcher.kind_weights.executable),
+            "launcher.kind_weights.system_cmd"  => self.launcher.kind_weights.system_cmd = parse_or(value, self.launcher.kind_weights.system_cmd),
+            "launcher.kind_weights.web_search"  => self.launcher.kind_weights.web_search = parse_or(value, self.launcher.kind_weights.web_search),
             // keybindings
-            "keybindings.global_hotkey" => {
-                self.keybindings.global_hotkey = value.to_string();
-            }
-            "keybindings.quit" => self.keybindings.quit = value.to_string(),
-            "keybindings.next" => self.keybindings.next = value.to_string(),
-            "keybindings.prev" => self.keybindings.prev = value.to_string(),
-            "keybindings.select" => self.keybindings.select = value.to_string(),
-            "keybindings.toggle_preview" => {
-                self.keybindings.toggle_preview = value.to_string();
-            }
+            "keybindings.global_hotkey"    => self.keybindings.global_hotkey = value.to_string(),
+            "keybindings.quit"             => self.keybindings.quit = value.to_string(),
+            "keybindings.next"             => self.keybindings.next = value.to_string(),
+            "keybindings.prev"             => self.keybindings.prev = value.to_string(),
+            "keybindings.select"           => self.keybindings.select = value.to_string(),
+            "keybindings.toggle_preview"   => self.keybindings.toggle_preview = value.to_string(),
             _ => return Err(ConfigError::UnknownKey(key.to_string())),
         }
         Ok(())

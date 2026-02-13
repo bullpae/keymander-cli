@@ -20,30 +20,13 @@ pub fn render_modal(frame: &mut Frame, area: Rect, state: &SettingsState, theme:
 
     // Outer block — branded title with two-tone colors
     let dirty_marker = if state.dirty { " *" } else { "" };
-    let title_line = Line::from(vec![
-        Span::styled(
-            " key",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "\u{00BB}",                                          // »
-            Style::default()
-                .fg(theme.peach)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "mander",
-            Style::default()
-                .fg(theme.green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" Settings (F2){} ", dirty_marker),
-            Style::default().fg(theme.subtext),
-        ),
-    ]);
+    let mut title_spans = vec![Span::styled(" ", Style::default())];
+    title_spans.extend(theme.brand_spans());
+    title_spans.push(Span::styled(
+        format!(" Settings (F2){} ", dirty_marker),
+        Style::default().fg(theme.subtext),
+    ));
+    let title_line = Line::from(title_spans);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

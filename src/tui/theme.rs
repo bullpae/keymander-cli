@@ -84,6 +84,35 @@ impl Default for Theme {
 
 impl Theme {
 
+    // ── Brand ─────────────────────────────────────────────────────────────
+
+    /// "key»mander" brand spans (reusable in header & settings modal).
+    pub fn brand_spans(&self) -> Vec<ratatui::text::Span<'_>> {
+        vec![
+            ratatui::text::Span::styled(
+                "key",
+                Style::default()
+                    .fg(self.accent)
+                    .bg(self.mantle)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            ratatui::text::Span::styled(
+                "\u{00BB}",
+                Style::default()
+                    .fg(self.peach)
+                    .bg(self.mantle)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            ratatui::text::Span::styled(
+                "mander",
+                Style::default()
+                    .fg(self.green)
+                    .bg(self.mantle)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    }
+
     // ── Header & Status ──────────────────────────────────────────────────
 
     /// Header version label (dimmer)

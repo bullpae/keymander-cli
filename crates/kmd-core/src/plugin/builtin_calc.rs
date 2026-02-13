@@ -9,10 +9,10 @@ use super::{Extension, ExtensionAction};
 pub struct CalcExtension;
 
 /// Calculator icon (success / error)
-pub fn calc_icon(use_emoji: bool) -> String {
+pub(crate) fn calc_icon(use_emoji: bool) -> String {
     if use_emoji { "\u{1F5A9}".into() } else { "=#".into() }  // 🖩 / =#
 }
-pub fn calc_error_icon(use_emoji: bool) -> String {
+pub(crate) fn calc_error_icon(use_emoji: bool) -> String {
     if use_emoji { "\u{274C}".into() } else { "!!".into() }  // ❌ / !!
 }
 
@@ -87,7 +87,10 @@ pub fn looks_like_math(s: &str) -> bool {
         return false;
     }
     // Must start with a digit, parenthesis, or unary minus
-    let first = s.chars().next().unwrap();
+    let first = match s.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
     if !first.is_ascii_digit() && first != '(' && first != '-' {
         return false;
     }

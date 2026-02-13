@@ -319,33 +319,30 @@ fn handle_add_item(state: &mut SettingsState) {
     }
 }
 
+/// Remove an item at `idx` from a Vec, update dirty flag, and clamp selection.
+fn remove_list_item<T>(vec: &mut Vec<T>, idx: usize, dirty: &mut bool, selected: &mut usize) {
+    if idx < vec.len() {
+        vec.remove(idx);
+        *dirty = true;
+        *selected = (*selected).min(vec.len().saturating_sub(1));
+    }
+}
+
 /// Handle deleting the selected item from a list
 fn handle_delete_item(state: &mut SettingsState) {
+    let idx = state.selected_item;
     match state.active_tab {
         SettingsTab::SearchPaths => {
-            if state.selected_item < state.config.launcher.search_paths.len() {
-                state.config.launcher.search_paths.remove(state.selected_item);
-                state.dirty = true;
-                let max = state.config.launcher.search_paths.len().saturating_sub(1);
-                state.selected_item = state.selected_item.min(max);
-            }
+            remove_list_item(
+                &mut state.config.launcher.search_paths,
+                idx, &mut state.dirty, &mut state.selected_item,
+            );
         }
         SettingsTab::IgnorePatterns => {
-            if state.selected_item < state.config.launcher.ignore_patterns.len() {
-                state
-                    .config
-                    .launcher
-                    .ignore_patterns
-                    .remove(state.selected_item);
-                state.dirty = true;
-                let max = state
-                    .config
-                    .launcher
-                    .ignore_patterns
-                    .len()
-                    .saturating_sub(1);
-                state.selected_item = state.selected_item.min(max);
-            }
+            remove_list_item(
+                &mut state.config.launcher.ignore_patterns,
+                idx, &mut state.dirty, &mut state.selected_item,
+            );
         }
         _ => {}
     }

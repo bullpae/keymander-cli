@@ -6,7 +6,7 @@ use rusqlite::Connection;
 
 /// Database wrapper (history + bookmarks + kv_store)
 pub struct Database {
-    pub conn: Connection,
+    conn: Connection,
 }
 
 impl Database {

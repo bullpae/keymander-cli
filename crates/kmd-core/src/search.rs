@@ -101,15 +101,15 @@ impl SearchEngine {
         self.kind_weights = weights;
     }
 
-    /// Load items into the search engine
+    /// Load items into the search engine (consumes the item list)
     pub fn load(&mut self, items: Vec<IndexItem>) {
-        self.all_items = items.clone();
         let injector = self.nucleo.injector();
-        for item in items {
-            injector.push(item, |item, cols| {
+        for item in &items {
+            injector.push(item.clone(), |item, cols| {
                 cols[0] = format!("{} {}", item.name, item.keywords).into();
             });
         }
+        self.all_items = items;
     }
 
     /// Search with automatic mode detection

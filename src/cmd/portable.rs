@@ -13,7 +13,11 @@ pub enum Action {
 }
 
 /// Files to migrate between system and portable modes.
-const DATA_FILES: &[&str] = &["config.toml", "kmd.db", "index.json"];
+const DATA_FILES: &[&str] = &[
+    kmd_core::CONFIG_FILENAME,
+    kmd_core::DB_FILENAME,
+    kmd_core::INDEX_CACHE_FILENAME,
+];
 
 pub fn run(action: Option<Action>) -> Result<()> {
     let action = action.unwrap_or(Action::Status);

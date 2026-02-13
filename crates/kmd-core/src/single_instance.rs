@@ -5,8 +5,8 @@
 //!   2. The *new* process creates a `kmd.quit` signal file, waits briefly, then exits
 //!   3. The *existing* process detects `kmd.quit` in its event loop and exits gracefully
 //!
-//! Combined with `windows_subsystem = "windows"` in release builds, the toggle-off
-//! path is completely invisible — no console window is ever created.
+//! Combined with immediate `ShowWindow(SW_HIDE)` on startup, the toggle-off
+//! path is nearly invisible — the console window is hidden before it renders.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 
 const LOCK_FILE: &str = "kmd.lock";
 const QUIT_SIGNAL: &str = "kmd.quit";
+
+/// How many iterations to wait for the other instance to exit.
+const TOGGLE_WAIT_ITERATIONS: u32 = 40;
+/// Milliseconds to sleep between each poll.
+const TOGGLE_WAIT_MS: u64 = 50;
 
 /// Result of attempting to acquire the single-instance lock.
 pub enum InstanceAction {
@@ -80,8 +85,8 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
                 let _ = fs::write(&quit_signal_path, "quit");
 
                 // Wait for the existing process to exit (up to ~2 seconds)
-                for _ in 0..40 {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                for _ in 0..TOGGLE_WAIT_ITERATIONS {
+                    std::thread::sleep(std::time::Duration::from_millis(TOGGLE_WAIT_MS));
                     if !is_process_alive(pid) {
                         break;
                     }

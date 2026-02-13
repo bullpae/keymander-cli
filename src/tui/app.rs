@@ -283,14 +283,9 @@ fn handle_settings_key_event(
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
             if needs_rebuild {
-                // Rebuild index with new config
+                // Rebuild index from scratch with new config
                 let use_emoji = config.general.emoji_icons;
                 state.use_emoji = use_emoji;
-                let index = crate::cmd::load_or_build_index(&config.launcher, use_emoji);
-                state.total_items = index.items.len();
-                engine.load(index.items);
-
-                // Delete old cache so it's rebuilt next time
                 let cache_path = crate::cmd::index_cache_path();
                 let _ = std::fs::remove_file(&cache_path);
                 let index = kmd_core::Index::build(&config.launcher, use_emoji);
@@ -777,13 +772,9 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
                 ItemKind::Directory => dir_icon(state.use_emoji),
                 _ => icon_for_path(&path_buf, state.use_emoji),
             };
-            // History prefix: * + first char of base icon for ASCII,
-            // or the emoji itself (already single char) for emoji mode
-            let icon = if state.use_emoji {
-                format!("*{}", base_icon.chars().next().unwrap_or('?'))
-            } else {
-                format!("*{}", &base_icon[..1])
-            };
+            // History prefix: * + first char of base icon
+            let first_char = base_icon.chars().next().unwrap_or('?');
+            let icon = format!("*{}", first_char);
             SearchResult {
                 item: kmd_core::IndexItem {
                     name: h.display,

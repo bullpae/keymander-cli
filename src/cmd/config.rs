@@ -17,8 +17,7 @@ pub fn run(action: Option<Action>) -> Result<()> {
             match config.get_value(&key) {
                 Some(value) => println!("{}", value),
                 None => {
-                    eprintln!("Unknown config key: {}", key);
-                    std::process::exit(1);
+                    return Err(color_eyre::eyre::eyre!("Unknown config key: {}", key));
                 }
             }
         }
@@ -66,7 +65,7 @@ pub fn run(action: Option<Action>) -> Result<()> {
         }
         Some(Action::Path) | None => {
             let config_dir = kmd_core::Config::default_config_dir();
-            let config_path = config_dir.join("config.toml");
+            let config_path = config_dir.join(kmd_core::CONFIG_FILENAME);
             println!("{}", config_path.display());
         }
     }

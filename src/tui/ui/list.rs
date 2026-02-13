@@ -12,14 +12,20 @@ use unicode_width::UnicodeWidthStr;
 use crate::tui::app::AppState;
 use crate::tui::theme::Theme;
 
+// ── Layout constants ──────────────────────────────────────────────────────────
+const ICON_COL_WIDTH: usize = 4;       // " XX " — space + 2-char icon + space
+const NAME_WIDTH_PCT: usize = 35;      // % of inner width for name column
+const NAME_MIN: usize = 15;
+const NAME_MAX: usize = 40;
+const KIND_COL_WIDTH: usize = 8;
+const DRILL_PATH_DISPLAY_LEN: usize = 50;
+
 /// Render the results list with scrollbar
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     // Calculate available width for dynamic column sizing
     let inner_width = area.width.saturating_sub(4) as usize; // borders + highlight symbol
-    let icon_col = 4; // " XX " — space + 2-char icon + space
-    let name_width = (inner_width * 35 / 100).max(15).min(40);
-    let kind_width = 8;
-    let path_width = inner_width.saturating_sub(name_width + kind_width + icon_col + 2);
+    let name_width = (inner_width * NAME_WIDTH_PCT / 100).max(NAME_MIN).min(NAME_MAX);
+    let path_width = inner_width.saturating_sub(name_width + KIND_COL_WIDTH + ICON_COL_WIDTH + 2);
 
     let items: Vec<ListItem> = state
         .results
@@ -35,7 +41,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
                     theme.list_normal_style(),
                 ),
                 Span::styled(
-                    format!(" {}", pad_display(&kind_tag, kind_width)),
+                    format!(" {}", pad_display(&kind_tag, KIND_COL_WIDTH)),
                     kind_style,
                 ),
                 Span::styled(
@@ -103,7 +109,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 fn build_title<'a>(state: &AppState, theme: &'a Theme) -> Line<'a> {
     if let Some(ref drill_path) = state.drill_path {
         let path_str = drill_path.display().to_string();
-        let display = truncate(&path_str, 50);
+        let display = truncate(&path_str, DRILL_PATH_DISPLAY_LEN);
         Line::from(vec![
             Span::styled(" \u{1F4C2} ", theme.list_title_style()), // 📂
             Span::styled(display, theme.list_title_style()),
