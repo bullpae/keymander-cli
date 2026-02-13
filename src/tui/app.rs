@@ -133,7 +133,13 @@ fn items_to_results(
 ///
 /// `instance_guard` is the single-instance RAII guard obtained in `main()`.
 /// The event loop checks it on every tick for external quit signals.
-pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> color_eyre::Result<()> {
+///
+/// `center_window` — if true, re-centre the console after entering the
+/// alternate screen buffer, ensuring a stable position on hotkey launch.
+pub fn run_app(
+    instance_guard: Option<kmd_core::single_instance::Guard>,
+    center_window: bool,
+) -> color_eyre::Result<()> {
 
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
@@ -175,6 +181,14 @@ pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> colo
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
+    // Final centering after the alternate screen buffer is active.
+    // The console may have changed size when entering the alternate screen,
+    // so we re-centre now with the definitive window dimensions.
+    #[cfg(windows)]
+    if center_window {
+        crate::win_console::center();
+    }
 
     let theme = Theme::default();
     let events = EventHandler::new(config.general.render_fps);

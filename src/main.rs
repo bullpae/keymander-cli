@@ -146,6 +146,12 @@ enum PortableAction {
 }
 
 fn main() -> color_eyre::Result<()> {
+    // ── 0. DPI awareness (Windows only) ──────────────────────────────────
+    // Must be set before any GetSystemMetrics / GetWindowRect calls so
+    // coordinates are in real (physical) pixels, not DPI-scaled.
+    #[cfg(windows)]
+    win_console::set_dpi_aware();
+
     // ── 1. Hide console for toggle-off path (Windows only) ───────────────
     // If launched from a shortcut/hotkey, we own the console window.
     // Hide it immediately so the toggle-off path is invisible.
@@ -168,11 +174,14 @@ fn main() -> color_eyre::Result<()> {
             }
         };
 
-    // ── 3. Show console + center + set up UTF-8 / VT processing ────────
+    // ── 3. Show console + set up UTF-8 / VT processing ──────────────────
+    // Show FIRST so the window has its final dimensions, then center.
+    // Centering a hidden window is unreliable — ShowWindow may override
+    // the position that SetWindowPos set while the window was invisible.
     #[cfg(windows)]
     if owns_console {
-        win_console::center(); // position while still hidden
-        win_console::show();   // appear already centered
+        win_console::show();
+        win_console::center();
     }
     #[cfg(windows)]
     win_console::setup();
@@ -237,7 +246,14 @@ fn main() -> color_eyre::Result<()> {
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {
-            tui::run(instance_guard)?;
+            #[cfg(windows)]
+            {
+                tui::run(instance_guard, owns_console)?;
+            }
+            #[cfg(not(windows))]
+            {
+                tui::run(instance_guard, false)?;
+            }
         }
     }
 
@@ -271,6 +287,8 @@ mod win_console {
     const SM_CYSCREEN: i32 = 1;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const PROCESS_PER_MONITOR_DPI_AWARE: u32 = 2;
 
     #[repr(C)]
     struct Rect {
@@ -278,6 +296,23 @@ mod win_console {
         top: i32,
         right: i32,
         bottom: i32,
+    }
+
+    /// Declare DPI awareness so GetSystemMetrics / GetWindowRect use
+    /// consistent (real-pixel) coordinates regardless of display scaling.
+    /// Call this at the very start of the process.
+    pub fn set_dpi_aware() {
+        // Try SetProcessDpiAwareness (Windows 8.1+) first.
+        // Fall back to SetProcessDPIAware (Vista+).
+        // SAFETY: both functions are safe to call once at startup.
+        unsafe {
+            let result = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+            if result != 0 {
+                // E_ACCESSDENIED (0x80070005) means already set — that's fine.
+                // Otherwise fall back.
+                SetProcessDPIAware();
+            }
+        }
     }
 
     /// Check if we are the only process on this console.
@@ -315,6 +350,15 @@ mod win_console {
     }
 
     /// Center the console window on the primary monitor.
+    ///
+    /// This reads the **current** window dimensions and places the window
+    /// at the exact centre of the primary display.  Call this **after**
+    /// `show()` so that the window has its final size — calling it on a
+    /// hidden window may yield stale or zero-sized rects, causing Windows
+    /// to ignore the position change.
+    ///
+    /// Uses `SWP_FRAMECHANGED` to force the window manager to apply the
+    /// new position immediately.
     pub fn center() {
         // SAFETY: All Win32 calls are guarded by null/zero checks.
         // GetWindowRect writes into a stack-allocated Rect.
@@ -338,6 +382,12 @@ mod win_console {
 
             let win_w = rc.right - rc.left;
             let win_h = rc.bottom - rc.top;
+
+            // Skip if we got a degenerate rect (hidden/minimised window).
+            if win_w <= 0 || win_h <= 0 {
+                return;
+            }
+
             let x = (screen_w - win_w) / 2;
             let y = (screen_h - win_h) / 2;
 
@@ -348,7 +398,7 @@ mod win_console {
                 y,
                 0,
                 0,
-                SWP_NOSIZE | SWP_NOZORDER,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
     }
@@ -397,5 +447,11 @@ mod win_console {
             cy: i32,
             flags: u32,
         ) -> i32;
+        fn SetProcessDPIAware() -> i32;
+    }
+
+    #[link(name = "shcore")]
+    unsafe extern "system" {
+        fn SetProcessDpiAwareness(value: u32) -> i32;
     }
 }
