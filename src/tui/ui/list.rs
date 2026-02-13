@@ -105,13 +105,13 @@ fn build_title<'a>(state: &AppState, theme: &'a Theme) -> Line<'a> {
         let path_str = drill_path.display().to_string();
         let display = truncate(&path_str, 50);
         Line::from(vec![
-            Span::styled(" >> ", theme.list_title_style()),
+            Span::styled(" \u{1F4C2} ", theme.list_title_style()), // 📂
             Span::styled(display, theme.list_title_style()),
             Span::raw(" "),
         ])
     } else if state.query.is_empty() && state.drill_path.is_none() && !state.results.is_empty() {
         Line::from(vec![
-            Span::styled(" * ", theme.list_title_style()),
+            Span::styled(" \u{1F4C1} ", theme.list_title_style()), // 📁
             Span::styled("Recent", theme.list_title_style()),
             Span::raw(" "),
         ])

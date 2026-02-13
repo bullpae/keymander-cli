@@ -299,12 +299,12 @@ fn handle_settings_key_event(
                 engine.load(index.items);
 
                 state.status_message = Some(format!(
-                    "[ok] Settings saved. Index rebuilt ({} items)",
+                    "\u{2705} Settings saved. Index rebuilt ({} items)",
                     state.total_items
                 ));
             } else {
                 state.status_message =
-                    Some("[ok] Settings saved".to_string());
+                    Some("\u{2705} Settings saved".to_string());
             }
 
             // Close modal after save
@@ -495,7 +495,7 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("Copied: {}", result.item.path));
+            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path)); // ✅
         }
         return;
     }
@@ -544,10 +544,10 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         }
         action::ActionResult::NeedsConfirmation(name) => {
             state.status_message =
-                Some(format!("[!] Confirmation needed: {}", name));
+                Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name)); // ⚠️
         }
         action::ActionResult::Error(e) => {
-            state.status_message = Some(format!("[err] {}", e));
+            state.status_message = Some(format!("\u{274C} {}", e)); // ❌
         }
     }
 }

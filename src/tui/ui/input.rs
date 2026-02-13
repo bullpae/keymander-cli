@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 
     // Title — brand identity
     let title = Line::from(vec![
-        Span::styled(" kmd ", theme.input_title_style()),
+        Span::styled(" \u{2805}\u{280D}\u{2819} ", theme.input_title_style()), // ⠅⠍⠙
     ]);
 
     let input = Paragraph::new(input_line).block(
