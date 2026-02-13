@@ -56,22 +56,8 @@ impl Default for GeneralConfig {
             preview_width_percent: 40,
             theme: "default".to_string(),
             editor: None,
-            emoji_icons: detect_emoji_support(),
+            emoji_icons: true,
         }
-    }
-}
-
-/// Auto-detect whether the terminal likely supports emoji.
-///
-/// On Windows, checks for the WT_SESSION environment variable which is set
-/// by Windows Terminal.  Now that we use a real console (no AllocConsole),
-/// this accurately reflects whether we're in Windows Terminal or conhost.
-fn detect_emoji_support() -> bool {
-    if cfg!(windows) {
-        std::env::var("WT_SESSION").is_ok()
-    } else {
-        // macOS and modern Linux terminals generally support emoji
-        true
     }
 }
 

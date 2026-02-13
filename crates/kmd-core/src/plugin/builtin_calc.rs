@@ -26,7 +26,7 @@ impl Extension for CalcExtension {
     }
 
     fn search(&self, query: &str) -> Vec<IndexItem> {
-        self.search_with_emoji(query, false)
+        self.search_with_emoji(query, true)
     }
 
     fn execute(&self, item: &IndexItem) -> ExtensionAction {

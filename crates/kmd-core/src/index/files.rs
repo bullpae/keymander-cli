@@ -79,7 +79,7 @@ impl Default for ProviderConfig {
             everything_path: None,
             scan_drives: true,
             drive_scan_depth: 3,
-            use_emoji: false,
+            use_emoji: true,
         }
     }
 }
