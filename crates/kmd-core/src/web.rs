@@ -6,7 +6,10 @@ use crate::index::{IndexItem, ItemKind, Source};
 pub struct WebService {
     pub name: &'static str,
     pub prefixes: &'static [&'static str],
+    /// ASCII icon (2-char, for legacy terminals)
     pub icon: &'static str,
+    /// Emoji icon (for modern terminals)
+    pub emoji_icon: &'static str,
     pub url_template: &'static str,
     pub description: &'static str,
 }
@@ -17,6 +20,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Google",
         prefixes: &["@g", "@google"],
         icon: "Gg",
+        emoji_icon: "\u{1F50D}",  // 🔍
         url_template: "https://google.com/search?q={query}",
         description: "Search Google",
     },
@@ -24,6 +28,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "YouTube",
         prefixes: &["@yt", "@youtube"],
         icon: "Yt",
+        emoji_icon: "\u{25B6}\u{FE0F}",  // ▶️
         url_template: "https://youtube.com/results?search_query={query}",
         description: "Search YouTube",
     },
@@ -31,6 +36,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "GitHub",
         prefixes: &["@gh", "@github"],
         icon: "Gh",
+        emoji_icon: "\u{1F431}",  // 🐱
         url_template: "https://github.com/search?q={query}",
         description: "Search GitHub",
     },
@@ -38,6 +44,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "StackOverflow",
         prefixes: &["@so", "@stackoverflow"],
         icon: "So",
+        emoji_icon: "\u{1F4DA}",  // 📚
         url_template: "https://stackoverflow.com/search?q={query}",
         description: "Search StackOverflow",
     },
@@ -45,6 +52,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "npm",
         prefixes: &["@npm"],
         icon: "Np",
+        emoji_icon: "\u{1F4E6}",  // 📦
         url_template: "https://www.npmjs.com/search?q={query}",
         description: "Search npm packages",
     },
@@ -52,6 +60,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "crates.io",
         prefixes: &["@crates", "@cargo"],
         icon: "Cr",
+        emoji_icon: "\u{1F4E6}",  // 📦
         url_template: "https://crates.io/search?q={query}",
         description: "Search Rust crates",
     },
@@ -59,6 +68,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Wikipedia",
         prefixes: &["@w", "@wiki"],
         icon: "Wi",
+        emoji_icon: "\u{1F4D6}",  // 📖
         url_template: "https://en.wikipedia.org/wiki/Special:Search/{query}",
         description: "Search Wikipedia",
     },
@@ -66,6 +76,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "X (Twitter)",
         prefixes: &["@x", "@twitter"],
         icon: " X",
+        emoji_icon: "\u{1D54F}",  // 𝕏
         url_template: "https://x.com/search?q={query}",
         description: "Search X (Twitter)",
     },
@@ -73,6 +84,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Google Maps",
         prefixes: &["@map", "@maps"],
         icon: "Mp",
+        emoji_icon: "\u{1F5FA}",  // 🗺
         url_template: "https://maps.google.com/maps?q={query}",
         description: "Search Google Maps",
     },
@@ -80,6 +92,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Naver Dict",
         prefixes: &["@dict", "@naver"],
         icon: "Nv",
+        emoji_icon: "\u{1F4D7}",  // 📗
         url_template: "https://dict.naver.com/search?query={query}",
         description: "Search Naver Dictionary",
     },
@@ -88,6 +101,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Perplexity",
         prefixes: &["@ai", "@pplx", "@perplexity"],
         icon: "Ai",
+        emoji_icon: "\u{1F916}",  // 🤖
         url_template: "https://www.perplexity.ai/search?q={query}",
         description: "Ask Perplexity AI",
     },
@@ -95,6 +109,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "ChatGPT",
         prefixes: &["@gpt", "@chatgpt"],
         icon: "Gp",
+        emoji_icon: "\u{1F4AC}",  // 💬
         url_template: "https://chatgpt.com/?q={query}",
         description: "Ask ChatGPT",
     },
@@ -102,6 +117,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Claude",
         prefixes: &["@claude"],
         icon: "Cl",
+        emoji_icon: "\u{2728}",  // ✨
         url_template: "https://claude.ai/new?q={query}",
         description: "Ask Claude AI",
     },
@@ -109,10 +125,18 @@ pub const WEB_SERVICES: &[WebService] = &[
         name: "Gemini",
         prefixes: &["@gemini"],
         icon: "Gm",
+        emoji_icon: "\u{264A}",  // ♊
         url_template: "https://gemini.google.com/app?q={query}",
         description: "Ask Google Gemini",
     },
 ];
+
+impl WebService {
+    /// Pick the right icon based on emoji support.
+    pub fn pick_icon(&self, use_emoji: bool) -> &str {
+        if use_emoji { self.emoji_icon } else { self.icon }
+    }
+}
 
 /// Parse a @prefix query → (service, query_text)
 pub fn parse_web_query(input: &str) -> Option<(&'static WebService, String)> {
@@ -140,7 +164,7 @@ pub fn build_search_url(service: &WebService, query: &str) -> String {
 }
 
 /// List all web services as IndexItems (for @ prefix browsing)
-pub fn list_services_as_items(filter: &str) -> Vec<IndexItem> {
+pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
     let filter_lower = filter.to_lowercase();
 
     WEB_SERVICES
@@ -158,7 +182,7 @@ pub fn list_services_as_items(filter: &str) -> Vec<IndexItem> {
                 path: s.url_template.to_string(),
                 kind: ItemKind::WebSearch,
                 source: Source::Plugin,
-                icon: s.icon.to_string(),
+                icon: s.pick_icon(use_emoji).to_string(),
                 keywords: format!(
                     "{} {}",
                     s.prefixes.join(" "),
@@ -170,7 +194,7 @@ pub fn list_services_as_items(filter: &str) -> Vec<IndexItem> {
 }
 
 /// Create a search result item for a specific web query
-pub fn search_result_item(service: &WebService, query: &str) -> IndexItem {
+pub fn search_result_item(service: &WebService, query: &str, use_emoji: bool) -> IndexItem {
     let url = build_search_url(service, query);
     let name = format!("{}: \"{}\"", service.name, query);
     IndexItem {
@@ -178,7 +202,7 @@ pub fn search_result_item(service: &WebService, query: &str) -> IndexItem {
         path: url.clone(),
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
-        icon: service.icon.to_string(),
+        icon: service.pick_icon(use_emoji).to_string(),
         keywords: url,
     }
 }

@@ -61,6 +61,8 @@ pub struct ProviderConfig {
     pub scan_drives: bool,
     /// Max depth when scanning drive roots
     pub drive_scan_depth: usize,
+    /// Use emoji icons (true = emoji, false = ASCII 2-char)
+    pub use_emoji: bool,
 }
 
 impl Default for ProviderConfig {
@@ -77,6 +79,7 @@ impl Default for ProviderConfig {
             everything_path: None,
             scan_drives: true,
             drive_scan_depth: 3,
+            use_emoji: false,
         }
     }
 }
@@ -215,9 +218,9 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
                 },
                 source: Source::FileProvider,
                 icon: if is_dir {
-                    ">>".to_string()
+                    dir_icon(config.use_emoji)
                 } else {
-                    icon_for_path(path)
+                    icon_for_path(path, config.use_emoji)
                 },
                 keywords: path_str,
             });
@@ -316,6 +319,7 @@ pub fn collect_files(
         everything_path: config.everything_path.clone(),
         scan_drives: config.scan_drives,
         drive_scan_depth: config.drive_scan_depth,
+        use_emoji: config.use_emoji,
     };
 
     tracing::info!("File provider: {} (quota: {} files)", kind, remaining);
@@ -409,9 +413,9 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
                 },
                 source: Source::FileProvider,
                 icon: if is_dir {
-                    ">>".to_string()
+                    dir_icon(config.use_emoji)
                 } else {
-                    icon_for_path(path)
+                    icon_for_path(path, config.use_emoji)
                 },
                 keywords: path_str,
             });
@@ -478,7 +482,7 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
 
         match output {
             Ok(output) => {
-                parse_line_output_into(&output.stdout, &mut all_items, config.max_results);
+                parse_line_output_into(&output.stdout, &mut all_items, config.max_results, config.use_emoji);
             }
             Err(e) => {
                 tracing::warn!("fd failed for {}: {}", dir.display(), e);
@@ -529,7 +533,7 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
     match cmd.output() {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
             tracing::info!("Everything provider: {} files found", items.len());
             items
         }
@@ -558,7 +562,7 @@ fn collect_spotlight(config: &ProviderConfig) -> Vec<IndexItem> {
     {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
             tracing::info!("Spotlight provider: {} files found", items.len());
             items
         }
@@ -593,7 +597,7 @@ fn collect_locate(config: &ProviderConfig) -> Vec<IndexItem> {
     {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results);
+            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
             tracing::info!("locate provider: {} files found", items.len());
             items
         }
@@ -661,7 +665,7 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
 
         match cmd.output() {
             Ok(output) => {
-                parse_line_output_into(&output.stdout, &mut items, config.max_results);
+                parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
             }
             Err(e) => {
                 tracing::warn!("PowerShell scan failed for {}: {}", root.display(), e);
@@ -700,7 +704,7 @@ fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool
 }
 
 /// Parse line-by-line command output into IndexItems
-fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize) {
+fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize, use_emoji: bool) {
     let reader = BufReader::new(stdout);
     for line in reader.lines().map_while(Result::ok) {
         let line = line.trim().to_string();
@@ -726,9 +730,9 @@ fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize)
             },
             source: Source::FileProvider,
             icon: if is_dir {
-                ">>".to_string()
+                dir_icon(use_emoji)
             } else {
-                icon_for_path(&path)
+                icon_for_path(&path, use_emoji)
             },
             keywords: line,
         });
@@ -805,65 +809,96 @@ fn find_everything_cli(configured: Option<&PathBuf>) -> Option<PathBuf> {
 /// Icon width in display columns — all icons are exactly this wide.
 pub const ICON_WIDTH: usize = 2;
 
-pub fn icon_for_path(path: &Path) -> String {
+/// Get an icon for a file path.  When `use_emoji` is true, rich emoji icons
+/// are returned (requires a modern terminal like Windows Terminal, iTerm2,
+/// kitty).  When false, simple 2-char ASCII labels are used that work
+/// everywhere including the Windows legacy console (conhost).
+pub fn icon_for_path(path: &Path, use_emoji: bool) -> String {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
 
-    // All icons are exactly 2 display columns (1 fullwidth or 2 ASCII chars).
-    // Using simple Unicode symbols that render correctly in ALL terminals
-    // including Windows legacy console (conhost).
-    match ext.as_str() {
-        // Programming
-        "rs" => "Rs".to_string(),
-        "py" | "pyw" => "Py".to_string(),
-        "js" | "ts" | "jsx" | "tsx" | "mjs" => "Js".to_string(),
-        "go" => "Go".to_string(),
-        "java" | "kt" | "kts" => "Jv".to_string(),
-        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "C+".to_string(),
-        "cs" => "C#".to_string(),
-        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "$>".to_string(),
-
-        // Documents — Text
-        "md" | "txt" | "rtf" | "log" => "Tx".to_string(),
-        "pdf" => "Pd".to_string(),
-
-        // Documents — Korean / Office
-        "hwp" | "hwpx" => "Hw".to_string(),
-        "doc" | "docx" | "odt" => "Dc".to_string(),
-        "xls" | "xlsx" | "ods" | "csv" => "Xl".to_string(),
-        "ppt" | "pptx" | "odp" => "Pt".to_string(),
-
-        // Data / Config
-        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "{}".to_string(),
-        "sql" | "db" | "sqlite" | "sqlite3" => "Db".to_string(),
-        "html" | "htm" | "css" | "scss" | "less" => "<>".to_string(),
-
-        // Images
-        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => {
-            "Im".to_string()
-        }
-
-        // Audio
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "Au".to_string(),
-
-        // Video
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "Vd".to_string(),
-
-        // Archives
-        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "Pk".to_string(),
-
-        // Executables / Installers
-        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "Ex".to_string(),
-
-        // Fonts
-        "ttf" | "otf" | "woff" | "woff2" => "Ft".to_string(),
-
-        // Directory
-        "" if path.is_dir() => ">>".to_string(),
-
-        _ => "--".to_string(),
+    if use_emoji {
+        icon_emoji(&ext, path)
+    } else {
+        icon_ascii(&ext, path)
     }
+}
+
+// ── Emoji icon set (modern terminals) ────────────────────────────────────────
+
+fn icon_emoji(ext: &str, path: &Path) -> String {
+    match ext {
+        // Programming
+        "rs" => "\u{1F980}".into(),                                    // 🦀
+        "py" | "pyw" => "\u{1F40D}".into(),                           // 🐍
+        "js" | "ts" | "jsx" | "tsx" | "mjs" => "\u{1F4DC}".into(),    // 📜
+        "go" => "\u{1F535}".into(),                                    // 🔵
+        "java" | "kt" | "kts" => "\u{2615}".into(),                   // ☕
+        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "\u{2699}".into(), // ⚙
+        "cs" => "\u{1F7E3}".into(),                                    // 🟣
+        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "\u{1F41A}".into(), // 🐚
+        // Documents
+        "md" | "txt" | "rtf" | "log" => "\u{1F4DD}".into(),           // 📝
+        "pdf" => "\u{1F4D5}".into(),                                   // 📕
+        "hwp" | "hwpx" => "\u{1F4D8}".into(),                         // 📘
+        "doc" | "docx" | "odt" => "\u{1F4C4}".into(),                 // 📄
+        "xls" | "xlsx" | "ods" | "csv" => "\u{1F4CA}".into(),         // 📊
+        "ppt" | "pptx" | "odp" => "\u{1F4CA}".into(),                 // 📊
+        // Data / Config
+        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "\u{1F4CB}".into(), // 📋
+        "sql" | "db" | "sqlite" | "sqlite3" => "\u{1F5C3}".into(),    // 🗃
+        "html" | "htm" | "css" | "scss" | "less" => "\u{1F310}".into(), // 🌐
+        // Media
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => "\u{1F5BC}".into(), // 🖼
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "\u{1F3B5}".into(), // 🎵
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "\u{1F3AC}".into(), // 🎬
+        // Archives / Executables
+        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "\u{1F4E6}".into(), // 📦
+        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "\u{1F4E6}".into(), // 📦
+        // Fonts
+        "ttf" | "otf" | "woff" | "woff2" => "\u{1F524}".into(),       // 🔤
+        // Directory
+        "" if path.is_dir() => "\u{1F4C1}".into(),                    // 📁
+        _ => "\u{1F4C4}".into(),                                       // 📄
+    }
+}
+
+// ── ASCII icon set (legacy terminals) ────────────────────────────────────────
+
+fn icon_ascii(ext: &str, path: &Path) -> String {
+    match ext {
+        "rs" => "Rs".into(),
+        "py" | "pyw" => "Py".into(),
+        "js" | "ts" | "jsx" | "tsx" | "mjs" => "Js".into(),
+        "go" => "Go".into(),
+        "java" | "kt" | "kts" => "Jv".into(),
+        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => "C+".into(),
+        "cs" => "C#".into(),
+        "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" => "$>".into(),
+        "md" | "txt" | "rtf" | "log" => "Tx".into(),
+        "pdf" => "Pd".into(),
+        "hwp" | "hwpx" => "Hw".into(),
+        "doc" | "docx" | "odt" => "Dc".into(),
+        "xls" | "xlsx" | "ods" | "csv" => "Xl".into(),
+        "ppt" | "pptx" | "odp" => "Pt".into(),
+        "json" | "yaml" | "yml" | "toml" | "xml" | "ini" | "conf" => "{}".into(),
+        "sql" | "db" | "sqlite" | "sqlite3" => "Db".into(),
+        "html" | "htm" | "css" | "scss" | "less" => "<>".into(),
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" => "Im".into(),
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "Au".into(),
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" => "Vd".into(),
+        "zip" | "tar" | "gz" | "7z" | "rar" | "bz2" | "xz" | "zst" => "Pk".into(),
+        "exe" | "msi" | "appimage" | "deb" | "rpm" | "dmg" => "Ex".into(),
+        "ttf" | "otf" | "woff" | "woff2" => "Ft".into(),
+        "" if path.is_dir() => ">>".into(),
+        _ => "--".into(),
+    }
+}
+
+/// Directory icon appropriate for the given mode.
+pub fn dir_icon(use_emoji: bool) -> String {
+    if use_emoji { "\u{1F4C1}".into() } else { ">>".into() }
 }

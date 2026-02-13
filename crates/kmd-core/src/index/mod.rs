@@ -90,23 +90,23 @@ impl Index {
     /// 2. Priority directories (Desktop, Documents, Downloads) — guaranteed
     /// 3. General file provider scan — fills remaining quota
     /// 4. Deduplicate by path
-    pub fn build(config: &crate::config::LauncherConfig) -> Self {
+    pub fn build(config: &crate::config::LauncherConfig, use_emoji: bool) -> Self {
         use std::collections::HashSet;
 
         let mut items = Vec::new();
 
         // 1. PATH executables (always included)
-        let executables = path::collect_executables();
+        let executables = path::collect_executables(use_emoji);
         tracing::info!("PATH executables: {} items", executables.len());
         items.extend(executables);
 
         // 2. System commands (always included)
-        let sys_cmds = system_commands::collect_system_commands();
+        let sys_cmds = system_commands::collect_system_commands(use_emoji);
         tracing::info!("System commands: {} items", sys_cmds.len());
         items.extend(sys_cmds);
 
         // 3. OS applications
-        let apps = apps::collect_apps();
+        let apps = apps::collect_apps(use_emoji);
         tracing::info!("OS applications: {} items", apps.len());
         items.extend(apps);
 
@@ -119,6 +119,7 @@ impl Index {
             everything_path: config.everything_path.clone(),
             scan_drives: config.scan_drives,
             drive_scan_depth: config.drive_scan_depth,
+            use_emoji,
         };
 
         let priority_files = files::collect_priority_files(&provider_config);

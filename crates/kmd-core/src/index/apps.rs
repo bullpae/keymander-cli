@@ -7,23 +7,28 @@
 
 use super::{IndexItem, ItemKind, Source};
 
+/// Icon for applications
+fn app_icon(use_emoji: bool) -> String {
+    if use_emoji { "\u{1F4E6}".into() } else { "Ap".into() }  // 📦 / Ap
+}
+
 /// Collect installed applications from OS-specific locations
-pub fn collect_apps() -> Vec<IndexItem> {
+pub fn collect_apps(use_emoji: bool) -> Vec<IndexItem> {
     let mut items = Vec::new();
 
     #[cfg(target_os = "windows")]
     {
-        items.extend(collect_windows_apps());
+        items.extend(collect_windows_apps(use_emoji));
     }
 
     #[cfg(target_os = "macos")]
     {
-        items.extend(collect_macos_apps());
+        items.extend(collect_macos_apps(use_emoji));
     }
 
     #[cfg(target_os = "linux")]
     {
-        items.extend(collect_linux_apps());
+        items.extend(collect_linux_apps(use_emoji));
     }
 
     items
@@ -31,7 +36,7 @@ pub fn collect_apps() -> Vec<IndexItem> {
 
 /// Windows: Scan Start Menu directories for .lnk files
 #[cfg(target_os = "windows")]
-fn collect_windows_apps() -> Vec<IndexItem> {
+fn collect_windows_apps(use_emoji: bool) -> Vec<IndexItem> {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -62,7 +67,7 @@ fn collect_windows_apps() -> Vec<IndexItem> {
     }
 
     for dir in dirs {
-        scan_lnk_dir(&dir, &mut items, &mut seen);
+        scan_lnk_dir(&dir, &mut items, &mut seen, use_emoji);
     }
 
     items
@@ -73,6 +78,7 @@ fn scan_lnk_dir(
     dir: &std::path::Path,
     items: &mut Vec<IndexItem>,
     seen: &mut std::collections::HashSet<String>,
+    use_emoji: bool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -81,7 +87,7 @@ fn scan_lnk_dir(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_lnk_dir(&path, items, seen);
+            scan_lnk_dir(&path, items, seen, use_emoji);
             continue;
         }
 
@@ -116,7 +122,7 @@ fn scan_lnk_dir(
             path: full_path.clone(),
             kind: ItemKind::App,
             source: Source::Apps,
-            icon: "Ap".to_string(),
+            icon: app_icon(use_emoji),
             keywords: full_path,
         });
     }
@@ -124,7 +130,7 @@ fn scan_lnk_dir(
 
 /// macOS: Scan /Applications for .app bundles
 #[cfg(target_os = "macos")]
-fn collect_macos_apps() -> Vec<IndexItem> {
+fn collect_macos_apps(use_emoji: bool) -> Vec<IndexItem> {
     use std::path::PathBuf;
 
     let mut items = Vec::new();
@@ -169,7 +175,7 @@ fn collect_macos_apps() -> Vec<IndexItem> {
                 path: full_path.clone(),
                 kind: ItemKind::App,
                 source: Source::Apps,
-                icon: "Ap".to_string(),
+                icon: app_icon(use_emoji),
                 keywords: full_path,
             });
         }
@@ -180,7 +186,7 @@ fn collect_macos_apps() -> Vec<IndexItem> {
 
 /// Linux: Parse .desktop files from XDG data directories
 #[cfg(target_os = "linux")]
-fn collect_linux_apps() -> Vec<IndexItem> {
+fn collect_linux_apps(use_emoji: bool) -> Vec<IndexItem> {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -217,7 +223,7 @@ fn collect_linux_apps() -> Vec<IndexItem> {
                 continue;
             }
 
-            if let Some(item) = parse_desktop_file(&path, &mut seen) {
+            if let Some(item) = parse_desktop_file(&path, &mut seen, use_emoji) {
                 items.push(item);
             }
         }
@@ -231,6 +237,7 @@ fn collect_linux_apps() -> Vec<IndexItem> {
 fn parse_desktop_file(
     path: &std::path::Path,
     seen: &mut std::collections::HashSet<String>,
+    use_emoji: bool,
 ) -> Option<IndexItem> {
     let content = std::fs::read_to_string(path).ok()?;
 
@@ -284,7 +291,7 @@ fn parse_desktop_file(
         path: exec.clone(),
         kind: ItemKind::App,
         source: Source::Apps,
-        icon: "\u{1F4E6}".to_string(), // 📦
+        icon: app_icon(use_emoji),
         keywords: format!("{} {}", name, exec),
     })
 }

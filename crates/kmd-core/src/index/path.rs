@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use super::{IndexItem, ItemKind, Source};
 
 /// Collect all executables from PATH
-pub fn collect_executables() -> Vec<IndexItem> {
+pub fn collect_executables(use_emoji: bool) -> Vec<IndexItem> {
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
@@ -58,7 +58,7 @@ pub fn collect_executables() -> Vec<IndexItem> {
                     path: full_path.clone(),
                     kind: ItemKind::Executable,
                     source: Source::Path,
-                    icon: "Ex".to_string(),
+                    icon: if use_emoji { "\u{26A1}".to_string() } else { "Ex".to_string() },
                     keywords: full_path,
                 });
             }

@@ -4,13 +4,13 @@ use color_eyre::Result;
 
 pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
-    let index = super::load_or_build_index(&config.launcher);
+    let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
 
     // Check for web query (@prefix)
     if let Some((service, web_query)) = kmd_core::web::parse_web_query(query) {
         if web_query.is_empty() {
             // List services
-            let items = kmd_core::web::list_services_as_items("");
+            let items = kmd_core::web::list_services_as_items("", config.general.emoji_icons);
             if json {
                 print_items_json(&items);
             } else {
@@ -19,7 +19,7 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
                 }
             }
         } else {
-            let item = kmd_core::web::search_result_item(service, &web_query);
+            let item = kmd_core::web::search_result_item(service, &web_query, config.general.emoji_icons);
             let url = kmd_core::web::build_search_url(service, &web_query);
             if json {
                 print_items_json(&[item]);

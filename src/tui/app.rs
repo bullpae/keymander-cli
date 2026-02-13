@@ -13,7 +13,7 @@ use ratatui::Terminal;
 
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
-use kmd_core::index::{files::icon_for_path, ItemKind, Source};
+use kmd_core::index::{files::{icon_for_path, dir_icon}, ItemKind, Source};
 use kmd_core::plugin::builtin_calc;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
@@ -85,6 +85,8 @@ pub struct AppState {
     pub settings: Option<SettingsState>,
     /// Portable mode indicator
     pub is_portable: bool,
+    /// Use emoji icons (mirrors config.general.emoji_icons)
+    pub use_emoji: bool,
 }
 
 /// Saved state for returning from a folder drill-down
@@ -133,7 +135,7 @@ pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> colo
 
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
-    let index = crate::cmd::load_or_build_index(&config.launcher);
+    let index = crate::cmd::load_or_build_index(&config.launcher, config.general.emoji_icons);
     let db = crate::cmd::open_db().ok();
 
     // Initialize search engine with kind weights
@@ -160,6 +162,7 @@ pub fn run_app(instance_guard: Option<kmd_core::single_instance::Guard>) -> colo
         status_message: None,
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
+        use_emoji: config.general.emoji_icons,
     };
 
     // Setup terminal
@@ -281,14 +284,16 @@ fn handle_settings_key_event(
 
             if needs_rebuild {
                 // Rebuild index with new config
-                let index = crate::cmd::load_or_build_index(&config.launcher);
+                let use_emoji = config.general.emoji_icons;
+                state.use_emoji = use_emoji;
+                let index = crate::cmd::load_or_build_index(&config.launcher, use_emoji);
                 state.total_items = index.items.len();
                 engine.load(index.items);
 
                 // Delete old cache so it's rebuilt next time
                 let cache_path = crate::cmd::index_cache_path();
                 let _ = std::fs::remove_file(&cache_path);
-                let index = kmd_core::Index::build(&config.launcher);
+                let index = kmd_core::Index::build(&config.launcher, use_emoji);
                 let _ = kmd_core::index::store::save_index(&index, &cache_path);
                 state.total_items = index.items.len();
                 engine.load(index.items);
@@ -584,7 +589,8 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
     state.selected_index = 0;
 
     if let Some(ref path) = state.drill_path {
-        state.results = list_directory_contents(path);
+        let emoji = state.use_emoji;
+        state.results = list_directory_contents(path, emoji);
     } else if let Some(db) = db {
         load_history_into_results(state, db);
     }
@@ -592,16 +598,17 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
 
 /// Handle @prefix web service queries
 fn handle_web_query(query: &str, state: &mut AppState) {
+    let emoji = state.use_emoji;
     if let Some((service, q)) = web::parse_web_query(query) {
         if q.is_empty() {
-            state.results = items_to_results(web::list_services_as_items(""), SCORE_WEB_LIST);
+            state.results = items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
         } else {
-            let item = web::search_result_item(service, &q);
+            let item = web::search_result_item(service, &q, emoji);
             state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
         }
     } else {
         let filter = query.trim_start_matches('@');
-        state.results = items_to_results(web::list_services_as_items(filter), SCORE_WEB_LIST);
+        state.results = items_to_results(web::list_services_as_items(filter, emoji), SCORE_WEB_LIST);
     }
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -611,8 +618,7 @@ fn handle_web_query(query: &str, state: &mut AppState) {
 fn handle_calc_query(query: &str, state: &mut AppState) {
     let expr = query.strip_prefix(":calc").unwrap_or("").trim();
     let calc = builtin_calc::CalcExtension;
-    let items =
-        <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, expr);
+    let items = calc.search_with_emoji(expr, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }
@@ -630,8 +636,7 @@ fn handle_main_search(
     // Inline calculator: prepend result if query looks like math
     if builtin_calc::looks_like_math(query) {
         let calc = builtin_calc::CalcExtension;
-        let calc_items =
-            <builtin_calc::CalcExtension as kmd_core::plugin::Extension>::search(&calc, query);
+        let calc_items = calc.search_with_emoji(query, state.use_emoji);
         let calc_results = items_to_results(calc_items, SCORE_CALC_INLINE);
         results.splice(0..0, calc_results);
     }
@@ -671,7 +676,7 @@ fn drill_into_folder(state: &mut AppState) {
         parent_drill_path: state.drill_path.clone(),
     });
 
-    state.results = list_directory_contents(&dir_path);
+    state.results = list_directory_contents(&dir_path, state.use_emoji);
     state.selected_index = 0;
     state.drill_path = Some(dir_path);
     state.search_mode = SearchMode::Contains;
@@ -690,7 +695,7 @@ fn drill_back(state: &mut AppState) {
 }
 
 /// List contents of a directory as SearchResults, sorted: directories first, then files
-fn list_directory_contents(dir: &Path) -> Vec<SearchResult> {
+fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
@@ -721,9 +726,9 @@ fn list_directory_contents(dir: &Path) -> Vec<SearchResult> {
             },
             source: Source::FileProvider,
             icon: if is_dir {
-                ">>".to_string()
+                dir_icon(use_emoji)
             } else {
-                icon_for_path(&path)
+                icon_for_path(&path, use_emoji)
             },
             keywords: String::new(),
         };
@@ -769,10 +774,16 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
             };
             let path_buf = PathBuf::from(&h.value);
             let base_icon = match kind {
-                ItemKind::Directory => ">>".to_string(),
-                _ => icon_for_path(&path_buf),
+                ItemKind::Directory => dir_icon(state.use_emoji),
+                _ => icon_for_path(&path_buf, state.use_emoji),
             };
-            let icon = format!("*{}", &base_icon[..1]); // * prefix for history items
+            // History prefix: * + first char of base icon for ASCII,
+            // or the emoji itself (already single char) for emoji mode
+            let icon = if state.use_emoji {
+                format!("*{}", base_icon.chars().next().unwrap_or('?'))
+            } else {
+                format!("*{}", &base_icon[..1])
+            };
             SearchResult {
                 item: kmd_core::IndexItem {
                     name: h.display,

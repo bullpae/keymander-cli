@@ -38,7 +38,7 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
 
         println!("Building index...");
         let start = std::time::Instant::now();
-        let index = kmd_core::Index::build(&config.launcher);
+        let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
         let elapsed = start.elapsed();
 
         // Save to cache

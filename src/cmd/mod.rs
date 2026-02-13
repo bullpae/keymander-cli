@@ -19,6 +19,7 @@ const DB_FILENAME: &str = "kmd.db";
 /// Auto-rebuilds when the cache version doesn't match the current binary.
 pub fn load_or_build_index(
     launcher_config: &kmd_core::config::LauncherConfig,
+    use_emoji: bool,
 ) -> kmd_core::Index {
     let cache_path = index_cache_path();
     let expected_version = kmd_core::Index::current_version();
@@ -38,7 +39,7 @@ pub fn load_or_build_index(
     }
 
     // Build fresh index
-    let index = kmd_core::Index::build(launcher_config);
+    let index = kmd_core::Index::build(launcher_config, use_emoji);
 
     // Save to cache
     if let Err(e) = kmd_core::index::store::save_index(&index, &cache_path) {

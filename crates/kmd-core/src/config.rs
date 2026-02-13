@@ -43,6 +43,9 @@ pub struct GeneralConfig {
     pub theme: String,
     /// External editor command
     pub editor: Option<String>,
+    /// Use emoji icons (true = emoji, false = ASCII 2-char icons)
+    /// Set to false for legacy terminals (conhost/cmd.exe)
+    pub emoji_icons: bool,
 }
 
 impl Default for GeneralConfig {
@@ -53,7 +56,20 @@ impl Default for GeneralConfig {
             preview_width_percent: 40,
             theme: "default".to_string(),
             editor: None,
+            emoji_icons: detect_emoji_support(),
         }
+    }
+}
+
+/// Auto-detect whether the terminal likely supports emoji.
+/// Windows Terminal sets WT_SESSION; legacy conhost does not.
+fn detect_emoji_support() -> bool {
+    if cfg!(windows) {
+        // Windows Terminal always sets WT_SESSION
+        std::env::var("WT_SESSION").is_ok()
+    } else {
+        // macOS and modern Linux terminals generally support emoji
+        true
     }
 }
 

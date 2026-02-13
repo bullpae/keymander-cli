@@ -42,7 +42,7 @@ pub fn run(target: &str) -> Result<()> {
     }
 
     // Search for the target
-    let index = super::load_or_build_index(&config.launcher);
+    let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
     let mut engine = kmd_core::SearchEngine::new();
     engine.load(index.items);
 

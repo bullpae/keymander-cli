@@ -8,6 +8,14 @@ use super::{Extension, ExtensionAction};
 
 pub struct CalcExtension;
 
+/// Calculator icon (success / error)
+pub fn calc_icon(use_emoji: bool) -> String {
+    if use_emoji { "\u{1F5A9}".into() } else { "=#".into() }  // 🖩 / =#
+}
+pub fn calc_error_icon(use_emoji: bool) -> String {
+    if use_emoji { "\u{274C}".into() } else { "!!".into() }  // ❌ / !!
+}
+
 impl Extension for CalcExtension {
     fn name(&self) -> &str {
         "Calculator"
@@ -18,6 +26,21 @@ impl Extension for CalcExtension {
     }
 
     fn search(&self, query: &str) -> Vec<IndexItem> {
+        self.search_with_emoji(query, false)
+    }
+
+    fn execute(&self, item: &IndexItem) -> ExtensionAction {
+        if item.path.is_empty() {
+            ExtensionAction::Noop
+        } else {
+            ExtensionAction::CopyToClipboard(item.path.clone())
+        }
+    }
+}
+
+impl CalcExtension {
+    /// Search with emoji icon support
+    pub fn search_with_emoji(&self, query: &str, use_emoji: bool) -> Vec<IndexItem> {
         let expr = query.trim();
         if expr.is_empty() {
             return vec![IndexItem {
@@ -25,7 +48,7 @@ impl Extension for CalcExtension {
                 path: String::new(),
                 kind: ItemKind::Calculator,
                 source: Source::Plugin,
-                icon: "=#".to_string(),
+                icon: calc_icon(use_emoji),
                 keywords: "calculator calc math".to_string(),
             }];
         }
@@ -39,7 +62,7 @@ impl Extension for CalcExtension {
                     path: formatted,
                     kind: ItemKind::Calculator,
                     source: Source::Plugin,
-                    icon: "=#".to_string(),
+                    icon: calc_icon(use_emoji),
                     keywords: format!("calc {} {}", expr, result),
                 }]
             }
@@ -49,18 +72,10 @@ impl Extension for CalcExtension {
                     path: String::new(),
                     kind: ItemKind::Calculator,
                     source: Source::Plugin,
-                    icon: "!!".to_string(),
+                    icon: calc_error_icon(use_emoji),
                     keywords: String::new(),
                 }]
             }
-        }
-    }
-
-    fn execute(&self, item: &IndexItem) -> ExtensionAction {
-        if item.path.is_empty() {
-            ExtensionAction::Noop
-        } else {
-            ExtensionAction::CopyToClipboard(item.path.clone())
         }
     }
 }
