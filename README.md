@@ -50,7 +50,7 @@ By default, kmd exits after launching an item (`quit_on_launch = true`).
 
 ### Use as a Global Launcher (Recommended)
 
-kmd is designed to be summoned with a hotkey, used, and then disappear. Set up a system hotkey to launch kmd instantly:
+kmd is designed to be summoned with a hotkey, used, and then disappear. Set up a system hotkey to launch kmd instantly. **Single-instance toggle**: pressing the hotkey again while kmd is already open closes the existing instance. On Windows, the console window is centered on screen when launched via hotkey.
 
 **Windows (PowerToys)**
 1. Install [PowerToys](https://github.com/microsoft/PowerToys)
@@ -93,6 +93,10 @@ kmd launch https://github.com
 # Index management
 kmd index --stats
 kmd index --rebuild
+
+# Portable mode
+kmd portable enable   # use kmd-data/ next to exe
+kmd portable disable  # use standard config/data dirs
 
 # Configuration
 kmd config                    # show config path
@@ -198,6 +202,7 @@ render_fps = 30
 show_preview = true
 preview_width_percent = 40
 theme = "default"
+emoji_icons = true       # emoji icons (false = ASCII fallback)
 
 [launcher]
 file_search_provider = "auto"  # auto | builtin | fd | everything | mdfind | locate | winfs
@@ -243,6 +248,10 @@ toggle_preview = "ctrl+p"
 | CLI | clap (derive) |
 | Config | TOML + serde |
 | Theme | Catppuccin Mocha inspired |
+
+## Roadmap
+
+- `kmd emoji <query>` — emoji picker/search (upcoming)
 
 ## License
 

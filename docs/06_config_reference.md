@@ -16,7 +16,7 @@
 
 ```mermaid
 graph TB
-    ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme, editor"]
+    ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, editor"]
     ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
     ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
     ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
@@ -35,6 +35,7 @@ render_fps = 30              # TUI 렌더링 FPS
 show_preview = true          # 미리보기 패널 표시 여부
 preview_width_percent = 40   # 미리보기 패널 너비 (%)
 theme = "default"            # 테마 이름
+emoji_icons = true           # 이모지 아이콘 (false = ASCII 폴백)
 # editor = "code"            # 외부 에디터 (미설정 시 $EDITOR → vi/notepad)
 
 [launcher]
@@ -87,6 +88,7 @@ toggle_preview = "ctrl+p"
 | show_preview | bool | true | 미리보기 패널 표시 |
 | preview_width_percent | u16 | 40 | 미리보기 너비 비율 (20-80) |
 | theme | String | "default" | 테마 이름 |
+| emoji_icons | bool | true | 이모지 아이콘 (false = ASCII 폴백) |
 | editor | String? | None | 외부 에디터 ($EDITOR 폴백) |
 
 ### 4.2 [launcher]
@@ -157,9 +159,20 @@ flowchart TD
 | select | enter | 선택/실행 |
 | toggle_preview | ctrl+p | 미리보기 토글 |
 
+> **참고**: Ctrl+Space는 한/영 입력 전환용으로 하드코딩되어 있으며, 설정으로 변경할 수 없습니다.
+
 ---
 
 ## 5. CLI 설정 관리
+
+### 5.1 kmd portable
+
+```bash
+kmd portable enable   # use kmd-data/ next to exe (portable mode)
+kmd portable disable # use standard config/data dirs
+```
+
+### 5.2 kmd config
 
 ```mermaid
 flowchart LR
@@ -242,7 +255,7 @@ sequenceDiagram
 
 | 변수 | 설명 |
 |------|------|
-| `KMD_CONFIG_DIR` | 설정 디렉토리 오버라이드 (향후) |
-| `KMD_DATA_DIR` | 데이터 디렉토리 오버라이드 (향후) |
+| `KMD_CONFIG_DIR` | 설정 디렉토리 오버라이드 (not yet implemented) |
+| `KMD_DATA_DIR` | 데이터 디렉토리 오버라이드 (not yet implemented) |
 | `EDITOR` / `VISUAL` | `kmd config edit`에서 사용할 에디터 |
 | `RUST_LOG` | 로깅 레벨 (e.g. `kmd_core=debug`) |

@@ -191,19 +191,17 @@ Nerd Font에 의존하지 않고 Unicode 이모지 사용:
 | .md/.txt/.doc | 📝 | | 히스토리 | 🕒 |
 | .pdf | 📕 | | 기타 | 📄 |
 
-### 4.2 향후: 아이콘 스타일 선택
-
-```mermaid
-flowchart LR
-    Config["config.toml<br/>icon_style"] --> Emoji["emoji (기본)<br/>Unicode Emoji<br/>모든 터미널"]
-    Config --> NerdFont["nerd-font<br/>Nerd Font 글리프<br/>NF 설치 필요"]
-    Config --> ASCII["ascii<br/>순수 텍스트<br/>SSH / 레거시 터미널"]
-```
+### 4.2 아이콘 설정 (emoji_icons)
 
 config.toml:
 ```toml
 [general]
-icon_style = "emoji"      # 기본값
-# icon_style = "nerd-font"
-# icon_style = "ascii"
+emoji_icons = true   # 기본값: Unicode 이모지
+# emoji_icons = false  # ASCII 폴백 (SSH / 레거시 터미널)
 ```
+
+단일 매핑 테이블(ICON_TABLE)에 이모지+ASCII 쌍이 정의되어 있으며, `emoji_icons`가 false이면 ASCII 버전을 사용합니다.
+
+### 4.3 향후: Nerd Font
+
+Nerd Font 글리프 지원은 향후 계획입니다 (설치 필요).

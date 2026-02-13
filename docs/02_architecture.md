@@ -101,6 +101,8 @@ graph TB
     indexMod --> sysCmds["index/system_commands.rs<br/>SystemCommand 정의<br/>플랫폼별"]
     indexMod --> store["index/store.rs<br/>save_index, load_index<br/>JSON 캐시"]
 
+    lib --> singleInstance["single_instance.rs<br/>lock file + quit signal<br/>inter-process communication"]
+    lib --> portable["portable.rs<br/>portable data dir<br/>kmd-data/ management"]
     lib --> pluginMod["plugin/mod.rs<br/>Extension trait<br/>ExtensionAction"]
     pluginMod --> calc["plugin/builtin_calc.rs<br/>CalcExtension<br/>수식 평가기"]
     pluginMod --> loader["plugin/loader.rs<br/>discover_plugins<br/>manifest.toml 파싱"]
@@ -113,6 +115,7 @@ graph TB
 graph TB
     main["main.rs<br/>clap Parser<br/>서브커맨드 라우팅"]
 
+    main --> winConsole["win_console.rs<br/>console hide/show/center<br/>Windows hotkey setup"]
     main --> cmdMod["cmd/mod.rs<br/>load_config, open_db<br/>load_or_build_index"]
     cmdMod --> cmdSearch["cmd/search.rs<br/>kmd search query"]
     cmdMod --> cmdLaunch["cmd/launch.rs<br/>kmd launch target"]
@@ -120,9 +123,10 @@ graph TB
     cmdMod --> cmdConfig["cmd/config.rs<br/>kmd config get/set"]
     cmdMod --> cmdHistory["cmd/history.rs<br/>kmd history list/clear"]
     cmdMod --> cmdPlugin["cmd/plugin.rs<br/>kmd plugin list"]
+    cmdMod --> cmdPortable["cmd/portable.rs<br/>kmd portable enable/disable"]
     cmdMod --> cmdDaemon["cmd/daemon.rs<br/>kmd daemon start/stop"]
 
-    main --> tuiMod["tui/mod.rs\nrun()"]
+    main --> tuiMod["tui/mod.rs\nrun()\ninstance_guard.should_quit()"]
     tuiMod --> app["tui/app.rs\nAppState, run_app\nhandle_key, update_search"]
     tuiMod --> event["tui/event.rs\nEventHandler\nAppEvent"]
     tuiMod --> theme["tui/theme.rs\nTheme colors/styles"]
@@ -250,6 +254,7 @@ stateDiagram-v2
     Render --> WaitEvent: terminal.draw()
     WaitEvent --> HandleKey: Key event
     WaitEvent --> Render: Tick / Resize
+    WaitEvent --> Quit: instance_guard.should_quit() (quit signal)
 
     HandleKey --> Quit: Ctrl+C / Esc (빈 쿼리, 드릴다운 아닌 경우)
     HandleKey --> ClearQuery: Esc (쿼리 있음)
