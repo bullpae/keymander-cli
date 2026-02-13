@@ -17,29 +17,30 @@ pub fn run(query: &str, list: bool, json: bool, copy_nth: Option<usize>) -> Resu
     }
 
     if json {
-        // JSON output — extract name by stripping the emoji prefix from item.name
+        // JSON output — parse name parts from item.name
+        // Format: "😀 grinning face (활짝 웃는 얼굴)" or "😀 grinning face"
         let items: Vec<serde_json::Value> = results
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                // item.name = "😀 grinning face", item.path = "😀"
-                let name = item
+                let full = item
                     .name
                     .strip_prefix(&item.path)
                     .unwrap_or(&item.name)
                     .trim();
-                // keywords = "grinning face Smileys & Emotion: face-smiling"
-                // category is encoded after the name portion
-                let category = item
-                    .keywords
-                    .strip_prefix(name)
-                    .unwrap_or("")
-                    .trim();
+                // Split English/Korean: "grinning face (활짝 웃는 얼굴)"
+                let (en_name, ko_name) = if let Some(p) = full.rfind(" (") {
+                    let en = full[..p].trim();
+                    let ko = full[p + 2..].trim_end_matches(')').trim();
+                    (en, ko)
+                } else {
+                    (full, "")
+                };
                 serde_json::json!({
                     "index": i + 1,
                     "emoji": item.path,
-                    "name": name,
-                    "category": category,
+                    "name": en_name,
+                    "name_ko": ko_name,
                 })
             })
             .collect();

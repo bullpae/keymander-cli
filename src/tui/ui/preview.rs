@@ -111,21 +111,25 @@ fn render_emoji_preview<'a>(
     item: &kmd_core::index::IndexItem,
     theme: &'a Theme,
 ) -> Vec<Line<'a>> {
-    // item.path = emoji char, item.name = "😀 grinning face"
-    // item.keywords = "grinning face Smileys & Emotion: face-smiling"
+    // item.path = emoji char
+    // item.name = "😀 grinning face (활짝 웃는 얼굴)" or "😀 grinning face"
     let emoji = &item.path;
-    let name = item
+    let full_name = item
         .name
         .strip_prefix(emoji)
         .unwrap_or(&item.name)
         .trim();
 
-    // Try to extract category from keywords (after the name)
-    let category = item
-        .keywords
-        .strip_prefix(name)
-        .unwrap_or("")
-        .trim();
+    // Split English name and Korean name if present: "grinning face (활짝 웃는 얼굴)"
+    let (en_name, ko_name) = if let Some(paren_start) = full_name.rfind(" (") {
+        let en = full_name[..paren_start].trim();
+        let ko = full_name[paren_start + 2..]
+            .trim_end_matches(')')
+            .trim();
+        (en, ko)
+    } else {
+        (full_name, "")
+    };
 
     let mut lines = vec![
         Line::from(""),
@@ -134,22 +138,23 @@ fn render_emoji_preview<'a>(
             Span::styled(format!("    {}", emoji), theme.header_accent_style()),
         ]),
         Line::from(""),
-        // Name
+        // English Name
         Line::from(vec![
             Span::styled("  Name", theme.preview_label_style()),
         ]),
         Line::from(vec![
-            Span::styled(format!("  {}", name), theme.preview_value_style()),
+            Span::styled(format!("  {}", en_name), theme.preview_value_style()),
         ]),
     ];
 
-    if !category.is_empty() {
+    // Korean name (if available)
+    if !ko_name.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  Category", theme.preview_label_style()),
+            Span::styled("  \u{D55C}\u{AD6D}\u{C5B4}", theme.preview_label_style()), // 한국어
         ]));
         lines.push(Line::from(vec![
-            Span::styled(format!("  {}", category), theme.preview_dim_style()),
+            Span::styled(format!("  {}", ko_name), theme.preview_value_style()),
         ]));
     }
 
