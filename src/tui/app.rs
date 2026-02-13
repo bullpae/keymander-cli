@@ -127,6 +127,16 @@ fn items_to_results(
 
 /// Run the TUI application
 pub fn run_app() -> color_eyre::Result<()> {
+    // ── Single-instance toggle ──────────────────────────────────────────
+    let lock_path = kmd_core::Config::default_data_dir().join("kmd.lock");
+    let _instance_guard = match kmd_core::single_instance::acquire_or_toggle(&lock_path) {
+        kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
+        kmd_core::single_instance::InstanceAction::KilledExisting(pid) => {
+            eprintln!("kmd: closed existing instance (PID {})", pid);
+            return Ok(());
+        }
+    };
+
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
     let index = crate::cmd::load_or_build_index(&config.launcher);
