@@ -14,7 +14,7 @@ use ratatui::Terminal;
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
 use kmd_core::index::{files::{icon_for_path, dir_icon}, ItemKind, Source};
-use kmd_core::plugin::builtin_calc;
+use kmd_core::plugin::{builtin_calc, builtin_emoji};
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
@@ -495,6 +495,15 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         return;
     }
 
+    // Emoji result → copy to clipboard
+    if result.item.kind == ItemKind::Emoji && !result.item.path.is_empty() {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(&result.item.path);
+            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path)); // ✅
+        }
+        return;
+    }
+
     // Web query
     if let Some((service, web_query)) = web::parse_web_query(&state.query) {
         if !web_query.is_empty() {
@@ -575,6 +584,10 @@ fn update_search(
         return handle_calc_query(&query, state);
     }
 
+    if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
+        return handle_emoji_query(&query, state);
+    }
+
     handle_main_search(&query, state, engine, db);
 }
 
@@ -614,6 +627,19 @@ fn handle_calc_query(query: &str, state: &mut AppState) {
     let expr = query.strip_prefix(":calc").unwrap_or("").trim();
     let calc = builtin_calc::CalcExtension;
     let items = calc.search_with_emoji(expr, state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.selected_index = 0;
+}
+
+/// Handle :emoji or :e prefix (emoji search)
+fn handle_emoji_query(query: &str, state: &mut AppState) {
+    let search_query = if query.starts_with(":emoji") {
+        query.strip_prefix(":emoji").unwrap_or("").trim()
+    } else {
+        query.strip_prefix(":e").unwrap_or("").trim()
+    };
+    let emoji_ext = builtin_emoji::EmojiExtension;
+    let items = emoji_ext.search_emoji(search_query);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }

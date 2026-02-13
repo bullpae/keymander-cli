@@ -41,6 +41,10 @@ pub fn execute(result: &SearchResult) -> ActionResult {
             // Calculator results are handled by the TUI (clipboard copy)
             ActionResult::Launched
         }
+        ItemKind::Emoji => {
+            // Emoji results are handled by the TUI (clipboard copy)
+            ActionResult::Launched
+        }
     }
 }
 

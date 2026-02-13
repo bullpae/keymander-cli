@@ -4,6 +4,7 @@
 //! Each plugin has a manifest.toml defining its metadata and activation prefix.
 
 pub mod builtin_calc;
+pub mod builtin_emoji;
 pub mod loader;
 pub mod protocol;
 
