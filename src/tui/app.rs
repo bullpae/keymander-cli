@@ -128,11 +128,12 @@ fn items_to_results(
 /// Run the TUI application
 pub fn run_app() -> color_eyre::Result<()> {
     // ── Single-instance toggle ──────────────────────────────────────────
-    let lock_path = kmd_core::Config::default_data_dir().join("kmd.lock");
-    let _instance_guard = match kmd_core::single_instance::acquire_or_toggle(&lock_path) {
+    // Check BEFORE any terminal setup so the "toggle off" path is invisible.
+    let data_dir = kmd_core::Config::default_data_dir();
+    let instance_guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
         kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
-        kmd_core::single_instance::InstanceAction::KilledExisting(pid) => {
-            eprintln!("kmd: closed existing instance (PID {})", pid);
+        kmd_core::single_instance::InstanceAction::SignalledExisting => {
+            // Existing instance was told to quit. Exit silently.
             return Ok(());
         }
     };
@@ -217,7 +218,14 @@ pub fn run_app() -> color_eyre::Result<()> {
                     handle_paste(&mut state, &text, &mut engine, db.as_ref());
                 }
             }
-            AppEvent::Resize | AppEvent::Tick => {}
+            AppEvent::Resize => {}
+            AppEvent::Tick => {
+                // Check if another instance requested us to quit
+                if instance_guard.should_quit() {
+                    instance_guard.consume_quit_signal();
+                    state.should_quit = true;
+                }
+            }
         }
     }
 
