@@ -34,16 +34,28 @@ pub fn collect_apps(use_emoji: bool) -> Vec<IndexItem> {
     items
 }
 
-/// Windows: Scan Start Menu directories for .lnk files
+/// Windows: Discover installed applications from multiple sources.
+///
+/// 1. **`shell:AppsFolder`** — the authoritative Windows app list (includes
+///    UWP/Store/MSIX apps like Telegram, Zed, Bitwarden, etc. as well as
+///    traditional Win32 apps).  Enumerated via a short PowerShell script.
+/// 2. **Start Menu `.lnk` files** — fallback that catches anything
+///    `shell:AppsFolder` might miss (rare, but possible for legacy installers).
+///
+/// Results are deduplicated by name (case-insensitive).
 #[cfg(target_os = "windows")]
 fn collect_windows_apps(use_emoji: bool) -> Vec<IndexItem> {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
     let mut items = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
-    // Common Start Menu locations
+    // ── Source 1: shell:AppsFolder (PowerShell COM) ─────────────────────
+    // This is the same data source Windows Start menu search uses.
+    items.extend(collect_shell_apps_folder(&mut seen, use_emoji));
+
+    // ── Source 2: Start Menu .lnk files (fallback) ─────────────────────
     let mut dirs: Vec<PathBuf> = Vec::new();
 
     if let Ok(appdata) = std::env::var("APPDATA") {
@@ -70,6 +82,144 @@ fn collect_windows_apps(use_emoji: bool) -> Vec<IndexItem> {
         scan_lnk_dir(&dir, &mut items, &mut seen, use_emoji);
     }
 
+    items
+}
+
+/// Enumerate `shell:AppsFolder` via PowerShell COM.
+///
+/// Runs a small PowerShell one-liner that outputs tab-separated lines:
+///   `Name\tPath`
+///
+/// Apps whose path looks like a regular filesystem executable get that path.
+/// UWP/Store apps get an `shell:appsFolder\<id>` URI that `explorer.exe` can launch.
+///
+/// Timeout: 5 seconds. On failure, returns an empty vec (the .lnk fallback
+/// will still run).
+#[cfg(target_os = "windows")]
+fn collect_shell_apps_folder(
+    seen: &mut std::collections::HashSet<String>,
+    use_emoji: bool,
+) -> Vec<IndexItem> {
+    use std::process::Command;
+
+    // PowerShell script: enumerate shell:AppsFolder, output Name<TAB>Path
+    // Filters out framework/runtime packages by skipping names that contain
+    // common noise patterns.
+    let ps_script = r#"
+$shell = New-Object -ComObject Shell.Application
+$folder = $shell.NameSpace('shell:AppsFolder')
+foreach ($item in $folder.Items()) {
+    $n = $item.Name
+    $p = $item.Path
+    if ($n -and $p) { "$n`t$p" }
+}
+"#;
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", ps_script,
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            tracing::debug!(
+                "shell:AppsFolder PowerShell failed (exit {:?})",
+                o.status.code()
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            tracing::debug!("shell:AppsFolder PowerShell error: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut items = Vec::new();
+
+    // Noise patterns to skip (framework/runtime/extension packages)
+    let skip_patterns = [
+        "Microsoft.WinAppRuntime",
+        "Microsoft.VCLibs",
+        "Microsoft.UI.Xaml",
+        "Microsoft.NET.",
+        "Microsoft.D3D",
+        "Microsoft.DirectX",
+        "Microsoft.Services",
+        "MicrosoftWindows.UndockedDevKit",
+        "Microsoft.ApplicationCompatibility",
+        "Microsoft.Ink.Handwriting",
+        "Microsoft.LanguageExperience",
+        "DesktopAppInstaller",
+        "StorePurchaseApp",
+        "WidgetsPlatform",
+        "WinAppRuntime",
+        "CrossDevice",
+        "ShellExperienceHost",
+        "StartExperiencesApp",
+        "Debuggable Package",
+    ];
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let Some((name, path)) = line.split_once('\t') else {
+            continue;
+        };
+
+        let name = name.trim().to_string();
+        let path = path.trim().to_string();
+
+        if name.is_empty() || path.is_empty() {
+            continue;
+        }
+
+        // Skip noise
+        let name_lower = name.to_lowercase();
+        if name_lower.contains("uninstall") || name_lower.contains("제거") {
+            continue;
+        }
+        if skip_patterns.iter().any(|p| path.contains(p)) {
+            continue;
+        }
+
+        // Dedup by lowercase name
+        if !seen.insert(name_lower) {
+            continue;
+        }
+
+        // Determine the launchable path:
+        // - Filesystem paths start with a drive letter (e.g. "C:\...")
+        // - Everything else (CLSID, AUMID, PackageFamilyName) needs shell:appsFolder\ URI
+        let is_filesystem_path = path.len() >= 3
+            && path.as_bytes()[0].is_ascii_alphabetic()
+            && path.as_bytes()[1] == b':'
+            && path.as_bytes()[2] == b'\\';
+        let launch_path = if is_filesystem_path {
+            path.clone()
+        } else {
+            format!("shell:appsFolder\\{}", path)
+        };
+
+        items.push(IndexItem {
+            name,
+            path: launch_path.clone(),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: app_icon(use_emoji),
+            keywords: format!("{} {}", launch_path, path),
+        });
+    }
+
+    tracing::info!("shell:AppsFolder discovered {} apps", items.len());
     items
 }
 

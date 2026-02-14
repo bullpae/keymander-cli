@@ -71,9 +71,16 @@ pub fn open_url(url: &str) -> ActionResult {
 /// Spawn the platform-specific "open" command for a path or URL
 fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
     if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/c", "start", "", target])
-            .spawn()
+        // shell:appsFolder URIs (UWP/Store apps) must be opened via explorer.exe
+        if target.starts_with("shell:") {
+            Command::new("explorer.exe")
+                .arg(target)
+                .spawn()
+        } else {
+            Command::new("cmd")
+                .args(["/c", "start", "", target])
+                .spawn()
+        }
     } else if cfg!(target_os = "macos") {
         Command::new("open").arg(target).spawn()
     } else {
