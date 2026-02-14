@@ -63,6 +63,8 @@ pub struct AppState {
     pub total_items: usize,
     /// Show preview panel
     pub show_preview: bool,
+    /// Preview panel width percentage (from config)
+    pub preview_width_percent: u16,
     /// Current search mode
     search_mode: SearchMode,
     /// Whether to quit
@@ -89,6 +91,10 @@ pub struct AppState {
     pub is_portable: bool,
     /// Use emoji icons (mirrors config.general.emoji_icons)
     pub use_emoji: bool,
+    /// Cached effective query (query + composing char), updated on every input change
+    cached_effective_query: String,
+    /// Whether the UI needs to be redrawn
+    pub dirty: bool,
 }
 
 /// Saved state for returning from a folder drill-down
@@ -105,12 +111,25 @@ impl AppState {
         self.search_mode.label()
     }
 
-    /// Get the effective query for display and search (query + composing char)
-    pub fn effective_query(&self) -> String {
-        match self.composing {
-            Some(c) => format!("{}{}", self.query, c),
-            None => self.query.clone(),
+    /// Get the effective query for display and search (query + composing char).
+    /// Returns a borrowed `&str` from the internal cache — no allocation.
+    pub fn effective_query(&self) -> &str {
+        &self.cached_effective_query
+    }
+
+    /// Rebuild the cached effective query from `query` + optional `composing` char.
+    /// Must be called whenever `query` or `composing` changes.
+    fn refresh_effective_query(&mut self) {
+        self.cached_effective_query.clear();
+        self.cached_effective_query.push_str(&self.query);
+        if let Some(c) = self.composing {
+            self.cached_effective_query.push(c);
         }
+    }
+
+    /// Mark the UI as needing a redraw.
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 }
 
@@ -138,7 +157,7 @@ fn items_to_results(
 /// alternate screen buffer, ensuring a stable position on hotkey launch.
 pub fn run_app(
     instance_guard: Option<kmd_core::single_instance::Guard>,
-    center_window: bool,
+    show_on_ready: bool,
 ) -> color_eyre::Result<()> {
 
     // Load config and build index
@@ -159,6 +178,7 @@ pub fn run_app(
         selected_index: 0,
         total_items,
         show_preview: config.general.show_preview,
+        preview_width_percent: config.general.preview_width_percent,
         search_mode: SearchMode::Fuzzy,
         should_quit: false,
         quit_on_launch: config.launcher.quit_on_launch,
@@ -172,6 +192,8 @@ pub fn run_app(
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,
+        cached_effective_query: String::new(),
+        dirty: true,
     };
 
     // Setup terminal
@@ -200,19 +222,22 @@ pub fn run_app(
     // Show the terminal window (it was hidden in main() for hotkey launch).
     // Centering is handled by Windows Terminal's `centerOnLaunch` setting.
     #[cfg(windows)]
-    if center_window {
+    if show_on_ready {
         crate::win_console::show();
     }
 
     // Main loop
     loop {
-        terminal.draw(|frame| {
-            ui::render(frame, &state, &theme);
-            // Render settings modal overlay on top
-            if let Some(ref settings_state) = state.settings {
-                settings::render::render_modal(frame, frame.area(), settings_state, &theme);
-            }
-        })?;
+        if state.dirty {
+            terminal.draw(|frame| {
+                ui::render(frame, &state, &theme);
+                // Render settings modal overlay on top
+                if let Some(ref settings_state) = state.settings {
+                    settings::render::render_modal(frame, frame.area(), settings_state, &theme);
+                }
+            })?;
+            state.dirty = false;
+        }
 
         if state.should_quit {
             break;
@@ -220,6 +245,7 @@ pub fn run_app(
 
         match events.next()? {
             AppEvent::Key(key) => {
+                state.mark_dirty();
                 // Route keys to settings if modal is open
                 if state.settings.is_some() {
                     handle_settings_key_event(
@@ -233,18 +259,26 @@ pub fn run_app(
                 }
             }
             AppEvent::Paste(text) => {
+                state.mark_dirty();
                 if state.settings.is_none() {
                     handle_paste(&mut state, &text, &mut engine, db.as_ref());
                 }
             }
-            AppEvent::Resize => {}
+            AppEvent::Resize => {
+                state.mark_dirty();
+            }
             AppEvent::Tick => {
                 // Check if another instance requested us to quit
                 if let Some(ref guard) = instance_guard {
                     if guard.should_quit() {
                         guard.consume_quit_signal();
                         state.should_quit = true;
+                        state.mark_dirty();
                     }
+                }
+                // Re-render on tick only when status_message is set (for auto-clear)
+                if state.status_message.is_some() {
+                    state.mark_dirty();
                 }
             }
         }
@@ -302,6 +336,7 @@ fn handle_settings_key_event(
 
             // Apply immediate settings
             state.show_preview = config.general.show_preview;
+            state.preview_width_percent = config.general.preview_width_percent;
             state.quit_on_launch = config.launcher.quit_on_launch;
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
@@ -366,8 +401,17 @@ fn handle_key(
         // Open settings modal
         (KeyCode::F(2), _) => {
             flush_composer(state);
-            let config = crate::cmd::load_config().unwrap_or_default();
-            state.settings = Some(SettingsState::new(config));
+            match crate::cmd::load_config() {
+                Ok(config) => {
+                    state.settings = Some(SettingsState::new(config));
+                }
+                Err(e) => {
+                    let config = kmd_core::Config::default();
+                    state.settings = Some(SettingsState::new(config));
+                    state.status_message =
+                        Some(format!("\u{26A0}\u{FE0F} Config load failed, using defaults: {}", e));
+                }
+            }
         }
 
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
@@ -420,6 +464,7 @@ fn handle_key(
             } else {
                 state.query.pop();
             }
+            state.refresh_effective_query();
             update_search(state, engine, db);
         }
         (KeyCode::Char(c), mods) => {
@@ -430,6 +475,7 @@ fn handle_key(
                 handle_hangul_char(state, c, engine, db);
             } else {
                 state.query.push(c);
+                state.refresh_effective_query();
                 update_search(state, engine, db);
             }
         }
@@ -446,6 +492,7 @@ fn handle_escape(state: &mut AppState, db: Option<&kmd_core::Database>) {
         state.should_quit = true;
     } else {
         state.query.clear();
+        state.refresh_effective_query();
         state.results.clear();
         state.selected_index = 0;
         // Deactivate auto-hangul when query is cleared
@@ -481,6 +528,7 @@ fn handle_hangul_char(
         flush_composer(state);
         state.query.push(c);
     }
+    state.refresh_effective_query();
     update_search(state, engine, db);
 }
 
@@ -490,6 +538,7 @@ fn flush_composer(state: &mut AppState) {
         state.query.push(committed);
     }
     state.composing = None;
+    state.refresh_effective_query();
 }
 
 /// Handle pasted text (clipboard paste or IME-composed text)
@@ -505,6 +554,7 @@ fn handle_paste(
         return;
     }
     state.query.push_str(&clean);
+    state.refresh_effective_query();
     update_search(state, engine, db);
 }
 
@@ -614,7 +664,8 @@ fn update_search(
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    let query = state.effective_query();
+    // Borrow the cached effective query (no allocation)
+    let query = state.effective_query().to_owned();
 
     if query.is_empty() {
         return handle_empty_query(state, db);
@@ -698,11 +749,11 @@ fn handle_calc_query(query: &str, state: &mut AppState) {
 
 /// Handle :emoji or :e prefix (emoji search)
 fn handle_emoji_query(query: &str, state: &mut AppState) {
-    let search_query = if query.starts_with(":emoji") {
-        query.strip_prefix(":emoji").unwrap_or("").trim()
-    } else {
-        query.strip_prefix(":e").unwrap_or("").trim()
-    };
+    let search_query = query
+        .strip_prefix(":emoji")
+        .or_else(|| query.strip_prefix(":e"))
+        .unwrap_or("")
+        .trim();
     let emoji_ext = builtin_emoji::EmojiExtension;
     let items = emoji_ext.search_emoji(search_query);
     state.results = items_to_results(items, SCORE_CALC);
@@ -842,7 +893,9 @@ fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
     }
 
     let sort_by_name = |a: &SearchResult, b: &SearchResult| {
-        a.item.name.to_lowercase().cmp(&b.item.name.to_lowercase())
+        a.item.name.as_bytes().iter()
+            .map(|b| b.to_ascii_lowercase())
+            .cmp(b.item.name.as_bytes().iter().map(|b| b.to_ascii_lowercase()))
     };
     directories.sort_by(sort_by_name);
     files.sort_by(sort_by_name);

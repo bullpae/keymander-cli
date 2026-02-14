@@ -50,11 +50,13 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
 
     // Content: list only, or list + preview
     if state.show_preview && area.width > MIN_PREVIEW_WIDTH {
+        let preview_pct = state.preview_width_percent.clamp(10, 80) as u16;
+        let list_pct = 100 - preview_pct;
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(55),
-                Constraint::Percentage(45),
+                Constraint::Percentage(list_pct),
+                Constraint::Percentage(preview_pct),
             ])
             .split(chunks[2]);
 

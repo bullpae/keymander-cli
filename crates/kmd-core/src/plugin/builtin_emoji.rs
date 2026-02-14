@@ -70,13 +70,9 @@ fn emoji_db() -> &'static [EmojiEntry] {
 }
 
 /// Check whether a string contains any Hangul characters.
+/// Delegates to `hangul::is_korean_char` for a single source of truth.
 fn has_hangul(s: &str) -> bool {
-    s.chars().any(|c| {
-        // Hangul Syllables: U+AC00..U+D7A3
-        // Hangul Jamo: U+1100..U+11FF
-        // Hangul Compatibility Jamo: U+3130..U+318F
-        matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}')
-    })
+    s.chars().any(crate::hangul::is_korean_char)
 }
 
 pub struct EmojiExtension;

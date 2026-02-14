@@ -77,10 +77,37 @@ impl SearchMode {
     }
 }
 
+/// Pre-lowercased fields for efficient case-insensitive substring/glob/regex matching.
+struct LowercaseCache {
+    /// Lowercased name, path, and keywords for each item (same order as `all_items`)
+    entries: Vec<LowercaseEntry>,
+}
+
+struct LowercaseEntry {
+    name: String,
+    path: String,
+    keywords: String,
+}
+
+impl LowercaseCache {
+    fn build(items: &[IndexItem]) -> Self {
+        let entries = items
+            .iter()
+            .map(|item| LowercaseEntry {
+                name: item.name.to_lowercase(),
+                path: item.path.to_lowercase(),
+                keywords: item.keywords.to_lowercase(),
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
 /// The search engine wrapping Nucleo fuzzy matcher + other modes
 pub struct SearchEngine {
     nucleo: Nucleo<IndexItem>,
     all_items: Vec<IndexItem>,
+    lowercase_cache: LowercaseCache,
     kind_weights: KindWeights,
 }
 
@@ -92,6 +119,7 @@ impl SearchEngine {
         Self {
             nucleo,
             all_items: Vec::new(),
+            lowercase_cache: LowercaseCache { entries: Vec::new() },
             kind_weights: KindWeights::default(),
         }
     }
@@ -109,6 +137,7 @@ impl SearchEngine {
                 cols[0] = format!("{} {}", item.name, item.keywords).into();
             });
         }
+        self.lowercase_cache = LowercaseCache::build(&items);
         self.all_items = items;
     }
 
@@ -181,13 +210,10 @@ impl SearchEngine {
 
         self.all_items
             .iter()
-            .filter(|item| {
-                let name = item.name.to_lowercase();
-                let path = item.path.to_lowercase();
-                matcher.matches(&name) || matcher.matches(&path)
-            })
+            .zip(self.lowercase_cache.entries.iter())
+            .filter(|(_, lc)| matcher.matches(&lc.name) || matcher.matches(&lc.path))
             .take(limit)
-            .map(|item| SearchResult {
+            .map(|(item, _)| SearchResult {
                 item: item.clone(),
                 score: 0,
             })
@@ -228,16 +254,14 @@ impl SearchEngine {
 
         self.all_items
             .iter()
-            .filter(|item| {
-                let name = item.name.to_lowercase();
-                let path = item.path.to_lowercase();
-                let kw = item.keywords.to_lowercase();
-                name.contains(&query_lower)
-                    || path.contains(&query_lower)
-                    || kw.contains(&query_lower)
+            .zip(self.lowercase_cache.entries.iter())
+            .filter(|(_, lc)| {
+                lc.name.contains(&query_lower)
+                    || lc.path.contains(&query_lower)
+                    || lc.keywords.contains(&query_lower)
             })
             .take(limit)
-            .map(|item| SearchResult {
+            .map(|(item, _)| SearchResult {
                 item: item.clone(),
                 score: 0,
             })

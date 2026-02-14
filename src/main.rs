@@ -182,6 +182,12 @@ fn main() -> color_eyre::Result<()> {
     #[cfg(windows)]
     win_console::setup();
 
+    // ── 3b. Clean up stale diagnostic log from previous versions ────────
+    if let Ok(tmp) = std::env::var("TEMP").or_else(|_| std::env::var("TMP")) {
+        let log_path = std::path::Path::new(&tmp).join("kmd_center.log");
+        let _ = std::fs::remove_file(log_path);
+    }
+
     // ── 4. Normal startup ────────────────────────────────────────────────
     color_eyre::install()?;
 

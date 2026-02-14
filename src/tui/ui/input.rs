@@ -17,8 +17,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         "> "
     };
 
-    let effective_query = state.effective_query();
-    let is_empty = effective_query.is_empty();
+    let is_empty = state.effective_query().is_empty();
 
     // Build the input line
     let spans = if is_empty {
@@ -26,7 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         vec![
             Span::styled(prompt, theme.input_prompt_style()),
             Span::styled(
-                "Type to search, calculate, @web, @ai...",
+                "Type to search · @web · :emoji · :calc · !shell",
                 theme.input_placeholder_style(),
             ),
         ]

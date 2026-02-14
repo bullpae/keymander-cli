@@ -4,7 +4,6 @@ use color_eyre::Result;
 
 pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
-    let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
 
     // Check for web query (@prefix)
     if let Some((service, web_query)) = kmd_core::web::parse_web_query(query) {
@@ -12,7 +11,7 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
             // List services
             let items = kmd_core::web::list_services_as_items("", config.general.emoji_icons);
             if json {
-                print_items_json(&items);
+                print_items_json(&items)?;
             } else {
                 for item in &items {
                     println!("  {} {}", item.icon, item.name);
@@ -22,7 +21,7 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
             let item = kmd_core::web::search_result_item(service, &web_query, config.general.emoji_icons);
             let url = kmd_core::web::build_search_url(service, &web_query);
             if json {
-                print_items_json(&[item]);
+                print_items_json(&[item])?;
             } else {
                 println!("  {} {} → {}", service.icon, service.name, url);
             }
@@ -30,8 +29,7 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let mut engine = kmd_core::SearchEngine::new();
-    engine.load(index.items);
+    let mut engine = super::create_search_engine(&config);
 
     let (mode, mut results) = engine.search(query, limit);
 
@@ -61,8 +59,8 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_items_json(items: &[kmd_core::index::IndexItem]) {
-    if let Ok(json) = serde_json::to_string_pretty(items) {
-        println!("{}", json);
-    }
+fn print_items_json(items: &[kmd_core::index::IndexItem]) -> color_eyre::Result<()> {
+    let json = serde_json::to_string_pretty(items)?;
+    println!("{}", json);
+    Ok(())
 }

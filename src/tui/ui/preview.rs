@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let lines = if let Some(result) = state.results.get(state.selected_index) {
         let item = &result.item;
         if item.kind == ItemKind::Calculator {
-            render_calc_preview(item, &state.effective_query(), theme)
+            render_calc_preview(item, state.effective_query(), theme)
         } else if item.kind == ItemKind::Emoji {
             render_emoji_preview(item, theme)
         } else if item.kind == ItemKind::Shell {

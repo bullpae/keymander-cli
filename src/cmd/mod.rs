@@ -62,3 +62,14 @@ pub fn load_config() -> color_eyre::Result<kmd_core::Config> {
     let config = kmd_core::Config::load(&config_dir)?;
     Ok(config)
 }
+
+/// Create a search engine loaded with the full index.
+/// Shared helper used by `search` and `launch` subcommands.
+pub fn create_search_engine(
+    config: &kmd_core::Config,
+) -> kmd_core::SearchEngine {
+    let index = load_or_build_index(&config.launcher, config.general.emoji_icons);
+    let mut engine = kmd_core::SearchEngine::new();
+    engine.load(index.items);
+    engine
+}

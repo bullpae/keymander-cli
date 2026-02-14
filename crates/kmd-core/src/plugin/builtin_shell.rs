@@ -35,9 +35,9 @@ static QUICK_ACTIONS: &[QuickAction] = &[
         args: &["-NoProfile", "-Command",
             "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' } | Select-Object -ExpandProperty IPAddress) -join \", \""],
         #[cfg(not(windows))]
-        command: "hostname",
+        command: "sh",
         #[cfg(not(windows))]
-        args: &["-I"],
+        args: &["-c", "ip -4 addr show 2>/dev/null | grep -oP 'inet \\K[\\d.]+' | grep -v '^127\\.' | head -5 || ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -5 || hostname -I 2>/dev/null"],
     },
     QuickAction {
         name: "Hostname",
