@@ -17,10 +17,13 @@ Single binary, fast startup, minimal memory — no Electron, no GUI toolkit, jus
 - **Web services**: `@g rust tutorial`, `@gh keymander`, `@yt lofi music`
 - **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
+- **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
+- **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
+- **Single-instance toggle**: Hotkey press toggles kmd on/off — no duplicate windows
 - **History-aware**: Frequently used items bubble to the top, recent launches shown on empty query
 - **Plugin system**: Extension trait + script-based plugins (JSON over stdin/stdout)
 - **Settings modal (F2)**: Configure search priority, scan paths, ignore patterns, display, keybindings — all from within the TUI
-- **Korean input**: Built-in 2-벌식 Hangul composer for direct Korean input in terminal raw mode
+- **Korean input**: Built-in 2-벌식 Hangul composer for direct Korean input in terminal raw mode (auto-activates in emoji search)
 - **Search priority weights**: Configure which item kinds (folders, apps, files, etc.) rank higher
 - **Index cache versioning**: Auto-rebuilds when binary version changes
 
@@ -108,6 +111,12 @@ kmd config edit               # open in $EDITOR
 kmd history list
 kmd history clear
 
+# Emoji search & copy
+kmd emoji fire          # search and copy first result
+kmd emoji heart --list  # list all matches
+kmd emoji 하트 --json   # JSON output
+kmd emoji star -c 3     # copy 3rd result
+
 # Plugins
 kmd plugin list
 
@@ -128,6 +137,8 @@ kmd daemon status
 | URL-like | URL | `github.com` → opens browser |
 | `@prefix` | Web search | `@g rust tutorial` |
 | `:calc` | Calculator | `:calc (2+3)*4` |
+| `:emoji` / `:e` | Emoji | `:e fire`, `:e 하트` |
+| `!command` | Shell | `!ip`, `!hostname`, `!echo hello` |
 
 ### Web Services
 
@@ -251,7 +262,21 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-- `kmd emoji <query>` — emoji picker/search (upcoming)
+**v0.2.0** (current)
+- Emoji search & copy (English + Korean)
+- Shell command execution & system quick actions
+- Single-instance toggle (hotkey on/off)
+- Built-in Hangul composer with auto-activation
+- Performance optimizations (dirty rendering, pre-cached search)
+- Window centering on hotkey launch (Windows Terminal)
+
+**Toward v1.0.0**
+- Cloud-synced todo / memo (remote storage integration)
+- Clipboard history manager
+- Plugin marketplace & script-based plugins
+- Global hotkey daemon (cross-platform)
+- Theming engine (custom color schemes)
+- Multi-monitor awareness
 
 ## License
 
