@@ -563,18 +563,75 @@ impl App {
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
 
-        container(bar_content)
+        // ── Depth layering ────────────────────────────────────────────────
+        //
+        // 1. Top highlight — 1px semi-transparent white line (light reflection)
+        // 2. Main surface — slightly brighter than results area
+        // 3. Bottom shadow — 1px darker line (cast shadow from raised surface)
+        // 4. Subtle border glow — thin accent-tinted border
+        //
+        // Together these create a "raised card" 3D effect.
+
+        let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
+        let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
+        let border_glow = Color {
+            a: 0.12,
+            ..accent_color
+        };
+
+        // Brighter surface for the search bar (elevated feel)
+        let bar_surface = Color {
+            r: (surface.r + 0.03).min(1.0),
+            g: (surface.g + 0.03).min(1.0),
+            b: (surface.b + 0.03).min(1.0),
+            a: surface.a,
+        };
+
+        // Top highlight (1px)
+        let top_highlight = container(text(""))
+            .width(Fill)
+            .height(1)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(highlight_color)),
+                ..Default::default()
+            });
+
+        // Main content area
+        let main_bar = container(bar_content)
+            .width(Fill)
+            .height(SEARCH_BAR_HEIGHT - 2.0) // account for top highlight + bottom shadow
+            .center_y(Fill);
+
+        // Bottom shadow (1px, only when expanded)
+        let bottom_shadow = container(text(""))
+            .width(Fill)
+            .height(1)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(if has_results {
+                    shadow_line_color
+                } else {
+                    Color::TRANSPARENT
+                })),
+                ..Default::default()
+            });
+
+        let layered = column![top_highlight, main_bar, bottom_shadow];
+
+        container(layered)
             .width(Fill)
             .height(SEARCH_BAR_HEIGHT)
-            .center_y(Fill)
             .style(move |_: &_| container::Style {
-                background: Some(Background::Color(surface)),
+                background: Some(Background::Color(bar_surface)),
                 border: Border {
                     radius: radius.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    color: border_glow,
                 },
-                shadow: Shadow::default(),
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 8.0,
+                },
                 text_color: None,
                 snap: false,
             })
