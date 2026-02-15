@@ -2,10 +2,12 @@
 //!
 //! Renders a Spotlight-like floating launcher: search bar always visible,
 //! results list + status bar appear only when there are results.
-//! Supports singleton toggle via `kmd_core::single_instance::Guard`.
 //!
-//! **Async engine loading**: the window appears instantly; the search engine
-//! is loaded on a background thread and swapped in when ready.
+//! **Key features**:
+//! - Async engine loading — window appears instantly
+//! - Singleton toggle via `kmd_core::single_instance::Guard`
+//! - Window position/width persisted between sessions
+//! - Resizable width with min/max constraints
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,8 +19,8 @@ use iced::widget::{
 use iced::widget::operation::scroll_to;
 use iced::widget::scrollable as scrollable_mod;
 use iced::{
-    window, Background, Border, Color, Element, Fill, Padding, Shadow, Size, Subscription, Task,
-    Vector,
+    window, Background, Border, Color, Element, Fill, Padding, Point, Shadow, Size, Subscription,
+    Task, Vector,
 };
 
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
@@ -27,10 +29,11 @@ use kmd_core::web;
 use kmd_core::{IndexItem, ItemKind, Source};
 
 use crate::theme::DesktopTheme;
+use crate::window_state::WindowState;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const WINDOW_WIDTH: f32 = 680.0;
+const DEFAULT_WIDTH: f32 = 680.0;
 const SEARCH_BAR_HEIGHT: f32 = 56.0;
 const ROW_HEIGHT: f32 = 52.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
@@ -38,12 +41,11 @@ const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
-/// Interval between quit-signal polls (ms).
+/// Interval between quit-signal polls (ms). Also used to flush state to disk.
 const QUIT_POLL_MS: u64 = 300;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
-/// Engine + emoji-icons flag, loaded on a background thread.
 type EngineSlot = Arc<Mutex<Option<(kmd_core::SearchEngine, bool)>>>;
 
 // ─── App State ────────────────────────────────────────────────────────────────
@@ -59,12 +61,17 @@ pub struct App {
     scrollable_id: iced::widget::Id,
     window_id: Option<window::Id>,
     use_emoji: bool,
-    /// `true` while the background engine load is in progress.
     loading: bool,
-    /// Shared slot — background thread deposits the engine here.
     engine_slot: EngineSlot,
-    /// Singleton guard — dropping it removes the lock file.
     _guard: Guard,
+
+    // ── Window geometry ───────────────────────────────────────────────
+    /// Current window width (persisted between sessions).
+    window_width: f32,
+    /// Persistent window state (position + width).
+    window_state: WindowState,
+    /// True when state changed but not yet flushed to disk.
+    state_dirty: bool,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -76,22 +83,24 @@ pub enum Message {
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
     GotWindowId(Option<window::Id>),
-    /// Background engine finished loading — swap it in.
     EngineReady,
-    /// Periodic tick — check if another instance told us to quit.
     CheckQuitSignal,
+    /// Window was moved or resized by the user/OS.
+    WindowEvent(window::Id, window::Event),
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
-    pub fn new(guard: Guard, config: kmd_core::Config) -> (Self, Task<Message>) {
-        // Create an *empty* engine so the window can appear instantly.
+    pub fn new(
+        guard: Guard,
+        config: kmd_core::Config,
+        window_state: WindowState,
+    ) -> (Self, Task<Message>) {
         let engine = kmd_core::SearchEngine::new();
-
-        // Apply user's theme from config (preloaded in main.rs for instant display).
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
+        let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
         let input_id = iced::widget::Id::unique();
         let scrollable_id = iced::widget::Id::unique();
@@ -100,7 +109,6 @@ impl App {
         // ── Background engine loading ──────────────────────────────────────
         let slot_for_task = engine_slot.clone();
         let load_task = Task::future(async move {
-            // spawn_blocking so we don't stall the async executor.
             let _ = tokio::task::spawn_blocking(move || {
                 let eng = crate::engine::create_search_engine(&config);
                 let emoji = config.general.emoji_icons;
@@ -124,9 +132,11 @@ impl App {
             loading: true,
             engine_slot,
             _guard: guard,
+            window_width,
+            window_state,
+            state_dirty: false,
         };
 
-        // Focus input + fetch window ID + background engine load.
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
         let id_task = window::oldest().map(Message::GotWindowId);
         (app, Task::batch([focus_task, id_task, load_task]))
@@ -152,7 +162,6 @@ impl App {
                 iced::widget::operation::focus::<Message>(self.input_id.clone())
             }
             Message::EngineReady => {
-                // Take engine out of the shared slot (drop lock before re-search).
                 let loaded = self
                     .engine_slot
                     .lock()
@@ -164,8 +173,6 @@ impl App {
                     self.use_emoji = emoji;
                     self.loading = false;
                     tracing::info!("Search engine ready");
-
-                    // If the user already typed something, re-search now.
                     if !self.query.trim().is_empty() {
                         return self.perform_search();
                     }
@@ -173,10 +180,37 @@ impl App {
                 Task::none()
             }
             Message::CheckQuitSignal => {
+                // Flush dirty window state to disk.
+                if self.state_dirty {
+                    self.window_state.save();
+                    self.state_dirty = false;
+                }
+                // Check singleton quit signal.
                 if self._guard.should_quit() {
                     self._guard.consume_quit_signal();
-                    tracing::info!("Received quit signal from another instance — exiting");
+                    tracing::info!("Received quit signal — exiting");
+                    // Save state before quitting.
+                    self.window_state.save();
                     return iced::exit();
+                }
+                Task::none()
+            }
+            Message::WindowEvent(_id, event) => {
+                match event {
+                    window::Event::Moved(point) => {
+                        self.window_state.x = Some(point.x);
+                        self.window_state.y = Some(point.y);
+                        self.state_dirty = true;
+                    }
+                    window::Event::Resized(size) => {
+                        // Only track width changes (height is managed by us).
+                        if (size.width - self.window_width).abs() > 1.0 {
+                            self.window_width = size.width;
+                            self.window_state.width = Some(size.width);
+                            self.state_dirty = true;
+                        }
+                    }
+                    _ => {}
                 }
                 Task::none()
             }
@@ -190,7 +224,6 @@ impl App {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..
             } => Message::KeyEvent(key, modifiers),
-            // Only KeyPressed events produce real messages; ignore the rest.
             _ => Message::KeyEvent(
                 keyboard::Key::Named(keyboard::key::Named::Shift),
                 keyboard::Modifiers::default(),
@@ -200,7 +233,11 @@ impl App {
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
 
-        Subscription::batch([keyboard_sub, quit_sub])
+        // Track window move/resize for position persistence.
+        let window_sub = window::events()
+            .map(|(id, event)| Message::WindowEvent(id, event));
+
+        Subscription::batch([keyboard_sub, quit_sub, window_sub])
     }
 
     pub fn theme(&self) -> iced::Theme {
@@ -208,7 +245,7 @@ impl App {
     }
 }
 
-// ─── Search Logic (with plugin integration) ───────────────────────────────────
+// ─── Search Logic ─────────────────────────────────────────────────────────────
 
 /// All supported command prefixes for the search bar.
 ///
@@ -231,13 +268,13 @@ impl App {
             self.search_mode = kmd_core::SearchMode::Fuzzy;
         } else {
             match prefix_of(trimmed) {
-                Prefix::Web       => self.handle_web_query(trimmed),
-                Prefix::Calc      => self.handle_calc_query(trimmed),
-                Prefix::Emoji     => self.handle_emoji_query(trimmed),
-                Prefix::Settings  => self.handle_settings_query(trimmed),
-                Prefix::Help      => self.handle_help_query(),
-                Prefix::Shell     => self.handle_shell_query(trimmed),
-                Prefix::General   => self.handle_main_search(trimmed),
+                Prefix::Web      => self.handle_web_query(trimmed),
+                Prefix::Calc     => self.handle_calc_query(trimmed),
+                Prefix::Emoji    => self.handle_emoji_query(trimmed),
+                Prefix::Settings => self.handle_settings_query(trimmed),
+                Prefix::Help     => self.handle_help_query(),
+                Prefix::Shell    => self.handle_shell_query(trimmed),
+                Prefix::General  => self.handle_main_search(trimmed),
             }
         }
 
@@ -290,9 +327,6 @@ impl App {
     }
 
     fn handle_settings_query(&mut self, query: &str) {
-        // The canonical command is ":settings", but partial prefixes like
-        // ":set", ":sett", ..., ":setting" are also accepted.
-        // The filter is everything after the first space (if any).
         let filter = match query.find(' ') {
             Some(pos) => query[pos + 1..].trim().to_lowercase(),
             None => String::new(),
@@ -304,6 +338,7 @@ impl App {
         let settings_entries = [
             ("Edit Config File", "kmd:settings:config", if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }),
             ("Open Config Directory", "kmd:settings:dir", if emoji { "\u{1F4C2}" } else { "[DIR]" }),
+            ("Reset Window Position", "kmd:settings:reset_position", if emoji { "\u{1F4CD}" } else { "[POS]" }),
             ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "\u{1F319}" } else { "[THM]" }),
             ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "\u{2B1B}" } else { "[THM]" }),
             ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" }),
@@ -330,7 +365,6 @@ impl App {
         self.selected = 0;
     }
 
-    /// Show all available commands and prefixes.
     fn handle_help_query(&mut self) {
         let emoji = self.use_emoji;
         let entries: Vec<(&str, &str, &str)> = vec![
@@ -378,7 +412,6 @@ impl App {
                 let config_path = config_dir.join(kmd_core::CONFIG_FILENAME);
                 if config_path.exists() {
                     let _ = open::that(&config_path);
-                    tracing::info!("Opened config file: {}", config_path.display());
                 } else {
                     tracing::warn!("Config file not found: {}", config_path.display());
                 }
@@ -386,10 +419,34 @@ impl App {
             "dir" => {
                 let config_dir = kmd_core::Config::default_config_dir();
                 let _ = open::that(&config_dir);
-                tracing::info!("Opened config directory: {}", config_dir.display());
+            }
+            "reset_position" => {
+                // Reset window state and move to default 1/3 position.
+                WindowState::reset();
+                self.window_state = WindowState::default();
+                self.window_width = DEFAULT_WIDTH;
+                self.state_dirty = false;
+
+                // Resize to default width + move to center-top.
+                if let Some(id) = self.window_id {
+                    let resize = window::resize(id, Size::new(DEFAULT_WIDTH, SEARCH_BAR_HEIGHT));
+                    // Get monitor size to calculate default position.
+                    let move_task = window::monitor_size(id).then(move |maybe_size| {
+                        if let Some(mon) = maybe_size {
+                            let x = (mon.width - DEFAULT_WIDTH) / 2.0;
+                            let y = (mon.height / 3.0).max(0.0);
+                            window::move_to(id, Point::new(x, y))
+                        } else {
+                            Task::none()
+                        }
+                    });
+                    self.query.clear();
+                    self.results.clear();
+                    self.selected = 0;
+                    return Task::batch([resize, move_task]);
+                }
             }
             "rebuild" => {
-                // Rebuild engine asynchronously
                 self.loading = true;
                 let slot = self.engine_slot.clone();
                 let task = Task::future(async move {
@@ -448,7 +505,7 @@ impl App {
             return Task::none();
         };
 
-        // Help items are informational — don't launch.
+        // Help items are informational only.
         if result.item.path.starts_with("Type ") {
             return Task::none();
         }
@@ -457,6 +514,11 @@ impl App {
             && result.item.path.starts_with("kmd:settings:")
         {
             return self.handle_settings_action(&result);
+        }
+
+        // Save window state before launching (app may exit).
+        if self.state_dirty {
+            self.window_state.save();
         }
 
         let action_result = kmd_core::action::execute(&result);
@@ -468,7 +530,7 @@ impl App {
                 tracing::debug!("Opened URL: {url}");
             }
             kmd_core::action::ActionResult::NeedsConfirmation(msg) => {
-                tracing::warn!("Action needs confirmation: {msg}");
+                tracing::warn!("Needs confirmation: {msg}");
                 return Task::none();
             }
             kmd_core::action::ActionResult::Error(err) => {
@@ -501,6 +563,10 @@ impl App {
                     self.selected = 0;
                     return self.resize_window();
                 }
+                // Save state before quitting.
+                if self.state_dirty {
+                    self.window_state.save();
+                }
                 return iced::exit();
             }
             _ => {}
@@ -508,7 +574,6 @@ impl App {
         Task::none()
     }
 
-    /// Scroll the results list so that `self.selected` is visible.
     fn scroll_to_selected(&self) -> Task<Message> {
         let top_row = if self.selected >= MAX_VISIBLE_ROWS {
             self.selected - MAX_VISIBLE_ROWS + 1
@@ -519,7 +584,8 @@ impl App {
         scroll_to(
             self.scrollable_id.clone(),
             scrollable_mod::AbsoluteOffset { x: 0.0, y: y_offset },
-        ).into()
+        )
+        .into()
     }
 
     fn resize_window(&self) -> Task<Message> {
@@ -529,7 +595,7 @@ impl App {
             let rows = self.results.len().min(MAX_VISIBLE_ROWS) as f32;
             SEARCH_BAR_HEIGHT + (rows * ROW_HEIGHT) + STATUS_BAR_HEIGHT
         };
-        let size = Size::new(WINDOW_WIDTH, height);
+        let size = Size::new(self.window_width, height);
 
         match self.window_id {
             Some(id) => window::resize(id, size),
@@ -553,7 +619,6 @@ enum Prefix {
     General,
 }
 
-/// Classify a non-empty trimmed query into its command prefix.
 fn prefix_of(query: &str) -> Prefix {
     if query.starts_with('@') {
         Prefix::Web
@@ -601,18 +666,20 @@ impl App {
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
+
+        // [ui1] Stronger border for visibility
         let border_color = Color {
-            a: 0.15,
+            a: 0.35,
             ..t.accent
         };
 
         container(content)
-            .width(WINDOW_WIDTH)
+            .width(Fill) // Fill the window (width is managed by window resize)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.0,
+                    width: 1.5, // slightly thicker border
                     color: border_color,
                 },
                 shadow: Shadow {
@@ -637,17 +704,18 @@ impl App {
 
         let brand = text("\u{00BB}").size(24).color(t.peach);
 
-        // Change placeholder while loading to give user feedback.
         let placeholder = if self.loading {
             "Loading..."
         } else {
             "Search anything...  (:help for commands)"
         };
 
+        // [ui7] Input takes Fill width — no more text cutoff.
         let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
+            .width(Fill)
             .size(18)
             .padding(0)
             .style(move |_theme, _status| text_input::Style {
@@ -669,7 +737,8 @@ impl App {
         };
         let badge = text(mode_text).size(11).color(t.overlay);
 
-        let bar_content = row![brand, input, Space::new().width(Fill), badge]
+        // [ui7] Removed Space between input and badge — input now fills all available space.
+        let bar_content = row![brand, input, badge]
             .spacing(12)
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
@@ -678,8 +747,10 @@ impl App {
 
         let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
+
+        // [ui1] Stronger border glow for visibility.
         let border_glow = Color {
-            a: 0.12,
+            a: 0.30,
             ..accent_color
         };
 
@@ -724,7 +795,7 @@ impl App {
                 background: Some(Background::Color(bar_surface)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.0,
+                    width: 1.5, // [ui1] thicker inner border
                     color: border_glow,
                 },
                 shadow: Shadow {

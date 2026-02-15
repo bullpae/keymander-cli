@@ -11,12 +11,60 @@
 mod app;
 mod engine;
 mod theme;
+mod window_state;
 
-use iced::{window, Color};
+use iced::{window, Color, Point, Size};
 use std::sync::Mutex;
 
+use crate::window_state::WindowState;
+
+/// Default window width when no saved state exists.
+const DEFAULT_WIDTH: f32 = 680.0;
+/// Search bar height — initial window height.
+const SEARCH_BAR_HEIGHT: f32 = 56.0;
+
+/// Default position: horizontally centered, vertically at 1/3 from top.
+fn default_position(win: Size, monitor: Size) -> Point {
+    Point::new(
+        (monitor.width - win.width) / 2.0,
+        (monitor.height / 3.0).max(0.0),
+    )
+}
+
+/// Create a simple 32×32 RGBA icon (accent-colored rounded square).
+fn create_icon() -> Option<window::Icon> {
+    let size = 32u32;
+    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+    let (r, g, b) = (0x56u8, 0xD2u8, 0xFFu8); // accent color
+
+    let center = size as f32 / 2.0;
+    let outer = center - 2.0;
+    let corner_r = 7.0;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 - center).abs();
+            let dy = (y as f32 - center).abs();
+            // Rounded-rect SDF
+            let inside = if dx > outer - corner_r && dy > outer - corner_r {
+                let cx = dx - (outer - corner_r);
+                let cy = dy - (outer - corner_r);
+                (cx * cx + cy * cy).sqrt() <= corner_r
+            } else {
+                dx <= outer && dy <= outer
+            };
+            if inside {
+                rgba.extend_from_slice(&[r, g, b, 255]);
+            } else {
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+
+    window::icon::from_rgba(rgba, size, size).ok()
+}
+
 fn main() -> iced::Result {
-    // Logging — in debug mode goes to console, in release suppressed by windows_subsystem.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -29,7 +77,6 @@ fn main() -> iced::Result {
     tracing::info!("Starting keymander Desktop");
 
     // ── Singleton toggle ──────────────────────────────────────────────────
-    // Use a separate sub-directory so desktop and CLI don't conflict.
     let data_dir = kmd_core::Config::default_data_dir().join("desktop");
     let guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
         kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
@@ -39,34 +86,47 @@ fn main() -> iced::Result {
         }
     };
 
-    // ── Preload config (fast — just reads a TOML file) ────────────────────
-    // This lets us apply the user's theme immediately instead of defaulting.
+    // ── Preload config + window state ─────────────────────────────────────
     let config = engine::load_config();
+    let window_state = WindowState::load();
+
+    let width = window_state.width.unwrap_or(DEFAULT_WIDTH);
+    let initial_size = Size::new(width, SEARCH_BAR_HEIGHT);
+
+    let position = match (window_state.x, window_state.y) {
+        (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
+        _ => window::Position::SpecificWith(default_position),
+    };
+
+    let icon = create_icon();
 
     // Wrap boot data in Mutex<Option<>> so the Fn closure can take it once.
-    let boot_data = Mutex::new(Some((guard, config)));
+    let boot_data = Mutex::new(Some((guard, config, window_state)));
 
     iced::application(
         move || {
-            let (guard, config) = boot_data
+            let (guard, config, ws) = boot_data
                 .lock()
                 .expect("boot mutex poisoned")
                 .take()
                 .expect("boot called more than once");
-            app::App::new(guard, config)
+            app::App::new(guard, config, ws)
         },
         app::App::update,
         app::App::view,
     )
     .window(window::Settings {
-        size: iced::Size::new(680.0, 56.0),
+        size: initial_size,
         decorations: false,
         transparent: true,
         level: window::Level::AlwaysOnTop,
-        position: window::Position::Centered,
-        resizable: false,
+        position,
+        resizable: true,
         visible: true,
         exit_on_close_request: true,
+        min_size: Some(Size::new(420.0, SEARCH_BAR_HEIGHT)),
+        max_size: Some(Size::new(1200.0, 800.0)),
+        icon,
         ..Default::default()
     })
     .theme(app::App::theme)
