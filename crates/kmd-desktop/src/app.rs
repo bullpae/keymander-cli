@@ -3,7 +3,11 @@
 //! Renders a Spotlight-like floating launcher: search bar always visible,
 //! results list + status bar appear only when there are results.
 //! Supports singleton toggle via `kmd_core::single_instance::Guard`.
+//!
+//! **Async engine loading**: the window appears instantly; the search engine
+//! is loaded on a background thread and swapped in when ready.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::keyboard;
@@ -35,6 +39,11 @@ const SCORE_PLUGIN: u32 = u32::MAX;
 /// Interval between quit-signal polls (ms).
 const QUIT_POLL_MS: u64 = 300;
 
+// ─── Shared slot for async engine hand-off ────────────────────────────────────
+
+/// Engine + emoji-icons flag, loaded on a background thread.
+type EngineSlot = Arc<Mutex<Option<(kmd_core::SearchEngine, bool)>>>;
+
 // ─── App State ────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -47,6 +56,10 @@ pub struct App {
     input_id: iced::widget::Id,
     window_id: Option<window::Id>,
     use_emoji: bool,
+    /// `true` while the background engine load is in progress.
+    loading: bool,
+    /// Shared slot — background thread deposits the engine here.
+    engine_slot: EngineSlot,
     /// Singleton guard — dropping it removes the lock file.
     _guard: Guard,
 }
@@ -60,6 +73,8 @@ pub enum Message {
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
     GotWindowId(Option<window::Id>),
+    /// Background engine finished loading — swap it in.
+    EngineReady,
     /// Periodic tick — check if another instance told us to quit.
     CheckQuitSignal,
 }
@@ -68,10 +83,25 @@ pub enum Message {
 
 impl App {
     pub fn new(guard: Guard) -> (Self, Task<Message>) {
-        let config = crate::engine::load_config();
-        let engine = crate::engine::create_search_engine(&config);
+        // Create an *empty* engine so the window can appear instantly.
+        let engine = kmd_core::SearchEngine::new();
         let theme = crate::theme::midnight();
         let input_id = iced::widget::Id::unique();
+        let engine_slot: EngineSlot = Arc::new(Mutex::new(None));
+
+        // ── Background engine loading ──────────────────────────────────────
+        let slot_for_task = engine_slot.clone();
+        let load_task = Task::future(async move {
+            // spawn_blocking so we don't stall the async executor.
+            let _ = tokio::task::spawn_blocking(move || {
+                let config = crate::engine::load_config();
+                let eng = crate::engine::create_search_engine(&config);
+                let emoji = config.general.emoji_icons;
+                *slot_for_task.lock().expect("engine_slot poisoned") = Some((eng, emoji));
+            })
+            .await;
+            Message::EngineReady
+        });
 
         let app = Self {
             query: String::new(),
@@ -82,14 +112,16 @@ impl App {
             theme,
             input_id: input_id.clone(),
             window_id: None,
-            use_emoji: config.general.emoji_icons,
+            use_emoji: true, // default until config loads
+            loading: true,
+            engine_slot,
             _guard: guard,
         };
 
-        // Focus input + fetch the main window ID.
+        // Focus input + fetch window ID + background engine load.
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
         let id_task = window::oldest().map(Message::GotWindowId);
-        (app, Task::batch([focus_task, id_task]))
+        (app, Task::batch([focus_task, id_task, load_task]))
     }
 
     // ─── Update ───────────────────────────────────────────────────────────
@@ -109,8 +141,28 @@ impl App {
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
             Message::GotWindowId(id) => {
                 self.window_id = id;
-                // Also focus input when we get the window ID (ensures focus on start).
                 iced::widget::operation::focus::<Message>(self.input_id.clone())
+            }
+            Message::EngineReady => {
+                // Take engine out of the shared slot (drop lock before re-search).
+                let loaded = self
+                    .engine_slot
+                    .lock()
+                    .expect("engine_slot poisoned")
+                    .take();
+
+                if let Some((engine, emoji)) = loaded {
+                    self.engine = engine;
+                    self.use_emoji = emoji;
+                    self.loading = false;
+                    tracing::info!("Search engine ready");
+
+                    // If the user already typed something, re-search now.
+                    if !self.query.trim().is_empty() {
+                        return self.perform_search();
+                    }
+                }
+                Task::none()
             }
             Message::CheckQuitSignal => {
                 if self._guard.should_quit() {
@@ -136,7 +188,6 @@ impl App {
             ),
         });
 
-        // Poll quit signal file every QUIT_POLL_MS.
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
 
@@ -158,7 +209,6 @@ impl App {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
         } else if query.starts_with('@') {
-            // Web services: @ai, @google, @youtube, etc.
             self.handle_web_query(&query);
         } else if query.starts_with(":calc") {
             self.handle_calc_query(&query);
@@ -175,37 +225,31 @@ impl App {
         self.resize_window()
     }
 
-    /// @prefix — web services (Perplexity AI, Google, YouTube, etc.)
     fn handle_web_query(&mut self, query: &str) {
         let emoji = self.use_emoji;
         if let Some((service, q)) = web::parse_web_query(query) {
             if q.is_empty() {
-                let items = web::list_services_as_items("", emoji);
-                self.results = items_to_results(items);
+                self.results = items_to_results(web::list_services_as_items("", emoji));
             } else {
                 let item = web::search_result_item(service, &q, emoji);
                 self.results = items_to_results(std::iter::once(item));
             }
         } else {
             let filter = query.trim_start_matches('@');
-            let items = web::list_services_as_items(filter, emoji);
-            self.results = items_to_results(items);
+            self.results = items_to_results(web::list_services_as_items(filter, emoji));
         }
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
 
-    /// :calc — calculator
     fn handle_calc_query(&mut self, query: &str) {
         let expr = query.strip_prefix(":calc").unwrap_or("").trim();
         let calc = builtin_calc::CalcExtension;
-        let items = calc.search_with_emoji(expr, self.use_emoji);
-        self.results = items_to_results(items);
+        self.results = items_to_results(calc.search_with_emoji(expr, self.use_emoji));
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
 
-    /// :emoji / :e — emoji picker
     fn handle_emoji_query(&mut self, query: &str) {
         let search_query = query
             .strip_prefix(":emoji")
@@ -213,23 +257,19 @@ impl App {
             .unwrap_or("")
             .trim();
         let emoji_ext = builtin_emoji::EmojiExtension;
-        let items = emoji_ext.search_emoji(search_query);
-        self.results = items_to_results(items);
+        self.results = items_to_results(emoji_ext.search_emoji(search_query));
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
 
-    /// ! — shell commands / quick actions
     fn handle_shell_query(&mut self, query: &str) {
         let shell_query = query.strip_prefix('!').unwrap_or("").trim();
         let shell_ext = builtin_shell::ShellExtension;
-        let items = shell_ext.search(shell_query);
-        self.results = items_to_results(items);
+        self.results = items_to_results(shell_ext.search(shell_query));
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
 
-    /// :settings / :set — show settings options
     fn handle_settings_query(&mut self, query: &str) {
         let filter = query
             .strip_prefix(":settings")
@@ -270,7 +310,6 @@ impl App {
         self.selected = 0;
     }
 
-    /// Handle execution of a settings action.
     fn handle_settings_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
         let action = result.item.path.strip_prefix("kmd:settings:").unwrap_or("");
 
@@ -291,40 +330,43 @@ impl App {
                 tracing::info!("Opened config directory: {}", config_dir.display());
             }
             "rebuild" => {
-                let config = crate::engine::load_config();
-                self.engine = crate::engine::create_search_engine(&config);
-                tracing::info!("Index rebuilt");
+                // Rebuild engine asynchronously
+                self.loading = true;
+                let slot = self.engine_slot.clone();
+                let task = Task::future(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let config = crate::engine::load_config();
+                        let eng = crate::engine::create_search_engine(&config);
+                        let emoji = config.general.emoji_icons;
+                        *slot.lock().expect("engine_slot poisoned") = Some((eng, emoji));
+                    })
+                    .await;
+                    Message::EngineReady
+                });
                 self.query.clear();
                 self.results.clear();
                 self.selected = 0;
-                return self.resize_window();
+                return Task::batch([self.resize_window(), task]);
             }
             theme_action if theme_action.starts_with("theme:") => {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
                 self.theme = crate::theme::from_name(theme_name);
                 tracing::info!("Theme changed to: {}", self.theme.name);
-                self.query.clear();
-                self.results.clear();
-                self.selected = 0;
-                return self.resize_window();
             }
             _ => {
                 tracing::warn!("Unknown settings action: {action}");
             }
         }
-        // Don't exit for settings actions — keep the window open
         self.query.clear();
         self.results.clear();
         self.selected = 0;
         self.resize_window()
     }
 
-    /// Default fuzzy search with inline calculator
     fn handle_main_search(&mut self, query: &str) {
         let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
         self.search_mode = mode;
 
-        // Inline calculator: prepend if query looks like math
         if builtin_calc::looks_like_math(query) {
             let calc = builtin_calc::CalcExtension;
             let calc_items = calc.search_with_emoji(query, self.use_emoji);
@@ -347,7 +389,6 @@ impl App {
             return Task::none();
         };
 
-        // Special handling: settings items (don't exit after)
         if result.item.kind == ItemKind::SystemCommand
             && result.item.path.starts_with("kmd:settings:")
         {
@@ -371,7 +412,6 @@ impl App {
                 return Task::none();
             }
         }
-        // Launcher disappears after successful execution
         iced::exit()
     }
 
@@ -447,7 +487,6 @@ impl App {
             content = content.push(self.view_accent_bar());
         }
 
-        // Outer container — enhanced shadow for depth
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
@@ -487,7 +526,14 @@ impl App {
 
         let brand = text("\u{00BB}").size(24).color(t.peach);
 
-        let input = text_input("Search anything...", &self.query)
+        // Change placeholder while loading to give user feedback.
+        let placeholder = if self.loading {
+            "Loading..."
+        } else {
+            "Search anything..."
+        };
+
+        let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
@@ -676,7 +722,6 @@ impl App {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Convert an iterator of IndexItems into SearchResults with a fixed score.
 fn items_to_results(
     items: impl IntoIterator<Item = kmd_core::IndexItem>,
 ) -> Vec<kmd_core::SearchResult> {
