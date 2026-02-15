@@ -3,6 +3,9 @@
 //! A borderless, transparent, floating search window powered by iced.
 //! Shares the same kmd-core search engine and portable data as the CLI.
 
+// Hide the console window on Windows release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod engine;
 mod theme;
@@ -10,7 +13,7 @@ mod theme;
 use iced::window;
 
 fn main() -> iced::Result {
-    // Logging
+    // Logging — in debug mode goes to console, in release suppressed by windows_subsystem.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -36,5 +39,6 @@ fn main() -> iced::Result {
         })
         .theme(app::App::theme)
         .subscription(app::App::subscription)
+        .antialiasing(true)
         .run()
 }

@@ -12,6 +12,9 @@ use iced::{
     Vector,
 };
 
+use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
+use kmd_core::web;
+
 use crate::theme::DesktopTheme;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -22,6 +25,7 @@ const ROW_HEIGHT: f32 = 52.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
+const SCORE_PLUGIN: u32 = u32::MAX;
 
 // ─── App State ────────────────────────────────────────────────────────────────
 
@@ -34,6 +38,7 @@ pub struct App {
     theme: DesktopTheme,
     input_id: iced::widget::Id,
     window_id: Option<window::Id>,
+    use_emoji: bool,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -65,10 +70,13 @@ impl App {
             theme,
             input_id: input_id.clone(),
             window_id: None,
+            use_emoji: config.general.emoji_icons,
         };
 
+        // Focus input + fetch the main window ID.
+        let focus_task = iced::widget::operation::focus::<Message>(input_id);
         let id_task = window::oldest().map(Message::GotWindowId);
-        (app, id_task)
+        (app, Task::batch([focus_task, id_task]))
     }
 
     // ─── Update ───────────────────────────────────────────────────────────
@@ -88,29 +96,19 @@ impl App {
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
             Message::GotWindowId(id) => {
                 self.window_id = id;
-                Task::none()
+                // Also focus input when we get the window ID (ensures focus on start).
+                iced::widget::operation::focus::<Message>(self.input_id.clone())
             }
         }
     }
 
     // ─── Subscription ─────────────────────────────────────────────────────
 
-    /// Listen only to keyboard events (not all events) to avoid Noop spam.
     pub fn subscription(&self) -> Subscription<Message> {
         keyboard::listen().map(|event| match event {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..
-            } => match &key {
-                keyboard::Key::Named(n) => match n {
-                    keyboard::key::Named::ArrowUp
-                    | keyboard::key::Named::ArrowDown
-                    | keyboard::key::Named::Escape
-                    | keyboard::key::Named::Tab => Message::KeyEvent(key, modifiers),
-                    _ => Message::KeyEvent(key, modifiers),
-                },
-                _ => Message::KeyEvent(key, modifiers),
-            },
-            // KeyReleased and ModifiersChanged — ignore silently.
+            } => Message::KeyEvent(key, modifiers),
             _ => Message::KeyEvent(
                 keyboard::Key::Named(keyboard::key::Named::Shift),
                 keyboard::Modifiers::default(),
@@ -123,19 +121,106 @@ impl App {
     }
 }
 
-// ─── Logic ────────────────────────────────────────────────────────────────────
+// ─── Search Logic (with plugin integration) ───────────────────────────────────
 
 impl App {
     fn perform_search(&mut self) -> Task<Message> {
-        if self.query.trim().is_empty() {
+        let query = self.query.clone();
+
+        if query.trim().is_empty() {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
+        } else if query.starts_with('@') {
+            // Web services: @ai, @google, @youtube, etc.
+            self.handle_web_query(&query);
+        } else if query.starts_with(":calc") {
+            self.handle_calc_query(&query);
+        } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
+            self.handle_emoji_query(&query);
+        } else if query.starts_with('!') {
+            self.handle_shell_query(&query);
         } else {
-            let (mode, results) = self.engine.search(&self.query, SEARCH_LIMIT);
-            self.search_mode = mode;
-            self.results = results;
+            self.handle_main_search(&query);
         }
+
         self.resize_window()
+    }
+
+    /// @prefix — web services (Perplexity AI, Google, YouTube, etc.)
+    fn handle_web_query(&mut self, query: &str) {
+        let emoji = self.use_emoji;
+        if let Some((service, q)) = web::parse_web_query(query) {
+            if q.is_empty() {
+                let items = web::list_services_as_items("", emoji);
+                self.results = items_to_results(items);
+            } else {
+                let item = web::search_result_item(service, &q, emoji);
+                self.results = items_to_results(std::iter::once(item));
+            }
+        } else {
+            let filter = query.trim_start_matches('@');
+            let items = web::list_services_as_items(filter, emoji);
+            self.results = items_to_results(items);
+        }
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// :calc — calculator
+    fn handle_calc_query(&mut self, query: &str) {
+        let expr = query.strip_prefix(":calc").unwrap_or("").trim();
+        let calc = builtin_calc::CalcExtension;
+        let items = calc.search_with_emoji(expr, self.use_emoji);
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// :emoji / :e — emoji picker
+    fn handle_emoji_query(&mut self, query: &str) {
+        let search_query = query
+            .strip_prefix(":emoji")
+            .or_else(|| query.strip_prefix(":e"))
+            .unwrap_or("")
+            .trim();
+        let emoji_ext = builtin_emoji::EmojiExtension;
+        let items = emoji_ext.search_emoji(search_query);
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// ! — shell commands / quick actions
+    fn handle_shell_query(&mut self, query: &str) {
+        let shell_query = query.strip_prefix('!').unwrap_or("").trim();
+        let shell_ext = builtin_shell::ShellExtension;
+        let items = shell_ext.search(shell_query);
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// Default fuzzy search with inline calculator
+    fn handle_main_search(&mut self, query: &str) {
+        let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
+        self.search_mode = mode;
+
+        // Inline calculator: prepend if query looks like math
+        if builtin_calc::looks_like_math(query) {
+            let calc = builtin_calc::CalcExtension;
+            let calc_items = calc.search_with_emoji(query, self.use_emoji);
+            let calc_results: Vec<kmd_core::SearchResult> = calc_items
+                .into_iter()
+                .map(|item| kmd_core::SearchResult {
+                    item,
+                    score: SCORE_PLUGIN,
+                })
+                .collect();
+            results.splice(0..0, calc_results);
+        }
+
+        self.results = results;
+        self.selected = 0;
     }
 
     fn launch_selected(&mut self) -> Task<Message> {
@@ -150,7 +235,6 @@ impl App {
                 }
                 kmd_core::action::ActionResult::NeedsConfirmation(msg) => {
                     tracing::warn!("Action needs confirmation: {msg}");
-                    // TODO: show confirmation dialog
                     return Task::none();
                 }
                 kmd_core::action::ActionResult::Error(err) => {
@@ -158,7 +242,6 @@ impl App {
                     return Task::none();
                 }
             }
-            // Clear and collapse after successful launch.
             self.query.clear();
             self.results.clear();
             self.selected = 0;
@@ -239,9 +322,14 @@ impl App {
             content = content.push(self.view_accent_bar());
         }
 
+        // Outer container — enhanced shadow for depth
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
+        let border_color = Color {
+            a: 0.15,
+            ..t.accent
+        };
 
         container(content)
             .width(WINDOW_WIDTH)
@@ -249,13 +337,13 @@ impl App {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: radius.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
+                    width: 1.0,
+                    color: border_color,
                 },
                 shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.5 * shadow_i),
-                    offset: Vector::new(0.0, 4.0),
-                    blur_radius: 20.0,
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.6 * shadow_i),
+                    offset: Vector::new(0.0, 8.0),
+                    blur_radius: 32.0,
                 },
                 text_color: None,
                 snap: false,
@@ -270,7 +358,7 @@ impl App {
         let accent_color = t.accent;
         let surface = t.surface;
         let has_results = !self.results.is_empty();
-        let radius: f32 = if has_results { 0.0 } else { 12.0 };
+        let radius: f32 = if has_results { 0.0 } else { t.corner_radius };
 
         let brand = text("»").size(24).color(t.peach);
 
@@ -354,7 +442,6 @@ impl App {
         let is_selected = index == self.selected;
         let item = &result.item;
 
-        // Selection indicator
         let sel_color = if is_selected {
             t.accent
         } else {
@@ -377,7 +464,6 @@ impl App {
         let subtitle = text(&item.path).size(11).color(t.subtext);
         let info = column![title, subtitle].spacing(2);
 
-        // Kind badge (pill)
         let kind_color = t.kind_color(item.kind);
         let kind_label = format!("{}", item.kind);
         let badge_bg = Color {
@@ -461,4 +547,17 @@ impl App {
             })
             .into()
     }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Convert an iterator of IndexItems into SearchResults with a fixed score.
+fn items_to_results(items: impl IntoIterator<Item = kmd_core::IndexItem>) -> Vec<kmd_core::SearchResult> {
+    items
+        .into_iter()
+        .map(|item| kmd_core::SearchResult {
+            item,
+            score: SCORE_PLUGIN,
+        })
+        .collect()
 }
