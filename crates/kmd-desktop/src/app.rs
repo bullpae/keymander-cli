@@ -271,12 +271,14 @@ impl App {
     }
 
     fn handle_settings_query(&mut self, query: &str) {
-        let filter = query
-            .strip_prefix(":settings")
-            .or_else(|| query.strip_prefix(":set"))
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        // Split into command part and filter argument.
+        // The canonical command is ":settings", but partial prefixes like
+        // ":set", ":sett", ":setti", ":settin", ":setting" are also accepted.
+        // The filter is everything after the first space (if any).
+        let filter = match query.find(' ') {
+            Some(pos) => query[pos + 1..].trim().to_lowercase(),
+            None => String::new(),
+        };
 
         let emoji = self.use_emoji;
         let mut items: Vec<IndexItem> = Vec::new();
