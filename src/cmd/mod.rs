@@ -70,6 +70,7 @@ pub fn create_search_engine(
 ) -> kmd_core::SearchEngine {
     let index = load_or_build_index(&config.launcher, config.general.emoji_icons);
     let mut engine = kmd_core::SearchEngine::new();
+    engine.set_kind_weights(config.launcher.kind_weights.clone());
     engine.load(index.items);
     engine
 }

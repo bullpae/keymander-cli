@@ -4,6 +4,7 @@
 //! Shares the same kmd-core search engine and portable data as the CLI.
 
 mod app;
+mod engine;
 mod theme;
 
 use iced::window;

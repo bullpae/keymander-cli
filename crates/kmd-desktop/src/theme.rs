@@ -1,6 +1,10 @@
 //! Desktop theme system — 5 built-in presets + accent override + glassmorphism
 //!
 //! Colors are kept in sync with the CLI TUI theme for brand consistency.
+//!
+//! Many items are not yet used but form the public API for Phase 2
+//! (config-driven theme switching, accent override, glassmorphism).
+#![allow(dead_code)]
 
 use iced::Color;
 
