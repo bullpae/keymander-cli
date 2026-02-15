@@ -10,7 +10,7 @@ mod app;
 mod engine;
 mod theme;
 
-use iced::window;
+use iced::{window, Color};
 
 fn main() -> iced::Result {
     // Logging — in debug mode goes to console, in release suppressed by windows_subsystem.
@@ -38,6 +38,10 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .theme(app::App::theme)
+        .style(|_state, _theme| iced::theme::Style {
+            background_color: Color::TRANSPARENT,
+            text_color: Color::WHITE,
+        })
         .subscription(app::App::subscription)
         .antialiasing(true)
         .run()

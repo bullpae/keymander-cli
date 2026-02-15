@@ -16,6 +16,9 @@ kmd-core = { path = "../kmd-core" }
 # GUI
 iced = { version = "0.14", features = ["tokio"] }
 
+# OS integration
+open = "5"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

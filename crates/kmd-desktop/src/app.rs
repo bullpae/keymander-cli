@@ -14,6 +14,7 @@ use iced::{
 
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
 use kmd_core::web;
+use kmd_core::{IndexItem, ItemKind, Source};
 
 use crate::theme::DesktopTheme;
 
@@ -137,6 +138,8 @@ impl App {
             self.handle_calc_query(&query);
         } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
             self.handle_emoji_query(&query);
+        } else if query.starts_with(":settings") || query.starts_with(":set ") || query == ":set" {
+            self.handle_settings_query(&query);
         } else if query.starts_with('!') {
             self.handle_shell_query(&query);
         } else {
@@ -200,6 +203,96 @@ impl App {
         self.selected = 0;
     }
 
+    /// :settings / :set — show settings options
+    fn handle_settings_query(&mut self, query: &str) {
+        let filter = query
+            .strip_prefix(":settings")
+            .or_else(|| query.strip_prefix(":set"))
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+
+        let emoji = self.use_emoji;
+        let mut items: Vec<IndexItem> = Vec::new();
+
+        let settings_entries = [
+            ("Edit Config File", "kmd:settings:config", if emoji { "⚙️" } else { "[CFG]" }),
+            ("Open Config Directory", "kmd:settings:dir", if emoji { "📂" } else { "[DIR]" }),
+            ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "🌙" } else { "[THM]" }),
+            ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "⬛" } else { "[THM]" }),
+            ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "☀️" } else { "[THM]" }),
+            ("Theme: Rose Pine", "kmd:settings:theme:rose_pine", if emoji { "🌹" } else { "[THM]" }),
+            ("Theme: Nord", "kmd:settings:theme:nord", if emoji { "❄️" } else { "[THM]" }),
+            ("Rebuild Index", "kmd:settings:rebuild", if emoji { "🔄" } else { "[IDX]" }),
+        ];
+
+        for (name, path, icon) in settings_entries {
+            if filter.is_empty() || name.to_lowercase().contains(&filter) {
+                items.push(IndexItem {
+                    name: name.to_string(),
+                    path: path.to_string(),
+                    icon: icon.to_string(),
+                    kind: ItemKind::SystemCommand,
+                    source: Source::Plugin,
+                    keywords: String::new(),
+                });
+            }
+        }
+
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// Handle execution of a settings action.
+    fn handle_settings_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
+        let action = result.item.path.strip_prefix("kmd:settings:").unwrap_or("");
+
+        match action {
+            "config" => {
+                let config_dir = kmd_core::Config::default_config_dir();
+                let config_path = config_dir.join(kmd_core::CONFIG_FILENAME);
+                if config_path.exists() {
+                    let _ = open::that(&config_path);
+                    tracing::info!("Opened config file: {}", config_path.display());
+                } else {
+                    tracing::warn!("Config file not found: {}", config_path.display());
+                }
+            }
+            "dir" => {
+                let config_dir = kmd_core::Config::default_config_dir();
+                let _ = open::that(&config_dir);
+                tracing::info!("Opened config directory: {}", config_dir.display());
+            }
+            "rebuild" => {
+                let config = crate::engine::load_config();
+                self.engine = crate::engine::create_search_engine(&config);
+                tracing::info!("Index rebuilt");
+                self.query.clear();
+                self.results.clear();
+                self.selected = 0;
+                return self.resize_window();
+            }
+            theme_action if theme_action.starts_with("theme:") => {
+                let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
+                self.theme = crate::theme::from_name(theme_name);
+                tracing::info!("Theme changed to: {}", self.theme.name);
+                self.query.clear();
+                self.results.clear();
+                self.selected = 0;
+                return self.resize_window();
+            }
+            _ => {
+                tracing::warn!("Unknown settings action: {action}");
+            }
+        }
+        // Don't exit for settings actions — keep the window open
+        self.query.clear();
+        self.results.clear();
+        self.selected = 0;
+        self.resize_window()
+    }
+
     /// Default fuzzy search with inline calculator
     fn handle_main_search(&mut self, query: &str) {
         let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
@@ -224,30 +317,36 @@ impl App {
     }
 
     fn launch_selected(&mut self) -> Task<Message> {
-        if let Some(result) = self.results.get(self.selected) {
-            let action_result = kmd_core::action::execute(result);
-            match action_result {
-                kmd_core::action::ActionResult::Launched => {
-                    tracing::debug!("Launched: {}", result.item.name);
-                }
-                kmd_core::action::ActionResult::OpenedUrl(url) => {
-                    tracing::debug!("Opened URL: {url}");
-                }
-                kmd_core::action::ActionResult::NeedsConfirmation(msg) => {
-                    tracing::warn!("Action needs confirmation: {msg}");
-                    return Task::none();
-                }
-                kmd_core::action::ActionResult::Error(err) => {
-                    tracing::error!("Failed to launch '{}': {err}", result.item.name);
-                    return Task::none();
-                }
-            }
-            self.query.clear();
-            self.results.clear();
-            self.selected = 0;
-            return self.resize_window();
+        let Some(result) = self.results.get(self.selected).cloned() else {
+            return Task::none();
+        };
+
+        // Special handling: settings items (don't exit after)
+        if result.item.kind == ItemKind::SystemCommand
+            && result.item.path.starts_with("kmd:settings:")
+        {
+            return self.handle_settings_action(&result);
         }
-        Task::none()
+
+        let action_result = kmd_core::action::execute(&result);
+        match action_result {
+            kmd_core::action::ActionResult::Launched => {
+                tracing::debug!("Launched: {}", result.item.name);
+            }
+            kmd_core::action::ActionResult::OpenedUrl(url) => {
+                tracing::debug!("Opened URL: {url}");
+            }
+            kmd_core::action::ActionResult::NeedsConfirmation(msg) => {
+                tracing::warn!("Action needs confirmation: {msg}");
+                return Task::none();
+            }
+            kmd_core::action::ActionResult::Error(err) => {
+                tracing::error!("Failed to launch '{}': {err}", result.item.name);
+                return Task::none();
+            }
+        }
+        // Launcher disappears after successful execution
+        iced::exit()
     }
 
     fn handle_key(&mut self, key: keyboard::Key) -> Task<Message> {
