@@ -214,7 +214,7 @@ impl App {
             self.handle_calc_query(&query);
         } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
             self.handle_emoji_query(&query);
-        } else if query.starts_with(":settings") || query.starts_with(":set ") || query == ":set" {
+        } else if query.starts_with(":set") {
             self.handle_settings_query(&query);
         } else if query.starts_with('!') {
             self.handle_shell_query(&query);

@@ -70,20 +70,32 @@ pub fn open_url(url: &str) -> ActionResult {
 
 /// Spawn the platform-specific "open" command for a path or URL
 fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
-    if cfg!(target_os = "windows") {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         // shell:appsFolder URIs (UWP/Store apps) must be opened via explorer.exe
         if target.starts_with("shell:") {
             Command::new("explorer.exe")
                 .arg(target)
+                .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         } else {
             Command::new("cmd")
                 .args(["/c", "start", "", target])
+                .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
         }
-    } else if cfg!(target_os = "macos") {
+    }
+
+    #[cfg(target_os = "macos")]
+    {
         Command::new("open").arg(target).spawn()
-    } else {
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
         Command::new("xdg-open").arg(target).spawn()
     }
 }
@@ -103,7 +115,18 @@ fn execute_system_command(display_name: &str) -> ActionResult {
 
 /// Actually run a system command (after confirmation if needed)
 pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> ActionResult {
-    match Command::new(cmd.command).args(cmd.args).spawn() {
+    let mut command = Command::new(cmd.command);
+    command.args(cmd.args);
+
+    // Hide the console window on Windows so it doesn't flash.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match command.spawn() {
         Ok(_) => ActionResult::Launched,
         Err(e) => ActionResult::Error(format!(
             "Failed to execute '{}': {}",
