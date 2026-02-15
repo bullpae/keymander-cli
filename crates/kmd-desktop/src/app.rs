@@ -2,6 +2,9 @@
 //!
 //! Renders a Spotlight-like floating launcher: search bar always visible,
 //! results list + status bar appear only when there are results.
+//! Supports singleton toggle via `kmd_core::single_instance::Guard`.
+
+use std::time::Duration;
 
 use iced::keyboard;
 use iced::widget::{
@@ -13,6 +16,7 @@ use iced::{
 };
 
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
+use kmd_core::single_instance::Guard;
 use kmd_core::web;
 use kmd_core::{IndexItem, ItemKind, Source};
 
@@ -28,6 +32,9 @@ const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
+/// Interval between quit-signal polls (ms).
+const QUIT_POLL_MS: u64 = 300;
+
 // ─── App State ────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -40,6 +47,8 @@ pub struct App {
     input_id: iced::widget::Id,
     window_id: Option<window::Id>,
     use_emoji: bool,
+    /// Singleton guard — dropping it removes the lock file.
+    _guard: Guard,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -51,12 +60,14 @@ pub enum Message {
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
     GotWindowId(Option<window::Id>),
+    /// Periodic tick — check if another instance told us to quit.
+    CheckQuitSignal,
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
-    pub fn new() -> (Self, Task<Message>) {
+    pub fn new(guard: Guard) -> (Self, Task<Message>) {
         let config = crate::engine::load_config();
         let engine = crate::engine::create_search_engine(&config);
         let theme = crate::theme::midnight();
@@ -72,6 +83,7 @@ impl App {
             input_id: input_id.clone(),
             window_id: None,
             use_emoji: config.general.emoji_icons,
+            _guard: guard,
         };
 
         // Focus input + fetch the main window ID.
@@ -100,13 +112,21 @@ impl App {
                 // Also focus input when we get the window ID (ensures focus on start).
                 iced::widget::operation::focus::<Message>(self.input_id.clone())
             }
+            Message::CheckQuitSignal => {
+                if self._guard.should_quit() {
+                    self._guard.consume_quit_signal();
+                    tracing::info!("Received quit signal from another instance — exiting");
+                    return iced::exit();
+                }
+                Task::none()
+            }
         }
     }
 
     // ─── Subscription ─────────────────────────────────────────────────────
 
     pub fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().map(|event| match event {
+        let keyboard_sub = keyboard::listen().map(|event| match event {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..
             } => Message::KeyEvent(key, modifiers),
@@ -114,7 +134,13 @@ impl App {
                 keyboard::Key::Named(keyboard::key::Named::Shift),
                 keyboard::Modifiers::default(),
             ),
-        })
+        });
+
+        // Poll quit signal file every QUIT_POLL_MS.
+        let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
+            .map(|_| Message::CheckQuitSignal);
+
+        Subscription::batch([keyboard_sub, quit_sub])
     }
 
     pub fn theme(&self) -> iced::Theme {
@@ -216,14 +242,14 @@ impl App {
         let mut items: Vec<IndexItem> = Vec::new();
 
         let settings_entries = [
-            ("Edit Config File", "kmd:settings:config", if emoji { "⚙️" } else { "[CFG]" }),
-            ("Open Config Directory", "kmd:settings:dir", if emoji { "📂" } else { "[DIR]" }),
-            ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "🌙" } else { "[THM]" }),
-            ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "⬛" } else { "[THM]" }),
-            ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "☀️" } else { "[THM]" }),
-            ("Theme: Rose Pine", "kmd:settings:theme:rose_pine", if emoji { "🌹" } else { "[THM]" }),
-            ("Theme: Nord", "kmd:settings:theme:nord", if emoji { "❄️" } else { "[THM]" }),
-            ("Rebuild Index", "kmd:settings:rebuild", if emoji { "🔄" } else { "[IDX]" }),
+            ("Edit Config File", "kmd:settings:config", if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }),
+            ("Open Config Directory", "kmd:settings:dir", if emoji { "\u{1F4C2}" } else { "[DIR]" }),
+            ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "\u{1F319}" } else { "[THM]" }),
+            ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "\u{2B1B}" } else { "[THM]" }),
+            ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" }),
+            ("Theme: Rose Pine", "kmd:settings:theme:rose_pine", if emoji { "\u{1F339}" } else { "[THM]" }),
+            ("Theme: Nord", "kmd:settings:theme:nord", if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" }),
+            ("Rebuild Index", "kmd:settings:rebuild", if emoji { "\u{1F504}" } else { "[IDX]" }),
         ];
 
         for (name, path, icon) in settings_entries {
@@ -459,7 +485,7 @@ impl App {
         let has_results = !self.results.is_empty();
         let radius: f32 = if has_results { 0.0 } else { t.corner_radius };
 
-        let brand = text("»").size(24).color(t.peach);
+        let brand = text("\u{00BB}").size(24).color(t.peach);
 
         let input = text_input("Search anything...", &self.query)
             .id(self.input_id.clone())
@@ -613,7 +639,7 @@ impl App {
     fn view_status_bar(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let status_text = format!(
-            "{}  ·  {} results",
+            "{}  \u{00B7}  {} results",
             self.search_mode.label(),
             self.results.len()
         );
@@ -651,7 +677,9 @@ impl App {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Convert an iterator of IndexItems into SearchResults with a fixed score.
-fn items_to_results(items: impl IntoIterator<Item = kmd_core::IndexItem>) -> Vec<kmd_core::SearchResult> {
+fn items_to_results(
+    items: impl IntoIterator<Item = kmd_core::IndexItem>,
+) -> Vec<kmd_core::SearchResult> {
     items
         .into_iter()
         .map(|item| kmd_core::SearchResult {
