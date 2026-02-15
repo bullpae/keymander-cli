@@ -85,11 +85,16 @@ pub enum Message {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
-    pub fn new(guard: Guard) -> (Self, Task<Message>) {
+    pub fn new(guard: Guard, config: kmd_core::Config) -> (Self, Task<Message>) {
         // Create an *empty* engine so the window can appear instantly.
         let engine = kmd_core::SearchEngine::new();
-        let theme = crate::theme::midnight();
+
+        // Apply user's theme from config (preloaded in main.rs for instant display).
+        let theme = crate::theme::from_name(&config.general.theme);
+        let use_emoji = config.general.emoji_icons;
+
         let input_id = iced::widget::Id::unique();
+        let scrollable_id = iced::widget::Id::unique();
         let engine_slot: EngineSlot = Arc::new(Mutex::new(None));
 
         // ── Background engine loading ──────────────────────────────────────
@@ -97,7 +102,6 @@ impl App {
         let load_task = Task::future(async move {
             // spawn_blocking so we don't stall the async executor.
             let _ = tokio::task::spawn_blocking(move || {
-                let config = crate::engine::load_config();
                 let eng = crate::engine::create_search_engine(&config);
                 let emoji = config.general.emoji_icons;
                 *slot_for_task.lock().expect("engine_slot poisoned") = Some((eng, emoji));
@@ -106,7 +110,6 @@ impl App {
             Message::EngineReady
         });
 
-        let scrollable_id = iced::widget::Id::unique();
         let app = Self {
             query: String::new(),
             results: Vec::new(),
@@ -117,7 +120,7 @@ impl App {
             input_id: input_id.clone(),
             scrollable_id,
             window_id: None,
-            use_emoji: true, // default until config loads
+            use_emoji,
             loading: true,
             engine_slot,
             _guard: guard,
@@ -187,6 +190,7 @@ impl App {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..
             } => Message::KeyEvent(key, modifiers),
+            // Only KeyPressed events produce real messages; ignore the rest.
             _ => Message::KeyEvent(
                 keyboard::Key::Named(keyboard::key::Named::Shift),
                 keyboard::Modifiers::default(),
@@ -206,25 +210,35 @@ impl App {
 
 // ─── Search Logic (with plugin integration) ───────────────────────────────────
 
+/// All supported command prefixes for the search bar.
+///
+/// | Prefix    | Mode              | Example                        |
+/// |-----------|-------------------|--------------------------------|
+/// | `@`       | Web service       | `@g rust tutorial`, `@ai why`  |
+/// | `:calc`   | Calculator        | `:calc (2+3)*4`                |
+/// | `:emoji`  | Emoji search      | `:emoji fire`, `:e 하트`       |
+/// | `:set`    | Settings          | `:set`, `:settings theme`      |
+/// | `:help`   | Help / commands   | `:help`, `:h`                  |
+/// | `!`       | Shell command     | `!ip`, `!echo hello`           |
+/// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
 impl App {
     fn perform_search(&mut self) -> Task<Message> {
         let query = self.query.clone();
+        let trimmed = query.trim();
 
-        if query.trim().is_empty() {
+        if trimmed.is_empty() {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
-        } else if query.starts_with('@') {
-            self.handle_web_query(&query);
-        } else if query.starts_with(":calc") {
-            self.handle_calc_query(&query);
-        } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
-            self.handle_emoji_query(&query);
-        } else if query.starts_with(":set") {
-            self.handle_settings_query(&query);
-        } else if query.starts_with('!') {
-            self.handle_shell_query(&query);
         } else {
-            self.handle_main_search(&query);
+            match prefix_of(trimmed) {
+                Prefix::Web       => self.handle_web_query(trimmed),
+                Prefix::Calc      => self.handle_calc_query(trimmed),
+                Prefix::Emoji     => self.handle_emoji_query(trimmed),
+                Prefix::Settings  => self.handle_settings_query(trimmed),
+                Prefix::Help      => self.handle_help_query(),
+                Prefix::Shell     => self.handle_shell_query(trimmed),
+                Prefix::General   => self.handle_main_search(trimmed),
+            }
         }
 
         self.resize_window()
@@ -276,9 +290,8 @@ impl App {
     }
 
     fn handle_settings_query(&mut self, query: &str) {
-        // Split into command part and filter argument.
         // The canonical command is ":settings", but partial prefixes like
-        // ":set", ":sett", ":setti", ":settin", ":setting" are also accepted.
+        // ":set", ":sett", ..., ":setting" are also accepted.
         // The filter is everything after the first space (if any).
         let filter = match query.find(' ') {
             Some(pos) => query[pos + 1..].trim().to_lowercase(),
@@ -311,6 +324,45 @@ impl App {
                 });
             }
         }
+
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// Show all available commands and prefixes.
+    fn handle_help_query(&mut self) {
+        let emoji = self.use_emoji;
+        let entries: Vec<(&str, &str, &str)> = vec![
+            ("@  Web Search", "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
+             if emoji { "\u{1F310}" } else { "[WEB]" }),
+            (":calc  Calculator", "Type :calc expression  (e.g. :calc (2+3)*4)",
+             if emoji { "\u{1F522}" } else { "[CAL]" }),
+            (":emoji  Emoji Search", "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
+             if emoji { "\u{1F60A}" } else { "[EMO]" }),
+            (":set  Settings", "Type :set or :settings to manage config, themes, index",
+             if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" }),
+            ("!  Shell Command", "Type !command  (e.g. !ip, !hostname, !echo hello)",
+             if emoji { "\u{1F4BB}" } else { "[SHL]" }),
+            ("Fuzzy Search", "Just type to search files, apps, folders  (e.g. firefox)",
+             if emoji { "\u{1F50D}" } else { "[FZF]" }),
+            ("*.ext  Glob Pattern", "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
+             if emoji { "\u{1F4C4}" } else { "[GLB]" }),
+            ("/regex/  Regular Expression", "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
+             if emoji { "\u{1F9EA}" } else { "[RGX]" }),
+        ];
+
+        let items: Vec<IndexItem> = entries
+            .into_iter()
+            .map(|(name, desc, icon)| IndexItem {
+                name: name.to_string(),
+                path: desc.to_string(),
+                icon: icon.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: String::new(),
+            })
+            .collect();
 
         self.results = items_to_results(items);
         self.search_mode = kmd_core::SearchMode::Contains;
@@ -396,6 +448,11 @@ impl App {
             return Task::none();
         };
 
+        // Help items are informational — don't launch.
+        if result.item.path.starts_with("Type ") {
+            return Task::none();
+        }
+
         if result.item.kind == ItemKind::SystemCommand
             && result.item.path.starts_with("kmd:settings:")
         {
@@ -453,9 +510,6 @@ impl App {
 
     /// Scroll the results list so that `self.selected` is visible.
     fn scroll_to_selected(&self) -> Task<Message> {
-        // Ensure the selected row is visible within the scrollable viewport.
-        // We scroll so that the selected item is roughly in view, keeping
-        // MAX_VISIBLE_ROWS items visible at a time.
         let top_row = if self.selected >= MAX_VISIBLE_ROWS {
             self.selected - MAX_VISIBLE_ROWS + 1
         } else {
@@ -484,6 +538,37 @@ impl App {
                 None => Task::none(),
             }),
         }
+    }
+}
+
+// ─── Prefix Detection ─────────────────────────────────────────────────────────
+
+enum Prefix {
+    Web,
+    Calc,
+    Emoji,
+    Settings,
+    Help,
+    Shell,
+    General,
+}
+
+/// Classify a non-empty trimmed query into its command prefix.
+fn prefix_of(query: &str) -> Prefix {
+    if query.starts_with('@') {
+        Prefix::Web
+    } else if query.starts_with(":calc") {
+        Prefix::Calc
+    } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
+        Prefix::Emoji
+    } else if query.starts_with(":set") {
+        Prefix::Settings
+    } else if query.starts_with(":help") || query.starts_with(":h ") || query == ":h" {
+        Prefix::Help
+    } else if query.starts_with('!') {
+        Prefix::Shell
+    } else {
+        Prefix::General
     }
 }
 
@@ -556,7 +641,7 @@ impl App {
         let placeholder = if self.loading {
             "Loading..."
         } else {
-            "Search anything..."
+            "Search anything...  (:help for commands)"
         };
 
         let input = text_input(placeholder, &self.query)
@@ -589,14 +674,7 @@ impl App {
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
 
-        // ── Depth layering ────────────────────────────────────────────────
-        //
-        // 1. Top highlight — 1px semi-transparent white line (light reflection)
-        // 2. Main surface — slightly brighter than results area
-        // 3. Bottom shadow — 1px darker line (cast shadow from raised surface)
-        // 4. Subtle border glow — thin accent-tinted border
-        //
-        // Together these create a "raised card" 3D effect.
+        // ── Depth layering (raised card 3D effect) ────────────────────────
 
         let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
@@ -605,7 +683,6 @@ impl App {
             ..accent_color
         };
 
-        // Brighter surface for the search bar (elevated feel)
         let bar_surface = Color {
             r: (surface.r + 0.03).min(1.0),
             g: (surface.g + 0.03).min(1.0),
@@ -613,7 +690,6 @@ impl App {
             a: surface.a,
         };
 
-        // Top highlight (1px)
         let top_highlight = container(text(""))
             .width(Fill)
             .height(1)
@@ -622,13 +698,11 @@ impl App {
                 ..Default::default()
             });
 
-        // Main content area
         let main_bar = container(bar_content)
             .width(Fill)
-            .height(SEARCH_BAR_HEIGHT - 2.0) // account for top highlight + bottom shadow
+            .height(SEARCH_BAR_HEIGHT - 2.0)
             .center_y(Fill);
 
-        // Bottom shadow (1px, only when expanded)
         let bottom_shadow = container(text(""))
             .width(Fill)
             .height(1)
@@ -720,7 +794,7 @@ impl App {
         let info = column![title, subtitle].spacing(2);
 
         let kind_color = t.kind_color(item.kind);
-        let kind_label = format!("{}", item.kind);
+        let kind_label = item.kind.to_string();
         let badge_bg = Color {
             a: 0.12,
             ..kind_color

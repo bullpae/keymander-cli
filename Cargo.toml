@@ -53,8 +53,12 @@ FileDescription = "keymander - keyboard-driven launcher"
 ProductName = "keymander"
 
 [profile.release]
-opt-level = "z"
+opt-level = 2
 lto = true
 strip = true
 codegen-units = 1
 panic = "abort"
+
+# CLI binary: size-optimized (less impactful since it's TUI)
+[profile.release.package.keymander]
+opt-level = "z"

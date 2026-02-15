@@ -186,8 +186,9 @@ impl SearchEngine {
             false,
         );
         // timeout in milliseconds — wait for worker threads to finish matching.
-        // 100ms is generous enough for large indexes while staying responsive.
-        const NUCLEO_TICK_TIMEOUT_MS: u64 = 100;
+        // 10ms keeps the UI responsive while still giving Nucleo time to
+        // process most queries on typical indexes (< 20k items).
+        const NUCLEO_TICK_TIMEOUT_MS: u64 = 10;
         self.nucleo.tick(NUCLEO_TICK_TIMEOUT_MS);
 
         let snapshot = self.nucleo.snapshot();

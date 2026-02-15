@@ -39,17 +39,21 @@ fn main() -> iced::Result {
         }
     };
 
-    // Wrap in Mutex<Option<>> so the boot closure (Fn, not FnOnce) can take it.
-    let guard_cell = Mutex::new(Some(guard));
+    // ── Preload config (fast — just reads a TOML file) ────────────────────
+    // This lets us apply the user's theme immediately instead of defaulting.
+    let config = engine::load_config();
+
+    // Wrap boot data in Mutex<Option<>> so the Fn closure can take it once.
+    let boot_data = Mutex::new(Some((guard, config)));
 
     iced::application(
         move || {
-            let guard = guard_cell
+            let (guard, config) = boot_data
                 .lock()
-                .expect("guard mutex poisoned")
+                .expect("boot mutex poisoned")
                 .take()
                 .expect("boot called more than once");
-            app::App::new(guard)
+            app::App::new(guard, config)
         },
         app::App::update,
         app::App::view,
