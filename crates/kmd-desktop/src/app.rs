@@ -14,6 +14,8 @@ use iced::keyboard;
 use iced::widget::{
     column, container, mouse_area, row, scrollable, text, text_input, Column, Space,
 };
+use iced::widget::operation::scroll_to;
+use iced::widget::scrollable as scrollable_mod;
 use iced::{
     window, Background, Border, Color, Element, Fill, Padding, Shadow, Size, Subscription, Task,
     Vector,
@@ -54,6 +56,7 @@ pub struct App {
     engine: kmd_core::SearchEngine,
     theme: DesktopTheme,
     input_id: iced::widget::Id,
+    scrollable_id: iced::widget::Id,
     window_id: Option<window::Id>,
     use_emoji: bool,
     /// `true` while the background engine load is in progress.
@@ -103,6 +106,7 @@ impl App {
             Message::EngineReady
         });
 
+        let scrollable_id = iced::widget::Id::unique();
         let app = Self {
             query: String::new(),
             results: Vec::new(),
@@ -111,6 +115,7 @@ impl App {
             engine,
             theme,
             input_id: input_id.clone(),
+            scrollable_id,
             window_id: None,
             use_emoji: true, // default until config loads
             loading: true,
@@ -423,12 +428,14 @@ impl App {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
+                return self.scroll_to_selected();
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 let max = self.results.len().saturating_sub(1);
                 if self.selected < max {
                     self.selected += 1;
                 }
+                return self.scroll_to_selected();
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !self.query.is_empty() {
@@ -442,6 +449,23 @@ impl App {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Scroll the results list so that `self.selected` is visible.
+    fn scroll_to_selected(&self) -> Task<Message> {
+        // Ensure the selected row is visible within the scrollable viewport.
+        // We scroll so that the selected item is roughly in view, keeping
+        // MAX_VISIBLE_ROWS items visible at a time.
+        let top_row = if self.selected >= MAX_VISIBLE_ROWS {
+            self.selected - MAX_VISIBLE_ROWS + 1
+        } else {
+            0
+        };
+        let y_offset = top_row as f32 * ROW_HEIGHT;
+        scroll_to(
+            self.scrollable_id.clone(),
+            scrollable_mod::AbsoluteOffset { x: 0.0, y: y_offset },
+        ).into()
     }
 
     fn resize_window(&self) -> Task<Message> {
@@ -643,7 +667,7 @@ impl App {
     fn view_results_list(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let mut list = Column::new().spacing(0);
-        for (i, result) in self.results.iter().take(MAX_VISIBLE_ROWS).enumerate() {
+        for (i, result) in self.results.iter().enumerate() {
             list = list.push(self.view_result_row(i, result));
         }
 
@@ -659,6 +683,7 @@ impl App {
                     ..Default::default()
                 }),
         )
+        .id(self.scrollable_id.clone())
         .height(list_height)
         .into()
     }
