@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn test_format_number() {
         assert_eq!(format_number(42.0), "42");
-        assert_eq!(format_number(3.14), "3.14");
+        assert_eq!(format_number(3.13), "3.13");
         assert_eq!(format_number(0.1 + 0.2), "0.3");
         assert_eq!(format_number(1234.0), "1,234");
         assert_eq!(format_number(1234567.0), "1,234,567");
