@@ -160,7 +160,7 @@ fn items_to_results(
 /// alternate screen buffer, ensuring a stable position on hotkey launch.
 pub fn run_app(
     instance_guard: Option<kmd_core::single_instance::Guard>,
-    show_on_ready: bool,
+    _show_on_ready: bool,
 ) -> color_eyre::Result<()> {
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
@@ -225,7 +225,7 @@ pub fn run_app(
     // Show the terminal window (it was hidden in main() for hotkey launch).
     // Centering is handled by Windows Terminal's `centerOnLaunch` setting.
     #[cfg(windows)]
-    if show_on_ready {
+    if _show_on_ready {
         crate::win_console::show();
     }
 
