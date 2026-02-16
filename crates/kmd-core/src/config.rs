@@ -46,6 +46,9 @@ pub struct GeneralConfig {
     /// Use emoji icons (true = emoji, false = ASCII 2-char icons)
     /// Set to false for legacy terminals (conhost/cmd.exe)
     pub emoji_icons: bool,
+    /// Reset input method to English when the desktop launcher opens.
+    /// Useful because most commands start with English characters (@, :, etc.).
+    pub reset_ime_on_launch: bool,
 }
 
 impl Default for GeneralConfig {
@@ -57,6 +60,7 @@ impl Default for GeneralConfig {
             theme: "default".to_string(),
             editor: None,
             emoji_icons: true,
+            reset_ime_on_launch: true,
         }
     }
 }

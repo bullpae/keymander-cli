@@ -40,3 +40,37 @@ pub fn force_square_corners() {
 pub fn force_square_corners() {
     // No-op on non-Windows platforms.
 }
+
+/// Switch the active keyboard layout to English (US) for the foreground window.
+///
+/// On Windows, after using Korean/Japanese/Chinese IME, the input language
+/// persists across application focus changes. This forces English so the
+/// launcher starts in a state ready for commands (@, :, !, etc.).
+#[cfg(target_os = "windows")]
+pub fn force_english_ime() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        ActivateKeyboardLayout, LoadKeyboardLayoutW, ACTIVATE_KEYBOARD_LAYOUT_FLAGS, KLF_ACTIVATE,
+    };
+
+    unsafe {
+        // Load (or find) the English — United States keyboard layout.
+        let hkl = match LoadKeyboardLayoutW(windows::core::w!("00000409"), KLF_ACTIVATE) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("force_english_ime: LoadKeyboardLayoutW failed: {e}");
+                return;
+            }
+        };
+
+        // Activate it for the current thread/process.
+        match ActivateKeyboardLayout(hkl, ACTIVATE_KEYBOARD_LAYOUT_FLAGS(0)) {
+            Ok(_) => tracing::debug!("IME reset to English (US)"),
+            Err(e) => tracing::warn!("force_english_ime: ActivateKeyboardLayout failed: {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn force_english_ime() {
+    // No-op on non-Windows platforms.
+}

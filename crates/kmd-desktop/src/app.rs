@@ -72,6 +72,10 @@ pub struct App {
     window_state: WindowState,
     /// True when state changed but not yet flushed to disk.
     state_dirty: bool,
+
+    // ── IME ───────────────────────────────────────────────────────────
+    /// If true, reset input method to English every time the window appears.
+    reset_ime_on_launch: bool,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -100,6 +104,7 @@ impl App {
         let engine = kmd_core::SearchEngine::new();
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
+        let reset_ime = config.general.reset_ime_on_launch;
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
         let input_id = iced::widget::Id::unique();
@@ -135,6 +140,7 @@ impl App {
             window_width,
             window_state,
             state_dirty: false,
+            reset_ime_on_launch: reset_ime,
         };
 
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
@@ -159,8 +165,10 @@ impl App {
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
             Message::GotWindowId(id) => {
                 self.window_id = id;
-                // Force square corners on Windows 11 (DWM auto-rounds all windows).
                 crate::platform::force_square_corners();
+                if self.reset_ime_on_launch {
+                    crate::platform::force_english_ime();
+                }
                 iced::widget::operation::focus::<Message>(self.input_id.clone())
             }
             Message::EngineReady => {
@@ -337,10 +345,18 @@ impl App {
         let emoji = self.use_emoji;
         let mut items: Vec<IndexItem> = Vec::new();
 
-        let settings_entries = [
+        // Dynamic label for the IME toggle based on current state.
+        let ime_label = if self.reset_ime_on_launch {
+            "IME: Reset to English on Launch [ON]"
+        } else {
+            "IME: Reset to English on Launch [OFF]"
+        };
+
+        let settings_entries: Vec<(&str, &str, &str)> = vec![
             ("Edit Config File", "kmd:settings:config", if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }),
             ("Open Config Directory", "kmd:settings:dir", if emoji { "\u{1F4C2}" } else { "[DIR]" }),
             ("Reset Window Position", "kmd:settings:reset_position", if emoji { "\u{1F4CD}" } else { "[POS]" }),
+            (ime_label, "kmd:settings:toggle_ime_reset", if emoji { "\u{1F310}" } else { "[IME]" }),
             ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "\u{1F319}" } else { "[THM]" }),
             ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "\u{2B1B}" } else { "[THM]" }),
             ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" }),
@@ -465,6 +481,25 @@ impl App {
                 self.results.clear();
                 self.selected = 0;
                 return Task::batch([self.resize_window(), task]);
+            }
+            "toggle_ime_reset" => {
+                self.reset_ime_on_launch = !self.reset_ime_on_launch;
+                let new_val = self.reset_ime_on_launch;
+                tracing::info!("reset_ime_on_launch = {new_val}");
+
+                // Persist the change to the config file.
+                let config_dir = kmd_core::Config::default_config_dir();
+                if let Ok(mut cfg) = kmd_core::Config::load(&config_dir) {
+                    cfg.general.reset_ime_on_launch = new_val;
+                    if let Err(e) = cfg.save() {
+                        tracing::warn!("Failed to save config: {e}");
+                    }
+                }
+
+                // Re-open the settings list so the user sees the updated label.
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.resize_window();
             }
             theme_action if theme_action.starts_with("theme:") => {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
