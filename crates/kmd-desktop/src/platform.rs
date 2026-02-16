@@ -48,24 +48,34 @@ pub fn force_square_corners() {
 /// launcher starts in a state ready for commands (@, :, !, etc.).
 #[cfg(target_os = "windows")]
 pub fn force_english_ime() {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        ActivateKeyboardLayout, LoadKeyboardLayoutW, ACTIVATE_KEYBOARD_LAYOUT_FLAGS, KLF_ACTIVATE,
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::UI::Input::Ime::{
+        ImmGetContext, ImmReleaseContext, ImmSetOpenStatus,
     };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     unsafe {
-        // Load (or find) the English — United States keyboard layout.
-        let hkl = match LoadKeyboardLayoutW(windows::core::w!("00000409"), KLF_ACTIVATE) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("force_english_ime: LoadKeyboardLayoutW failed: {e}");
-                return;
-            }
-        };
+        let hwnd: HWND = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            tracing::warn!("force_english_ime: no foreground window");
+            return;
+        }
 
-        // Activate it for the current thread/process.
-        match ActivateKeyboardLayout(hkl, ACTIVATE_KEYBOARD_LAYOUT_FLAGS(0)) {
-            Ok(_) => tracing::debug!("IME reset to English (US)"),
-            Err(e) => tracing::warn!("force_english_ime: ActivateKeyboardLayout failed: {e}"),
+        // Safer than ActivateKeyboardLayout:
+        // only close IME for this window/context without changing global layout.
+        let himc = ImmGetContext(hwnd);
+        if himc.0.is_null() {
+            tracing::warn!("force_english_ime: ImmGetContext returned null");
+            return;
+        }
+
+        let ok = ImmSetOpenStatus(himc, BOOL(0));
+        let _ = ImmReleaseContext(hwnd, himc);
+
+        if ok.as_bool() {
+            tracing::debug!("IME closed for launcher window (English input mode)");
+        } else {
+            tracing::warn!("force_english_ime: ImmSetOpenStatus failed");
         }
     }
 }

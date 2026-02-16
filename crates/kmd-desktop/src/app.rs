@@ -82,6 +82,8 @@ pub enum Message {
     Submit,
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
+    BrandClicked,
+    BrandRightClicked,
     StartWindowDrag,
     StartWindowResize(window::Direction),
     GotWindowId(Option<window::Id>),
@@ -159,6 +161,16 @@ impl App {
                 self.launch_selected()
             }
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
+            Message::BrandClicked => {
+                // Left click logo: open quick command/help modes.
+                self.query = ":help".to_string();
+                self.perform_search()
+            }
+            Message::BrandRightClicked => {
+                // Right click logo: jump to settings.
+                self.query = ":set".to_string();
+                self.perform_search()
+            }
             Message::StartWindowDrag => match self.window_id {
                 Some(id) => window::drag(id),
                 None => window::oldest().then(|maybe_id| match maybe_id {
@@ -773,10 +785,12 @@ impl App {
             });
 
         // Invisible edge grips for natural resize on borderless window.
-        let left_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::West));
-        let right_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::East));
+        let left_edge_resize = mouse_area(container(text("")).width(8).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::West))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        let right_edge_resize = mouse_area(container(text("")).width(8).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::East))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
 
         row![left_edge_resize, body, right_edge_resize]
             .width(Fill)
@@ -803,7 +817,13 @@ impl App {
         let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
         let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
-        let brand = text("\u{00BB}").size(24).color(t.peach);
+        let brand = mouse_area(
+            container(text("\u{00BB}").size(24).color(t.peach))
+                .padding(Padding::from([0, 4])),
+        )
+        .on_press(Message::BrandClicked)
+        .on_right_press(Message::BrandRightClicked)
+        .interaction(iced::mouse::Interaction::Pointer);
 
         let placeholder = if self.loading {
             "Loading..."
@@ -844,17 +864,18 @@ impl App {
         let top_drag_strip = mouse_area(
             container(text(""))
             .width(Fill)
-            .height(8)
+            .height(12)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(highlight_color)),
                 ..Default::default()
             }),
         )
-        .on_press(Message::StartWindowDrag);
+        .on_press(Message::StartWindowDrag)
+        .interaction(iced::mouse::Interaction::Grab);
 
         let main_bar = container(bar_content)
             .width(Fill)
-            .height(SEARCH_BAR_HEIGHT - 9.0)
+            .height(SEARCH_BAR_HEIGHT - 13.0)
             .center_y(Fill);
 
         let bottom_shadow = container(text(""))
