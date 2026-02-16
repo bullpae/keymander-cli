@@ -159,6 +159,8 @@ impl App {
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
             Message::GotWindowId(id) => {
                 self.window_id = id;
+                // Force square corners on Windows 11 (DWM auto-rounds all windows).
+                crate::platform::force_square_corners();
                 iced::widget::operation::focus::<Message>(self.input_id.clone())
             }
             Message::EngineReady => {
@@ -712,14 +714,7 @@ impl App {
             a: surface.a,
         };
 
-        // [fix3] Corners: full round when standalone, top-only when results
-        // are visible so the top shape matches the outer container.
-        let corner = t.corner_radius;
-        let radius: [f32; 4] = if has_results {
-            [corner, corner, 0.0, 0.0]
-        } else {
-            [corner, corner, corner, corner]
-        };
+        let radius = t.corner_radius;
 
         // [fix3] Border/shadow only when standalone (no results). When
         // results are visible the outer container already provides the border.
@@ -951,17 +946,11 @@ impl App {
 
     fn view_accent_bar(&self) -> Element<'_, Message> {
         let accent = self.theme.accent;
-        let corner = self.theme.corner_radius;
-        // [fix3] Bottom corners match the outer container's rounded shape.
         container(text(""))
             .width(Fill)
             .height(2)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(accent)),
-                border: Border {
-                    radius: [0.0, 0.0, corner, corner].into(),
-                    ..Default::default()
-                },
                 ..Default::default()
             })
             .into()

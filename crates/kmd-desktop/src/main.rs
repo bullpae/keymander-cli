@@ -10,6 +10,7 @@
 
 mod app;
 mod engine;
+mod platform;
 mod theme;
 mod window_state;
 
