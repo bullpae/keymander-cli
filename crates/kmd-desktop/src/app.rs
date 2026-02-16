@@ -164,10 +164,7 @@ impl App {
             Message::BrandClicked => {
                 // Toggle quick help.
                 if self.query.starts_with(":help") {
-                    self.query.clear();
-                    self.results.clear();
-                    self.selected = 0;
-                    self.resize_window()
+                    self.clear_query_and_refocus()
                 } else {
                     self.query = ":help".to_string();
                     self.perform_search()
@@ -176,10 +173,7 @@ impl App {
             Message::BrandRightClicked => {
                 // Toggle settings.
                 if self.query.starts_with(":set") {
-                    self.query.clear();
-                    self.results.clear();
-                    self.selected = 0;
-                    self.resize_window()
+                    self.clear_query_and_refocus()
                 } else {
                     self.query = ":set".to_string();
                     self.perform_search()
@@ -387,79 +381,92 @@ impl App {
             }
         };
 
-        let settings_entries: Vec<(String, &'static str, &'static str)> = vec![
+        let settings_entries: Vec<(String, &'static str, &'static str, &'static str)> = vec![
             (
                 "Edit Config File".to_string(),
                 "kmd:settings:config",
                 if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" },
+                "Open config.toml",
             ),
             (
                 "Open Config Directory".to_string(),
                 "kmd:settings:dir",
                 if emoji { "\u{1F4C2}" } else { "[DIR]" },
+                "Open configuration folder",
             ),
             (
                 "Reset Window Position".to_string(),
                 "kmd:settings:reset_position",
                 if emoji { "\u{1F4CD}" } else { "[POS]" },
-            ),
-            (
-                "Move Window: drag top strip".to_string(),
-                "kmd:settings:noop",
-                if emoji { "\u{1F6C8}" } else { "[TIP]" },
-            ),
-            (
-                "Resize Window: drag left/right edges".to_string(),
-                "kmd:settings:noop",
-                if emoji { "\u{1F6C8}" } else { "[TIP]" },
+                "Move window to default position",
             ),
             (
                 ime_label.to_string(),
                 "kmd:settings:toggle_ime_reset",
                 if emoji { "\u{1F310}" } else { "[IME]" },
+                "Toggle English input on launch",
             ),
             (
                 label("Theme: Midnight (default)", "Midnight"),
                 "kmd:settings:theme:midnight",
                 if emoji { "\u{1F319}" } else { "[THM]" },
+                "Switch desktop theme",
             ),
             (
                 label("Theme: Obsidian", "Obsidian"),
                 "kmd:settings:theme:obsidian",
                 if emoji { "\u{2B1B}" } else { "[THM]" },
+                "Switch desktop theme",
             ),
             (
                 label("Theme: Snow", "Snow"),
                 "kmd:settings:theme:snow",
                 if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" },
+                "Switch desktop theme",
             ),
             (
                 label("Theme: Rose Pine", "Rose Pine"),
                 "kmd:settings:theme:rose_pine",
                 if emoji { "\u{1F339}" } else { "[THM]" },
+                "Switch desktop theme",
             ),
             (
                 label("Theme: Nord", "Nord"),
                 "kmd:settings:theme:nord",
                 if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" },
+                "Switch desktop theme",
             ),
             (
                 "Rebuild Index".to_string(),
                 "kmd:settings:rebuild",
                 if emoji { "\u{1F504}" } else { "[IDX]" },
+                "Rebuild and reload index data",
+            ),
+            // Non-actionable info entries are intentionally at the bottom.
+            (
+                "Info: Move Window (drag top strip)".to_string(),
+                "kmd:settings:noop",
+                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" },
+                "Info only - not executable",
+            ),
+            (
+                "Info: Resize Window (drag left/right edges)".to_string(),
+                "kmd:settings:noop",
+                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" },
+                "Info only - not executable",
             ),
         ];
 
         let items: Vec<IndexItem> = settings_entries
             .iter()
-            .filter(|(name, _, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
-            .map(|(name, path, icon)| IndexItem {
+            .filter(|(name, _, _, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
+            .map(|(name, action, icon, desc)| IndexItem {
                 name: name.clone(),
-                path: path.to_string(),
+                path: desc.to_string(),
                 icon: icon.to_string(),
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
-                keywords: String::new(),
+                keywords: action.to_string(),
             })
             .collect();
 
@@ -497,7 +504,14 @@ impl App {
                 icon: icon.to_string(),
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
-                keywords: String::new(),
+                keywords: if name.starts_with("Fuzzy Search")
+                    || name.starts_with("*.ext")
+                    || name.starts_with("/regex/")
+                {
+                    "kmd:help:example".to_string()
+                } else {
+                    String::new()
+                },
             })
             .collect();
 
@@ -507,7 +521,12 @@ impl App {
     }
 
     fn handle_settings_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
-        let action = result.item.path.strip_prefix("kmd:settings:").unwrap_or("");
+        let action_src = if result.item.keywords.starts_with("kmd:settings:") {
+            result.item.keywords.as_str()
+        } else {
+            result.item.path.as_str()
+        };
+        let action = action_src.strip_prefix("kmd:settings:").unwrap_or("");
 
         match action {
             "noop" => {
@@ -634,7 +653,7 @@ impl App {
         }
 
         if result.item.kind == ItemKind::SystemCommand
-            && result.item.path.starts_with("kmd:settings:")
+            && result.item.keywords.starts_with("kmd:settings:")
         {
             return self.handle_settings_action(&result);
         }
@@ -680,10 +699,7 @@ impl App {
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !self.query.is_empty() {
-                    self.query.clear();
-                    self.results.clear();
-                    self.selected = 0;
-                    return self.resize_window();
+                    return self.clear_query_and_refocus();
                 }
                 if self.state_dirty {
                     self.window_state.save();
@@ -702,6 +718,16 @@ impl App {
             scrollable_mod::AbsoluteOffset { x: 0.0, y: y_offset },
         )
         .into()
+    }
+
+    fn clear_query_and_refocus(&mut self) -> Task<Message> {
+        self.query.clear();
+        self.results.clear();
+        self.selected = 0;
+        Task::batch([
+            self.resize_window(),
+            iced::widget::operation::focus::<Message>(self.input_id.clone()),
+        ])
     }
 
     fn resize_window(&self) -> Task<Message> {
@@ -1073,11 +1099,11 @@ fn help_query_seed(name: &str) -> Option<&'static str> {
     } else if name.starts_with("!") {
         Some("!")
     } else if name.starts_with("Fuzzy Search") {
-        Some("")
+        Some("firefox")
     } else if name.starts_with("*.ext") {
-        Some("*")
+        Some("*.pdf")
     } else if name.starts_with("/regex/") {
-        Some("/")
+        Some("/test\\d+/")
     } else {
         None
     }
