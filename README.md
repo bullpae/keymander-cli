@@ -63,8 +63,9 @@ Download the latest binary from [GitHub Releases](https://github.com/bullpae/key
 kmd-desktop
 ```
 
-Launches a floating, borderless, transparent search window (Spotlight-like).
+Launches a floating, borderless, transparent search window (Spotlight-like) with square corners.
 Type to search, arrow keys to navigate, Enter to launch, Esc to dismiss.
+Drag the top strip to move the window; drag the left or right edges to resize.
 The window disappears after launching an item.
 
 **Setting up a global hotkey:**
@@ -170,6 +171,7 @@ kmd daemon status
 ## Special Command Prefixes
 
 Type `:help` (or `:h`) in the search bar to see all available commands.
+In `:help`, selecting an entry and pressing Enter fills a starter query (quick template).
 
 | Prefix | Mode | Example | Description |
 |--------|------|---------|-------------|
@@ -213,8 +215,12 @@ Type `:help` (or `:h`) in the search bar to see all available commands.
 |-----|--------|
 | `↑` / `↓` | Navigate results |
 | `Enter` | Launch selected item |
-| `Esc` | Clear query / quit |
+| `Esc` | If query exists: clear + refocus input. If empty: quit |
 | Mouse click | Select and launch item |
+| Logo left-click (`»`) | Toggle `:help` |
+| Logo right-click (`»`) | Toggle `:set` |
+| Drag top strip | Move window |
+| Drag left/right edges | Resize window |
 
 ### TUI (kmd)
 
@@ -290,6 +296,7 @@ show_preview = true
 preview_width_percent = 40
 theme = "default"        # TUI theme | Desktop theme (midnight/obsidian/snow/rose_pine/nord)
 emoji_icons = true       # emoji icons (false = ASCII fallback)
+reset_ime_on_launch = true  # Desktop: reset IME to English mode on open
 
 [launcher]
 file_search_provider = "auto"  # auto | builtin | fd | everything | mdfind | locate | winfs

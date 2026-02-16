@@ -349,6 +349,7 @@ impl Config {
             "general.theme"                 => get!(str self.general.theme),
             "general.editor"                => get!(opt self.general.editor),
             "general.emoji_icons"           => get!(self.general.emoji_icons),
+            "general.reset_ime_on_launch"   => get!(self.general.reset_ime_on_launch),
             // launcher
             "launcher.file_search_provider" => get!(str self.launcher.file_search_provider),
             "launcher.max_results"          => get!(self.launcher.max_results),
@@ -393,6 +394,7 @@ impl Config {
             "general.theme"                 => self.general.theme = value.to_string(),
             "general.editor"                => self.general.editor = if value.is_empty() { None } else { Some(value.to_string()) },
             "general.emoji_icons"           => self.general.emoji_icons = parse_or(value, self.general.emoji_icons),
+            "general.reset_ime_on_launch"   => self.general.reset_ime_on_launch = parse_or(value, self.general.reset_ime_on_launch),
             // launcher
             "launcher.file_search_provider" => self.launcher.file_search_provider = value.to_string(),
             "launcher.max_results"          => self.launcher.max_results = parse_or(value, self.launcher.max_results),

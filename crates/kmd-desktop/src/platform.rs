@@ -1,23 +1,22 @@
 //! Platform-specific window tweaks.
 
-/// Force square (non-rounded) window corners on Windows 11.
+/// Force square (non-rounded) corners on target window (Windows 11).
 ///
 /// Windows 11 DWM automatically applies rounded corners to all windows,
 /// including borderless ones. This calls `DwmSetWindowAttribute` with
 /// `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND` to override that.
 #[cfg(target_os = "windows")]
-pub fn force_square_corners() {
+pub fn force_square_corners(raw_id: u64) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
         DWMWCP_DONOTROUND,
     };
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     unsafe {
-        let hwnd: HWND = GetForegroundWindow();
+        let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
         if hwnd.0.is_null() {
-            tracing::warn!("force_square_corners: no foreground window");
+            tracing::warn!("force_square_corners: invalid window id");
             return;
         }
 
@@ -37,7 +36,7 @@ pub fn force_square_corners() {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn force_square_corners() {
+pub fn force_square_corners(_raw_id: u64) {
     // No-op on non-Windows platforms.
 }
 
@@ -47,17 +46,16 @@ pub fn force_square_corners() {
 /// persists across application focus changes. This forces English so the
 /// launcher starts in a state ready for commands (@, :, !, etc.).
 #[cfg(target_os = "windows")]
-pub fn force_english_ime() {
+pub fn force_english_ime(raw_id: u64) {
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::UI::Input::Ime::{
         ImmGetContext, ImmReleaseContext, ImmSetOpenStatus,
     };
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     unsafe {
-        let hwnd: HWND = GetForegroundWindow();
+        let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
         if hwnd.0.is_null() {
-            tracing::warn!("force_english_ime: no foreground window");
+            tracing::warn!("force_english_ime: invalid window id");
             return;
         }
 
@@ -81,6 +79,6 @@ pub fn force_english_ime() {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn force_english_ime() {
+pub fn force_english_ime(_raw_id: u64) {
     // No-op on non-Windows platforms.
 }

@@ -31,8 +31,17 @@ impl WindowState {
             return Self::default();
         }
         match std::fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(state) => state,
+                Err(e) => {
+                    tracing::warn!("Failed to parse window state ({}): {e}", path.display());
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read window state ({}): {e}", path.display());
+                Self::default()
+            }
         }
     }
 
@@ -40,10 +49,20 @@ impl WindowState {
     pub fn save(&self) {
         let path = Self::state_path();
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("Failed to create window state directory ({}): {e}", parent.display());
+                return;
+            }
         }
-        if let Ok(content) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, content);
+        match serde_json::to_string_pretty(self) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    tracing::warn!("Failed to write window state ({}): {e}", path.display());
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize window state ({}): {e}", path.display());
+            }
         }
     }
 

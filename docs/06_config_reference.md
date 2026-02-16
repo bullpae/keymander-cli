@@ -16,7 +16,7 @@
 
 ```mermaid
 graph TB
-    ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, editor"]
+    ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, reset_ime_on_launch, editor"]
     ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
     ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
     ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
@@ -36,6 +36,7 @@ show_preview = true          # 미리보기 패널 표시 여부
 preview_width_percent = 40   # 미리보기 패널 너비 (%)
 theme = "default"            # 테마 이름
 emoji_icons = true           # 이모지 아이콘 (false = ASCII 폴백)
+reset_ime_on_launch = true   # (Desktop) 실행 시 IME를 영문 모드로 시작
 # editor = "code"            # 외부 에디터 (미설정 시 $EDITOR → vi/notepad)
 
 [launcher]
@@ -89,6 +90,7 @@ toggle_preview = "ctrl+p"
 | preview_width_percent | u16 | 40 | 미리보기 너비 비율 (20-80) |
 | theme | String | "default" | 테마 이름 |
 | emoji_icons | bool | true | 이모지 아이콘 (false = ASCII 폴백) |
+| reset_ime_on_launch | bool | true | (Desktop) 런처 오픈 시 IME를 영문 모드로 시작 |
 | editor | String? | None | 외부 에디터 ($EDITOR 폴백) |
 
 ### 4.2 [launcher]

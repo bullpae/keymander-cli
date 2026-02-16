@@ -87,6 +87,7 @@ pub enum Message {
     StartWindowDrag,
     StartWindowResize(window::Direction),
     GotWindowId(Option<window::Id>),
+    GotRawWindowId(u64),
     EngineReady,
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
@@ -195,11 +196,20 @@ impl App {
             },
             Message::GotWindowId(id) => {
                 self.window_id = id;
-                crate::platform::force_square_corners();
-                if self.reset_ime_on_launch {
-                    crate::platform::force_english_ime();
+                match id {
+                    Some(id) => Task::batch([
+                        iced::widget::operation::focus::<Message>(self.input_id.clone()),
+                        window::raw_id::<Message>(id).map(Message::GotRawWindowId),
+                    ]),
+                    None => iced::widget::operation::focus::<Message>(self.input_id.clone()),
                 }
-                iced::widget::operation::focus::<Message>(self.input_id.clone())
+            }
+            Message::GotRawWindowId(raw_id) => {
+                crate::platform::force_square_corners(raw_id);
+                if self.reset_ime_on_launch {
+                    crate::platform::force_english_ime(raw_id);
+                }
+                Task::none()
             }
             Message::EngineReady => {
                 let loaded = self
@@ -535,11 +545,14 @@ impl App {
             "config" => {
                 let config_dir = kmd_core::Config::default_config_dir();
                 let config_path = config_dir.join(kmd_core::CONFIG_FILENAME);
-                if config_path.exists() {
-                    let _ = open::that(&config_path);
-                } else {
-                    tracing::warn!("Config file not found: {}", config_path.display());
+                if !config_path.exists() {
+                    let mut cfg = crate::engine::load_config();
+                    cfg.config_path = Some(config_path.clone());
+                    if let Err(e) = cfg.save() {
+                        tracing::warn!("Failed to create config file: {e}");
+                    }
                 }
+                let _ = open::that(&config_path);
             }
             "dir" => {
                 let config_dir = kmd_core::Config::default_config_dir();
@@ -550,8 +563,7 @@ impl App {
                 self.window_state = WindowState::default();
                 self.window_width = DEFAULT_WIDTH;
                 self.state_dirty = false;
-
-                if let Some(id) = self.window_id {
+                let run_reset = |id: window::Id| {
                     let resize = window::resize(id, Size::new(DEFAULT_WIDTH, SEARCH_BAR_HEIGHT));
                     let move_task = window::monitor_size(id).then(move |maybe_size| {
                         if let Some(mon) = maybe_size {
@@ -562,11 +574,20 @@ impl App {
                             Task::none()
                         }
                     });
-                    self.query.clear();
-                    self.results.clear();
-                    self.selected = 0;
-                    return Task::batch([resize, move_task]);
-                }
+                    Task::batch([resize, move_task])
+                };
+
+                self.query.clear();
+                self.results.clear();
+                self.selected = 0;
+
+                return match self.window_id {
+                    Some(id) => run_reset(id),
+                    None => window::oldest().then(move |maybe_id| match maybe_id {
+                        Some(id) => run_reset(id),
+                        None => Task::none(),
+                    }),
+                };
             }
             "rebuild" => {
                 self.loading = true;

@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-cli:
+    name: Build CLI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -18,15 +18,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: kmd
+            prefix: kmd
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: kmd
+            prefix: kmd
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: kmd
+            prefix: kmd
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: kmd.exe
+            prefix: kmd
 
     steps:
       - uses: actions/checkout@v4
@@ -35,30 +39,87 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
+      - name: Validate
+        run: cargo check --workspace
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release -p keymander --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../kmd-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
+          tar czf ../../../${{ matrix.prefix }}-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../kmd-${{ matrix.target }}.zip ${{ matrix.artifact }}
+          7z a ../../../${{ matrix.prefix }}-${{ matrix.target }}.zip ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kmd-${{ matrix.target }}
-          path: kmd-${{ matrix.target }}.*
+          name: ${{ matrix.prefix }}-${{ matrix.target }}
+          path: ${{ matrix.prefix }}-${{ matrix.target }}.*
+
+  build-desktop:
+    name: Build Desktop ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: kmd-desktop
+            prefix: kmd-desktop
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: kmd-desktop
+            prefix: kmd-desktop
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: kmd-desktop
+            prefix: kmd-desktop
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: kmd-desktop.exe
+            prefix: kmd-desktop
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate
+        run: cargo check --workspace
+
+      - name: Build
+        run: cargo build --release -p kmd-desktop --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.prefix }}-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.prefix }}-${{ matrix.target }}.zip ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.prefix }}-${{ matrix.target }}
+          path: ${{ matrix.prefix }}-${{ matrix.target }}.*
 
   release:
     name: Create Release
-    needs: build
+    needs: [build-cli, build-desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -70,3 +131,4 @@ jobs:
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          fail_on_unmatched_files: true
