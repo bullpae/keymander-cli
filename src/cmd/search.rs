@@ -6,9 +6,11 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
 
     // Check for multi-LLM query (@llm / @multi / @cmp)
-    if let Some((_services, llm_query)) =
-        kmd_core::web::parse_multi_llm_query(query, &config.launcher.multi_llm_providers)
-    {
+    if let Some((_services, llm_query)) = kmd_core::web::parse_multi_llm_query_with_prefixes(
+        query,
+        &config.launcher.multi_llm_providers,
+        &config.launcher.multi_llm_prefixes,
+    ) {
         let items = kmd_core::web::multi_llm_result_items(
             &llm_query,
             &config.launcher.multi_llm_providers,
@@ -21,7 +23,46 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
             for item in &items {
                 println!("  {} {}", item.icon, item.name);
             }
-            println!("\nUsage: @llm <prompt>");
+            let usage = config
+                .launcher
+                .multi_llm_prefixes
+                .first()
+                .map(String::as_str)
+                .unwrap_or("@llm");
+            println!("\nUsage: {} <prompt>", usage);
+        } else {
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+        }
+        return Ok(());
+    }
+
+    // Check for multi-web query (@msearch / @multisearch / @searchall / @krsearch)
+    if let Some((_services, web_query)) = kmd_core::web::parse_multi_web_query_with_prefixes(
+        query,
+        &config.launcher.multi_web_providers,
+        &config.launcher.multi_web_prefixes,
+    ) {
+        let items = kmd_core::web::multi_web_result_items(
+            &web_query,
+            &config.launcher.multi_web_providers,
+            config.general.emoji_icons,
+        );
+        if json {
+            print_items_json(&items)?;
+        } else if web_query.is_empty() {
+            println!("Configured multi-web engines:");
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+            let usage = config
+                .launcher
+                .multi_web_prefixes
+                .first()
+                .map(String::as_str)
+                .unwrap_or("@msearch");
+            println!("\nUsage: {} <query>", usage);
         } else {
             for item in &items {
                 println!("  {} {}", item.icon, item.name);

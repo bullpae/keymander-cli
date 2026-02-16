@@ -15,7 +15,7 @@ pub struct WebService {
     pub description: &'static str,
 }
 
-/// Built-in web services (14 services)
+/// Built-in web services
 pub const WEB_SERVICES: &[WebService] = &[
     WebService {
         id: "google",
@@ -99,9 +99,27 @@ pub const WEB_SERVICES: &[WebService] = &[
         description: "Search Google Maps",
     },
     WebService {
+        id: "naver_search",
+        name: "Naver",
+        prefixes: &["@naver", "@kr"],
+        icon: "Nv",
+        emoji_icon: "\u{1F1F0}\u{1F1F7}", // 🇰🇷
+        url_template: "https://search.naver.com/search.naver?query={query}",
+        description: "Search Naver",
+    },
+    WebService {
+        id: "daum",
+        name: "Daum",
+        prefixes: &["@daum", "@dm"],
+        icon: "Dm",
+        emoji_icon: "\u{1F310}", // 🌐
+        url_template: "https://search.daum.net/search?w=tot&q={query}",
+        description: "Search Daum",
+    },
+    WebService {
         id: "naver_dict",
         name: "Naver Dict",
-        prefixes: &["@dict", "@naver"],
+        prefixes: &["@dict", "@ndict"],
         icon: "Nv",
         emoji_icon: "\u{1F4D7}", // 📗
         url_template: "https://dict.naver.com/search?query={query}",
@@ -190,12 +208,22 @@ pub fn parse_multi_llm_query(
     input: &str,
     selected_ids: &[String],
 ) -> Option<(Vec<&'static WebService>, String)> {
+    parse_multi_llm_query_with_prefixes(input, selected_ids, &[])
+}
+
+/// Parse multi-LLM query with user-defined aliases.
+pub fn parse_multi_llm_query_with_prefixes(
+    input: &str,
+    selected_ids: &[String],
+    prefixes: &[String],
+) -> Option<(Vec<&'static WebService>, String)> {
     if !input.starts_with('@') {
         return None;
     }
     let first_space = input.find(' ');
-    let prefix = &input[..first_space.unwrap_or(input.len())];
-    if !matches!(prefix, "@llm" | "@multi" | "@cmp" | "@compare") {
+    let prefix = input[..first_space.unwrap_or(input.len())].to_lowercase();
+    let aliases = normalized_aliases(prefixes, &["@llm", "@ll", "@multi", "@cmp", "@compare"]);
+    if !aliases.iter().any(|p| p == &prefix) {
         return None;
     }
     let query = first_space
@@ -203,6 +231,46 @@ pub fn parse_multi_llm_query(
         .unwrap_or("")
         .to_string();
     Some((selected_llm_services(selected_ids), query))
+}
+
+/// Parse `@msearch` / `@multisearch` / `@searchall` / `@krsearch` query.
+pub fn parse_multi_web_query(
+    input: &str,
+    selected_ids: &[String],
+) -> Option<(Vec<&'static WebService>, String)> {
+    parse_multi_web_query_with_prefixes(input, selected_ids, &[])
+}
+
+/// Parse multi-web query with user-defined aliases.
+pub fn parse_multi_web_query_with_prefixes(
+    input: &str,
+    selected_ids: &[String],
+    prefixes: &[String],
+) -> Option<(Vec<&'static WebService>, String)> {
+    if !input.starts_with('@') {
+        return None;
+    }
+    let first_space = input.find(' ');
+    let prefix = input[..first_space.unwrap_or(input.len())].to_lowercase();
+    let aliases = normalized_aliases(
+        prefixes,
+        &[
+            "@m",
+            "@mw",
+            "@msearch",
+            "@multisearch",
+            "@searchall",
+            "@krsearch",
+        ],
+    );
+    if !aliases.iter().any(|p| p == &prefix) {
+        return None;
+    }
+    let query = first_space
+        .map(|i| input[i + 1..].trim())
+        .unwrap_or("")
+        .to_string();
+    Some((selected_multi_web_services(selected_ids), query))
 }
 
 /// Build a search URL with query encoding
@@ -244,12 +312,30 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
         || "@cmp".contains(&filter_lower);
     if multi_match {
         items.push(IndexItem {
-            name: "@llm        Compare multiple LLMs with one prompt".to_string(),
+            name: "@ll         Compare multiple LLMs with one prompt".to_string(),
             path: "Open selected LLM providers (some may require paste/Enter)".to_string(),
             kind: ItemKind::WebSearch,
             source: Source::Plugin,
             icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
-            keywords: "@llm @multi @cmp multi llm compare".to_string(),
+            keywords: "@ll @llm @multi @cmp multi llm compare".to_string(),
+        });
+    }
+
+    // Virtual entry for multi-web compare (Google/Naver/Daum).
+    let multi_web_match = filter_lower.is_empty()
+        || "@msearch".contains(&filter_lower)
+        || "@multisearch".contains(&filter_lower)
+        || "@searchall".contains(&filter_lower)
+        || "@krsearch".contains(&filter_lower)
+        || "multi web search".contains(&filter_lower);
+    if multi_web_match {
+        items.push(IndexItem {
+            name: "@m          Search multiple engines at once".to_string(),
+            path: "Open Google/Naver/Daum in parallel tabs".to_string(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
+            keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
         });
     }
 
@@ -323,9 +409,77 @@ pub fn multi_llm_result_items(
     items
 }
 
+/// Build result items for multi-web search (`@msearch`).
+pub fn multi_web_result_items(
+    query: &str,
+    selected_ids: &[String],
+    use_emoji: bool,
+) -> Vec<IndexItem> {
+    let services = selected_multi_web_services(selected_ids);
+    if query.is_empty() {
+        return services
+            .into_iter()
+            .map(|s| IndexItem {
+                name: format!("@msearch {:<12} {}", s.id, s.description),
+                path: s.url_template.to_string(),
+                kind: ItemKind::WebSearch,
+                source: Source::Plugin,
+                icon: s.pick_icon(use_emoji).to_string(),
+                keywords: format!("{} {}", s.id, s.prefixes.join(" ")),
+            })
+            .collect();
+    }
+
+    let mut items = Vec::new();
+    let urls: Vec<String> = services
+        .iter()
+        .map(|svc| build_search_url(svc, query))
+        .collect();
+    let provider_names = services
+        .iter()
+        .map(|svc| svc.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker = format!("kmd:multi_web_urls\n{}", urls.join("\n"));
+
+    items.push(IndexItem {
+        name: format!("Multi Web search ({})", services.len()),
+        path: format!("Open selected search engines for: \"{}\"", query),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
+        keywords: format!("{}\nproviders: {}", marker, provider_names),
+    });
+
+    for service in services {
+        items.push(search_result_item(service, query, use_emoji));
+    }
+    items
+}
+
 /// Decode multi-LLM URLs from an item generated by `multi_llm_result_items`.
 pub fn extract_multi_llm_urls(item: &IndexItem) -> Option<Vec<String>> {
     let prefix = "kmd:multi_llm_urls\n";
+    if !item.keywords.starts_with(prefix) {
+        return None;
+    }
+    let urls = item.keywords[prefix.len()..]
+        .lines()
+        .take_while(|line| !line.starts_with("providers:"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        None
+    } else {
+        Some(urls)
+    }
+}
+
+/// Decode multi-web URLs from an item generated by `multi_web_result_items`.
+pub fn extract_multi_web_urls(item: &IndexItem) -> Option<Vec<String>> {
+    let prefix = "kmd:multi_web_urls\n";
     if !item.keywords.starts_with(prefix) {
         return None;
     }
@@ -369,8 +523,63 @@ pub fn selected_llm_services(selected_ids: &[String]) -> Vec<&'static WebService
     }
 }
 
+/// Resolve configured engine IDs for `@msearch` multi-web search.
+pub fn selected_multi_web_services(selected_ids: &[String]) -> Vec<&'static WebService> {
+    let mut matched = Vec::new();
+    for id in selected_ids {
+        let normalized = id.trim().to_lowercase();
+        if normalized.is_empty() || !is_multi_web_id(&normalized) {
+            continue;
+        }
+        if let Some(service) = WEB_SERVICES
+            .iter()
+            .find(|svc| svc.id.eq_ignore_ascii_case(&normalized))
+        {
+            matched.push(service);
+        }
+    }
+
+    if matched.is_empty() {
+        WEB_SERVICES
+            .iter()
+            .filter(|svc| is_multi_web_id(svc.id))
+            .collect()
+    } else {
+        matched
+    }
+}
+
 fn is_llm_id(id: &str) -> bool {
     matches!(id, "chatgpt" | "gemini" | "claude" | "grok" | "perplexity")
+}
+
+fn is_multi_web_id(id: &str) -> bool {
+    matches!(id, "google" | "naver_search" | "daum")
+}
+
+fn normalized_aliases(aliases: &[String], defaults: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = if aliases.is_empty() {
+        defaults.iter().map(|s| (*s).to_string()).collect()
+    } else {
+        aliases
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if s.starts_with('@') {
+                    s
+                } else {
+                    format!("@{s}")
+                }
+            })
+            .collect()
+    };
+    out.dedup();
+    if out.is_empty() {
+        defaults.iter().map(|s| (*s).to_string()).collect()
+    } else {
+        out
+    }
 }
 
 /// Simple URL percent-encoding
@@ -437,6 +646,39 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_multi_llm_custom_prefix() {
+        let selected = vec!["chatgpt".to_string()];
+        let prefixes = vec!["@askllm".to_string()];
+        let parsed =
+            parse_multi_llm_query_with_prefixes("@askllm rust async", &selected, &prefixes);
+        assert!(parsed.is_some());
+        let (_, q) = parsed.unwrap();
+        assert_eq!(q, "rust async");
+    }
+
+    #[test]
+    fn test_parse_multi_web_query() {
+        let selected = vec!["google".to_string(), "daum".to_string()];
+        let parsed = parse_multi_web_query("@msearch rust ownership", &selected);
+        assert!(parsed.is_some());
+        let (services, q) = parsed.unwrap();
+        assert_eq!(q, "rust ownership");
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].id, "google");
+        assert_eq!(services[1].id, "daum");
+    }
+
+    #[test]
+    fn test_parse_multi_web_custom_prefix() {
+        let selected = vec!["google".to_string()];
+        let prefixes = vec!["@searchx".to_string()];
+        let parsed = parse_multi_web_query_with_prefixes("@searchx rust", &selected, &prefixes);
+        assert!(parsed.is_some());
+        let (_, q) = parsed.unwrap();
+        assert_eq!(q, "rust");
+    }
+
+    #[test]
     fn test_multi_llm_item_urls_roundtrip() {
         let selected = vec!["chatgpt".to_string(), "gemini".to_string()];
         let items = multi_llm_result_items("rust lifetimes", &selected, false);
@@ -445,6 +687,16 @@ mod tests {
         assert_eq!(urls.len(), 2);
         assert!(urls[0].contains("rust+lifetimes"));
         assert!(urls[1].contains("rust+lifetimes"));
+    }
+
+    #[test]
+    fn test_multi_web_item_urls_roundtrip() {
+        let selected = vec!["google".to_string(), "naver_search".to_string()];
+        let items = multi_web_result_items("러스트 소유권", &selected, false);
+        assert!(!items.is_empty());
+        let urls = extract_multi_web_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("%EB%9F%AC%EC%8A%A4%ED%8A%B8"));
     }
 
     #[test]

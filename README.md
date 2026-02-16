@@ -27,7 +27,8 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Folder drill-down** (TUI): Navigate into folders with Tab/→, go back with ←/Esc
 - **Web services**: `@g rust tutorial`, `@gh keymander`, `@yt lofi music`
 - **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`, `@grok ask`
-- **Multi LLM compare**: `@llm same prompt` opens selected LLMs at once for side-by-side comparison
+- **Multi LLM compare**: `@ll same prompt` (or `@llm`) opens selected LLMs at once
+- **Multi web search**: `@m same query` (or `@msearch`) opens Google/Naver/Daum together
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
 - **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
 - **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
@@ -178,7 +179,8 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 |--------|------|---------|-------------|
 | `@prefix` | Web search | `@g rust tutorial` | Search via web service |
 | `@ai` | AI search | `@ai why is the sky blue` | Ask Perplexity AI |
-| `@llm` / `@multi` / `@cmp` | Multi LLM compare | `@llm explain Rust lifetimes` | Open selected LLMs with same prompt |
+| `@ll` / `@llm` / `@cmp` | Multi LLM compare | `@ll explain Rust lifetimes` | Open selected LLMs with same prompt |
+| `@m` / `@mw` / `@msearch` | Multi web search | `@m 러스트 소유권` | Open selected search engines with same query |
 | `:calc` | Calculator | `:calc (2+3)*4` | Evaluate math expression |
 | `:emoji` / `:e` | Emoji | `:e fire`, `:e 하트` | Search & copy emoji |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
@@ -198,6 +200,8 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 | `@w` | Wikipedia |
 | `@x` | X (Twitter) |
 | `@map` | Google Maps |
+| `@naver` / `@kr` | Naver Search |
+| `@daum` | Daum Search |
 | `@dict` | Naver Dictionary |
 
 ### AI Services
@@ -212,16 +216,26 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 
 ### Multi LLM Prompting
 
-`@llm` (or `@multi`, `@cmp`) sends one prompt to multiple LLM web UIs by opening each selected provider URL in parallel browser tabs.
+`@ll` (or `@llm`, `@multi`, `@cmp`) sends one prompt to multiple LLM web UIs by opening each selected provider URL in parallel browser tabs.
 
 Recommended `@` commands:
 
-- `@llm summarize this article` — compare multiple LLM answers quickly
+- `@ll summarize this article` — compare multiple LLM answers quickly
 - `@gpt write unit tests for this Rust function`
 - `@claude refactor this module for readability`
 - `@gemini explain this error stack trace`
 - `@grok suggest edge cases for this feature`
 - `@ai find latest docs and sources for this topic` (Perplexity)
+
+### Multi Web Search
+
+`@m` (or `@mw`, `@msearch`, `@multisearch`, `@searchall`, `@krsearch`) opens one query on multiple engines in parallel tabs.
+
+Recommended commands:
+
+- `@m rust ownership`
+- `@m 러스트 소유권`
+- `@m cursor ai 단축키`
 
 ## Keybindings
 
@@ -323,6 +337,9 @@ index_directories = true       # include folders in search index
 scan_drives = true             # auto-discover drive roots (C:\, D:\, etc.)
 drive_scan_depth = 3           # shallow depth for drive root scanning
 multi_llm_providers = ["chatgpt", "gemini", "claude", "grok", "perplexity"]  # providers used by @llm
+multi_llm_prefixes = ["@ll", "@llm", "@multi", "@cmp", "@compare"]            # aliases for multi-LLM command
+multi_web_providers = ["google", "naver_search", "daum"]  # engines used by @msearch
+multi_web_prefixes = ["@m", "@mw", "@msearch", "@multisearch", "@searchall", "@krsearch"]  # aliases for multi-web command
 
 # Search priority weights (0-100, higher = ranked higher)
 [launcher.kind_weights]

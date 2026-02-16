@@ -94,6 +94,12 @@ pub struct AppState {
     pub use_emoji: bool,
     /// Selected LLM providers used by @llm multi prompt.
     pub selected_llm_providers: Vec<String>,
+    /// Command aliases used for multi LLM query.
+    pub multi_llm_prefixes: Vec<String>,
+    /// Selected search engines used by @msearch multi web.
+    pub selected_multi_web_providers: Vec<String>,
+    /// Command aliases used for multi web query.
+    pub multi_web_prefixes: Vec<String>,
     /// Cached effective query (query + composing char), updated on every input change
     cached_effective_query: String,
     /// Whether the UI needs to be redrawn
@@ -195,6 +201,9 @@ pub fn run_app(
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,
         selected_llm_providers: config.launcher.multi_llm_providers.clone(),
+        multi_llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+        selected_multi_web_providers: config.launcher.multi_web_providers.clone(),
+        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
         cached_effective_query: String::new(),
         dirty: true,
     };
@@ -336,6 +345,9 @@ fn handle_settings_key_event(
             state.preview_width_percent = config.general.preview_width_percent;
             state.quit_on_launch = config.launcher.quit_on_launch;
             state.selected_llm_providers = config.launcher.multi_llm_providers.clone();
+            state.multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
+            state.selected_multi_web_providers = config.launcher.multi_web_providers.clone();
+            state.multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
             if needs_rebuild {
@@ -374,6 +386,12 @@ fn handle_settings_key_event(
                 default_config.launcher.file_search_provider;
             settings_state.config.launcher.multi_llm_providers =
                 default_config.launcher.multi_llm_providers;
+            settings_state.config.launcher.multi_llm_prefixes =
+                default_config.launcher.multi_llm_prefixes;
+            settings_state.config.launcher.multi_web_providers =
+                default_config.launcher.multi_web_providers;
+            settings_state.config.launcher.multi_web_prefixes =
+                default_config.launcher.multi_web_prefixes;
             settings_state.config.general = default_config.general;
             settings_state.config.keybindings = default_config.keybindings;
             settings_state.dirty = true;
@@ -606,10 +624,21 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
 
     // Web query
     if result.item.kind == ItemKind::WebSearch {
+        if let Some(urls) = web::extract_multi_web_urls(&result.item) {
+            for url in urls {
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
         if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
-            if let Some((_services, prompt)) =
-                web::parse_multi_llm_query(&state.query, &state.selected_llm_providers)
-            {
+            if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
+                &state.query,
+                &state.selected_llm_providers,
+                &state.multi_llm_prefixes,
+            ) {
                 if !prompt.is_empty() {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         let _ = clipboard.set_text(&prompt);
@@ -631,9 +660,29 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     }
 
     // Multi LLM query from raw input
-    if let Some((services, web_query)) =
-        web::parse_multi_llm_query(&state.query, &state.selected_llm_providers)
-    {
+    if let Some((services, web_query)) = web::parse_multi_llm_query_with_prefixes(
+        &state.query,
+        &state.selected_llm_providers,
+        &state.multi_llm_prefixes,
+    ) {
+        if !web_query.is_empty() {
+            for service in services {
+                let url = web::build_search_url(service, &web_query);
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+    }
+
+    // Multi web query from raw input
+    if let Some((services, web_query)) = web::parse_multi_web_query_with_prefixes(
+        &state.query,
+        &state.selected_multi_web_providers,
+        &state.multi_web_prefixes,
+    ) {
         if !web_query.is_empty() {
             for service in services {
                 let url = web::build_search_url(service, &web_query);
@@ -761,9 +810,26 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
 /// Handle @prefix web service queries
 fn handle_web_query(query: &str, state: &mut AppState) {
     let emoji = state.use_emoji;
-    if let Some((_services, q)) = web::parse_multi_llm_query(query, &state.selected_llm_providers) {
+    if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
+        query,
+        &state.selected_llm_providers,
+        &state.multi_llm_prefixes,
+    ) {
         state.results = items_to_results(
             web::multi_llm_result_items(&q, &state.selected_llm_providers, emoji),
+            SCORE_WEB_SEARCH,
+        );
+        state.search_mode = SearchMode::Contains;
+        state.selected_index = 0;
+        return;
+    }
+    if let Some((_services, q)) = web::parse_multi_web_query_with_prefixes(
+        query,
+        &state.selected_multi_web_providers,
+        &state.multi_web_prefixes,
+    ) {
+        state.results = items_to_results(
+            web::multi_web_result_items(&q, &state.selected_multi_web_providers, emoji),
             SCORE_WEB_SEARCH,
         );
         state.search_mode = SearchMode::Contains;

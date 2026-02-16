@@ -46,7 +46,18 @@ const QUIT_POLL_MS: u64 = 300;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
-type EngineSlot = Arc<Mutex<Option<(kmd_core::SearchEngine, bool, Vec<String>)>>>;
+type EngineSlot = Arc<
+    Mutex<
+        Option<(
+            kmd_core::SearchEngine,
+            bool,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
+        )>,
+    >,
+>;
 
 // ─── App State ────────────────────────────────────────────────────────────────
 
@@ -62,6 +73,9 @@ pub struct App {
     window_id: Option<window::Id>,
     use_emoji: bool,
     selected_llm_providers: Vec<String>,
+    multi_llm_prefixes: Vec<String>,
+    selected_multi_web_providers: Vec<String>,
+    multi_web_prefixes: Vec<String>,
     loading: bool,
     engine_slot: EngineSlot,
     _guard: Guard,
@@ -106,6 +120,9 @@ impl App {
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
         let selected_llm_providers = config.launcher.multi_llm_providers.clone();
+        let multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
+        let selected_multi_web_providers = config.launcher.multi_web_providers.clone();
+        let multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
         let reset_ime = config.general.reset_ime_on_launch;
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
@@ -119,7 +136,11 @@ impl App {
                 let eng = crate::engine::create_search_engine(&config);
                 let emoji = config.general.emoji_icons;
                 let llm = config.launcher.multi_llm_providers.clone();
-                *slot_for_task.lock().expect("engine_slot poisoned") = Some((eng, emoji, llm));
+                let llm_prefix = config.launcher.multi_llm_prefixes.clone();
+                let mweb = config.launcher.multi_web_providers.clone();
+                let mweb_prefix = config.launcher.multi_web_prefixes.clone();
+                *slot_for_task.lock().expect("engine_slot poisoned") =
+                    Some((eng, emoji, llm, mweb, llm_prefix, mweb_prefix));
             })
             .await;
             Message::EngineReady
@@ -137,6 +158,9 @@ impl App {
             window_id: None,
             use_emoji,
             selected_llm_providers,
+            multi_llm_prefixes,
+            selected_multi_web_providers,
+            multi_web_prefixes,
             loading: true,
             engine_slot,
             _guard: guard,
@@ -222,10 +246,13 @@ impl App {
                     .expect("engine_slot poisoned")
                     .take();
 
-                if let Some((engine, emoji, llm)) = loaded {
+                if let Some((engine, emoji, llm, mweb, llm_prefix, mweb_prefix)) = loaded {
                     self.engine = engine;
                     self.use_emoji = emoji;
                     self.selected_llm_providers = llm;
+                    self.selected_multi_web_providers = mweb;
+                    self.multi_llm_prefixes = llm_prefix;
+                    self.multi_web_prefixes = mweb_prefix;
                     self.loading = false;
                     tracing::info!("Search engine ready");
                     if !self.query.trim().is_empty() {
@@ -306,9 +333,11 @@ impl App {
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
 impl App {
     fn copy_multi_llm_prompt_to_clipboard(&self) {
-        if let Some((_services, prompt)) =
-            web::parse_multi_llm_query(&self.query, &self.selected_llm_providers)
-        {
+        if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
+            &self.query,
+            &self.selected_llm_providers,
+            &self.multi_llm_prefixes,
+        ) {
             if !prompt.is_empty() {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     let _ = clipboard.set_text(prompt);
@@ -342,12 +371,28 @@ impl App {
 
     fn handle_web_query(&mut self, query: &str) {
         let emoji = self.use_emoji;
-        if let Some((_services, q)) =
-            web::parse_multi_llm_query(query, &self.selected_llm_providers)
-        {
+        if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
+            query,
+            &self.selected_llm_providers,
+            &self.multi_llm_prefixes,
+        ) {
             self.results = items_to_results(web::multi_llm_result_items(
                 &q,
                 &self.selected_llm_providers,
+                emoji,
+            ));
+            self.search_mode = kmd_core::SearchMode::Contains;
+            self.selected = 0;
+            return;
+        }
+        if let Some((_services, q)) = web::parse_multi_web_query_with_prefixes(
+            query,
+            &self.selected_multi_web_providers,
+            &self.multi_web_prefixes,
+        ) {
+            self.results = items_to_results(web::multi_web_result_items(
+                &q,
+                &self.selected_multi_web_providers,
                 emoji,
             ));
             self.search_mode = kmd_core::SearchMode::Contains;
@@ -359,6 +404,7 @@ impl App {
             if q.is_empty() {
                 let mut items = web::list_services_as_items("", emoji);
                 ensure_multi_llm_hint(&mut items, emoji);
+                ensure_multi_web_hint(&mut items, emoji);
                 self.results = items_to_results(items);
             } else {
                 let item = web::search_result_item(service, &q, emoji);
@@ -368,6 +414,7 @@ impl App {
             let filter = query.trim_start_matches('@');
             let mut items = web::list_services_as_items(filter, emoji);
             ensure_multi_llm_hint(&mut items, emoji);
+            ensure_multi_web_hint(&mut items, emoji);
             self.results = items_to_results(items);
         }
         self.search_mode = kmd_core::SearchMode::Contains;
@@ -549,6 +596,28 @@ impl App {
             ));
         }
 
+        let multi_web_rows = [
+            ("google", "Google"),
+            ("naver_search", "Naver"),
+            ("daum", "Daum"),
+        ];
+        for (id, provider_name) in multi_web_rows {
+            let enabled = self
+                .selected_multi_web_providers
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(id));
+            settings_entries.push((
+                format!(
+                    "Multi Web: {} [{}]",
+                    provider_name,
+                    if enabled { "ON" } else { "OFF" }
+                ),
+                format!("kmd:settings:mweb:toggle:{id}"),
+                if emoji { "\u{1F50E}" } else { "[WEB]" }.to_string(),
+                "Toggle engine for @msearch multi search".to_string(),
+            ));
+        }
+
         settings_entries.extend_from_slice(&[
             (
                 "Rebuild Index".to_string(),
@@ -619,8 +688,13 @@ impl App {
             ),
             (
                 "@llm  Multi LLM Compare",
-                "Type @llm prompt  (open selected LLM providers in parallel tabs)",
+                "Type @ll prompt  (alias: @llm, open selected LLM providers)",
                 if emoji { "\u{1F9E0}" } else { "[LLM]" },
+            ),
+            (
+                "@msearch  Multi Web Search",
+                "Type @m query  (alias: @msearch, open selected web engines)",
+                if emoji { "\u{1F50E}" } else { "[MWEB]" },
             ),
             (
                 "Version Info",
@@ -741,7 +815,11 @@ impl App {
                         let eng = crate::engine::create_search_engine(&config);
                         let emoji = config.general.emoji_icons;
                         let llm = config.launcher.multi_llm_providers.clone();
-                        *slot.lock().expect("engine_slot poisoned") = Some((eng, emoji, llm));
+                        let llm_prefix = config.launcher.multi_llm_prefixes.clone();
+                        let mweb = config.launcher.multi_web_providers.clone();
+                        let mweb_prefix = config.launcher.multi_web_prefixes.clone();
+                        *slot.lock().expect("engine_slot poisoned") =
+                            Some((eng, emoji, llm, mweb, llm_prefix, mweb_prefix));
                     })
                     .await;
                     Message::EngineReady
@@ -789,6 +867,36 @@ impl App {
 
                     let selected = self.selected_llm_providers.clone();
                     save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
+                }
+
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.resize_window();
+            }
+            mweb_toggle if mweb_toggle.starts_with("mweb:toggle:") => {
+                let target = mweb_toggle.strip_prefix("mweb:toggle:").unwrap_or("");
+                if !target.is_empty() {
+                    if self
+                        .selected_multi_web_providers
+                        .iter()
+                        .any(|v| v.eq_ignore_ascii_case(target))
+                    {
+                        self.selected_multi_web_providers
+                            .retain(|v| !v.eq_ignore_ascii_case(target));
+                    } else {
+                        self.selected_multi_web_providers.push(target.to_string());
+                    }
+
+                    if self.selected_multi_web_providers.is_empty() {
+                        self.selected_multi_web_providers = vec![
+                            "google".to_string(),
+                            "naver_search".to_string(),
+                            "daum".to_string(),
+                        ];
+                    }
+
+                    let selected = self.selected_multi_web_providers.clone();
+                    save_config(move |cfg| cfg.launcher.multi_web_providers = selected);
                 }
 
                 self.query = ":set".to_string();
@@ -861,6 +969,12 @@ impl App {
         }
 
         if result.item.kind == ItemKind::WebSearch {
+            if let Some(urls) = web::extract_multi_web_urls(&result.item) {
+                for url in urls {
+                    let _ = kmd_core::action::open_url(&url);
+                }
+                return iced::exit();
+            }
             if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
                 self.copy_multi_llm_prompt_to_clipboard();
                 for url in urls {
@@ -1333,22 +1447,44 @@ fn items_to_results(
 }
 
 fn ensure_multi_llm_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
-    if items.iter().any(|item| item.name.starts_with("@llm")) {
+    if items
+        .iter()
+        .any(|item| item.name.starts_with("@ll") || item.name.starts_with("@llm"))
+    {
         return;
     }
     items.push(IndexItem {
-        name: "@llm        Compare multiple LLMs with one prompt".to_string(),
+        name: "@ll         Compare multiple LLMs with one prompt".to_string(),
         path: "Open selected LLM providers in parallel tabs".to_string(),
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
-        keywords: "@llm @multi @cmp multi llm compare".to_string(),
+        keywords: "@ll @llm @multi @cmp multi llm compare".to_string(),
+    });
+}
+
+fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
+    if items
+        .iter()
+        .any(|item| item.name.starts_with("@m ") || item.name.starts_with("@msearch"))
+    {
+        return;
+    }
+    items.push(IndexItem {
+        name: "@m          Search multiple engines at once".to_string(),
+        path: "Open Google/Naver/Daum in parallel tabs".to_string(),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
+        keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
     });
 }
 
 fn help_query_seed(name: &str) -> Option<&'static str> {
-    if name.starts_with("@llm") {
-        Some("@llm ")
+    if name.starts_with("@ll") || name.starts_with("@llm") {
+        Some("@ll ")
+    } else if name.starts_with("@m") {
+        Some("@m ")
     } else if name.starts_with("@") {
         Some("@")
     } else if name.starts_with(":calc") {

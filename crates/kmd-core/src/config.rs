@@ -86,6 +86,18 @@ pub struct LauncherConfig {
     /// Supported: chatgpt, gemini, claude, grok, perplexity
     #[serde(default = "default_multi_llm_providers")]
     pub multi_llm_providers: Vec<String>,
+    /// Command aliases for multi-LLM compare.
+    /// Example: @llm, @ll, @cmp
+    #[serde(default = "default_multi_llm_prefixes")]
+    pub multi_llm_prefixes: Vec<String>,
+    /// Search engine IDs for `@msearch` multi-web search.
+    /// Supported: google, naver_search, daum
+    #[serde(default = "default_multi_web_providers")]
+    pub multi_web_providers: Vec<String>,
+    /// Command aliases for multi-web search.
+    /// Example: @m, @mw, @msearch
+    #[serde(default = "default_multi_web_prefixes")]
+    pub multi_web_prefixes: Vec<String>,
 }
 
 impl Default for LauncherConfig {
@@ -153,6 +165,9 @@ impl Default for LauncherConfig {
             kind_weights: KindWeights::default(),
             web_services: vec![],
             multi_llm_providers: default_multi_llm_providers(),
+            multi_llm_prefixes: default_multi_llm_prefixes(),
+            multi_web_providers: default_multi_web_providers(),
+            multi_web_prefixes: default_multi_web_prefixes(),
         }
     }
 }
@@ -164,6 +179,35 @@ fn default_multi_llm_providers() -> Vec<String> {
         "claude".to_string(),
         "grok".to_string(),
         "perplexity".to_string(),
+    ]
+}
+
+fn default_multi_llm_prefixes() -> Vec<String> {
+    vec![
+        "@llm".to_string(),
+        "@ll".to_string(),
+        "@multi".to_string(),
+        "@cmp".to_string(),
+        "@compare".to_string(),
+    ]
+}
+
+fn default_multi_web_providers() -> Vec<String> {
+    vec![
+        "google".to_string(),
+        "naver_search".to_string(),
+        "daum".to_string(),
+    ]
+}
+
+fn default_multi_web_prefixes() -> Vec<String> {
+    vec![
+        "@m".to_string(),
+        "@mw".to_string(),
+        "@msearch".to_string(),
+        "@multisearch".to_string(),
+        "@searchall".to_string(),
+        "@krsearch".to_string(),
     ]
 }
 
@@ -367,6 +411,9 @@ impl Config {
             "launcher.kind_weights.system_cmd" => get!(self.launcher.kind_weights.system_cmd),
             "launcher.kind_weights.web_search" => get!(self.launcher.kind_weights.web_search),
             "launcher.multi_llm_providers" => Some(self.launcher.multi_llm_providers.join(",")),
+            "launcher.multi_llm_prefixes" => Some(self.launcher.multi_llm_prefixes.join(",")),
+            "launcher.multi_web_providers" => Some(self.launcher.multi_web_providers.join(",")),
+            "launcher.multi_web_prefixes" => Some(self.launcher.multi_web_prefixes.join(",")),
             // keybindings
             "keybindings.global_hotkey" => get!(str self.keybindings.global_hotkey),
             "keybindings.quit" => get!(str self.keybindings.quit),
@@ -473,6 +520,41 @@ impl Config {
                     .filter(|s| !s.is_empty())
                     .collect();
             }
+            "launcher.multi_llm_prefixes" => {
+                self.launcher.multi_llm_prefixes = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        if s.starts_with('@') {
+                            s
+                        } else {
+                            format!("@{s}")
+                        }
+                    })
+                    .collect();
+            }
+            "launcher.multi_web_providers" => {
+                self.launcher.multi_web_providers = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "launcher.multi_web_prefixes" => {
+                self.launcher.multi_web_prefixes = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        if s.starts_with('@') {
+                            s
+                        } else {
+                            format!("@{s}")
+                        }
+                    })
+                    .collect();
+            }
             // keybindings
             "keybindings.global_hotkey" => self.keybindings.global_hotkey = value.to_string(),
             "keybindings.quit" => self.keybindings.quit = value.to_string(),
@@ -562,6 +644,25 @@ mod tests {
             config.launcher.multi_llm_providers,
             vec!["chatgpt", "gemini", "claude", "grok", "perplexity"]
         );
+        assert_eq!(
+            config.launcher.multi_llm_prefixes,
+            vec!["@llm", "@ll", "@multi", "@cmp", "@compare"]
+        );
+        assert_eq!(
+            config.launcher.multi_web_providers,
+            vec!["google", "naver_search", "daum"]
+        );
+        assert_eq!(
+            config.launcher.multi_web_prefixes,
+            vec![
+                "@m",
+                "@mw",
+                "@msearch",
+                "@multisearch",
+                "@searchall",
+                "@krsearch"
+            ]
+        );
     }
 
     #[test]
@@ -584,6 +685,28 @@ mod tests {
         assert_eq!(
             config.get_value("launcher.multi_llm_providers"),
             Some("chatgpt,claude,perplexity".to_string())
+        );
+        config
+            .set_value("launcher.multi_llm_prefixes", "llm,ll,cmp")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.multi_llm_prefixes"),
+            Some("@llm,@ll,@cmp".to_string())
+        );
+
+        config
+            .set_value("launcher.multi_web_providers", "google,daum")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.multi_web_providers"),
+            Some("google,daum".to_string())
+        );
+        config
+            .set_value("launcher.multi_web_prefixes", "m,mw,msearch")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.multi_web_prefixes"),
+            Some("@m,@mw,@msearch".to_string())
         );
     }
 
