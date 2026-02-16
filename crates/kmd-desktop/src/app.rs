@@ -319,6 +319,7 @@ impl App {
                 Prefix::Emoji => self.handle_emoji_query(trimmed),
                 Prefix::Settings => self.handle_settings_query(trimmed),
                 Prefix::Help => self.handle_help_query(),
+                Prefix::Version => self.handle_version_query(),
                 Prefix::Shell => self.handle_shell_query(trimmed),
                 Prefix::General => self.handle_main_search(trimmed),
             }
@@ -344,15 +345,52 @@ impl App {
 
         if let Some((service, q)) = web::parse_web_query(query) {
             if q.is_empty() {
-                self.results = items_to_results(web::list_services_as_items("", emoji));
+                let mut items = web::list_services_as_items("", emoji);
+                ensure_multi_llm_hint(&mut items, emoji);
+                self.results = items_to_results(items);
             } else {
                 let item = web::search_result_item(service, &q, emoji);
                 self.results = items_to_results(std::iter::once(item));
             }
         } else {
             let filter = query.trim_start_matches('@');
-            self.results = items_to_results(web::list_services_as_items(filter, emoji));
+            let mut items = web::list_services_as_items(filter, emoji);
+            ensure_multi_llm_hint(&mut items, emoji);
+            self.results = items_to_results(items);
         }
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    fn handle_version_query(&mut self) {
+        let emoji = self.use_emoji;
+        let version_items = vec![
+            IndexItem {
+                name: format!("kmd-desktop {}", env!("CARGO_PKG_VERSION")),
+                path: "Desktop launcher version".to_string(),
+                icon: if emoji { "\u{1F4E6}" } else { "[VER]" }.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: "kmd:settings:noop".to_string(),
+            },
+            IndexItem {
+                name: format!("kmd-core {}", kmd_core::Index::current_version()),
+                path: "Search index schema version".to_string(),
+                icon: if emoji { "\u{1F9E0}" } else { "[CORE]" }.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: "kmd:settings:noop".to_string(),
+            },
+            IndexItem {
+                name: format!("target {}", std::env::consts::ARCH),
+                path: format!("os {}", std::env::consts::OS),
+                icon: if emoji { "\u{1F5A5}\u{FE0F}" } else { "[SYS]" }.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: "kmd:settings:noop".to_string(),
+            },
+        ];
+        self.results = items_to_results(version_items);
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
@@ -420,6 +458,16 @@ impl App {
                 "kmd:settings:dir".to_string(),
                 if emoji { "\u{1F4C2}" } else { "[DIR]" }.to_string(),
                 "Open configuration folder".to_string(),
+            ),
+            (
+                format!(
+                    "Version: desktop {} / core {}",
+                    env!("CARGO_PKG_VERSION"),
+                    kmd_core::Index::current_version()
+                ),
+                "kmd:settings:noop".to_string(),
+                if emoji { "\u{1F4E6}" } else { "[VER]" }.to_string(),
+                "Use :version or kmd-desktop --version".to_string(),
             ),
             (
                 "Reset Window Position".to_string(),
@@ -551,6 +599,21 @@ impl App {
                 ":set  Settings",
                 "Type :set or :settings to manage config, themes, index",
                 if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" },
+            ),
+            (
+                ":version  Version Info",
+                "Type :version  (show desktop/core/target/os versions)",
+                if emoji { "\u{1F4E6}" } else { "[VER]" },
+            ),
+            (
+                "@llm  Multi LLM Compare",
+                "Type @llm prompt  (open selected LLM providers in parallel tabs)",
+                if emoji { "\u{1F9E0}" } else { "[LLM]" },
+            ),
+            (
+                "Version Info",
+                "CLI also supports: kmd-desktop --version",
+                if emoji { "\u{2139}\u{FE0F}" } else { "[VER]" },
             ),
             (
                 "!  Shell Command",
@@ -892,6 +955,7 @@ enum Prefix {
     Emoji,
     Settings,
     Help,
+    Version,
     Shell,
     General,
 }
@@ -907,6 +971,12 @@ fn prefix_of(query: &str) -> Prefix {
         Prefix::Settings
     } else if query.starts_with(":help") || query.starts_with(":h ") || query == ":h" {
         Prefix::Help
+    } else if query.starts_with(":version")
+        || query.starts_with(":ver")
+        || query == ":v"
+        || query.starts_with(":v ")
+    {
+        Prefix::Version
     } else if query.starts_with('!') {
         Prefix::Shell
     } else {
@@ -1249,8 +1319,24 @@ fn items_to_results(
         .collect()
 }
 
+fn ensure_multi_llm_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
+    if items.iter().any(|item| item.name.starts_with("@llm")) {
+        return;
+    }
+    items.push(IndexItem {
+        name: "@llm        Compare multiple LLMs with one prompt".to_string(),
+        path: "Open selected LLM providers in parallel tabs".to_string(),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
+        keywords: "@llm @multi @cmp multi llm compare".to_string(),
+    });
+}
+
 fn help_query_seed(name: &str) -> Option<&'static str> {
-    if name.starts_with("@") {
+    if name.starts_with("@llm") {
+        Some("@llm ")
+    } else if name.starts_with("@") {
         Some("@")
     } else if name.starts_with(":calc") {
         Some(":calc ")
@@ -1258,6 +1344,8 @@ fn help_query_seed(name: &str) -> Option<&'static str> {
         Some(":emoji ")
     } else if name.starts_with(":set") {
         Some(":set")
+    } else if name.starts_with(":version") || name.starts_with("Version Info") {
+        Some(":version")
     } else if name.starts_with("!") {
         Some("!")
     } else if name.starts_with("Fuzzy Search") {

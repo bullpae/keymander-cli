@@ -20,6 +20,19 @@ use std::sync::Mutex;
 use crate::app::{DEFAULT_WIDTH, SEARCH_BAR_HEIGHT};
 use crate::window_state::WindowState;
 
+fn should_print_version() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| matches!(arg.as_str(), "--version" | "-V" | "version"))
+}
+
+fn print_version() {
+    println!("kmd-desktop {}", env!("CARGO_PKG_VERSION"));
+    println!("kmd-core {}", kmd_core::Index::current_version());
+    println!("target {}", std::env::consts::ARCH);
+    println!("os {}", std::env::consts::OS);
+}
+
 /// Default position: horizontally centered, vertically at 1/3 from top.
 fn default_position(win: Size, monitor: Size) -> Point {
     Point::new(
@@ -54,6 +67,11 @@ fn create_icon() -> Option<window::Icon> {
 }
 
 fn main() -> iced::Result {
+    if should_print_version() {
+        print_version();
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
