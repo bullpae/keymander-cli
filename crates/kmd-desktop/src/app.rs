@@ -33,8 +33,8 @@ use crate::window_state::WindowState;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_WIDTH: f32 = 680.0;
-const SEARCH_BAR_HEIGHT: f32 = 56.0;
+pub const DEFAULT_WIDTH: f32 = 680.0;
+pub const SEARCH_BAR_HEIGHT: f32 = 56.0;
 const ROW_HEIGHT: f32 = 52.0;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const MAX_VISIBLE_ROWS: usize = 8;
@@ -66,15 +66,11 @@ pub struct App {
     _guard: Guard,
 
     // ── Window geometry ───────────────────────────────────────────────
-    /// Current window width (persisted between sessions).
     window_width: f32,
-    /// Persistent window state (position + width).
     window_state: WindowState,
-    /// True when state changed but not yet flushed to disk.
     state_dirty: bool,
 
     // ── IME ───────────────────────────────────────────────────────────
-    /// If true, reset input method to English every time the window appears.
     reset_ime_on_launch: bool,
 }
 
@@ -89,7 +85,6 @@ pub enum Message {
     GotWindowId(Option<window::Id>),
     EngineReady,
     CheckQuitSignal,
-    /// Window was moved or resized by the user/OS.
     WindowEvent(window::Id, window::Event),
 }
 
@@ -111,7 +106,6 @@ impl App {
         let scrollable_id = iced::widget::Id::unique();
         let engine_slot: EngineSlot = Arc::new(Mutex::new(None));
 
-        // ── Background engine loading ──────────────────────────────────────
         let slot_for_task = engine_slot.clone();
         let load_task = Task::future(async move {
             let _ = tokio::task::spawn_blocking(move || {
@@ -190,16 +184,13 @@ impl App {
                 Task::none()
             }
             Message::CheckQuitSignal => {
-                // Flush dirty window state to disk.
                 if self.state_dirty {
                     self.window_state.save();
                     self.state_dirty = false;
                 }
-                // Check singleton quit signal.
                 if self._guard.should_quit() {
                     self._guard.consume_quit_signal();
                     tracing::info!("Received quit signal — exiting");
-                    // Save state before quitting.
                     self.window_state.save();
                     return iced::exit();
                 }
@@ -213,7 +204,6 @@ impl App {
                         self.state_dirty = true;
                     }
                     window::Event::Resized(size) => {
-                        // Only track width changes (height is managed by us).
                         if (size.width - self.window_width).abs() > 1.0 {
                             self.window_width = size.width;
                             self.window_state.width = Some(size.width);
@@ -231,9 +221,9 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let keyboard_sub = keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed {
-                key, modifiers, ..
-            } => Message::KeyEvent(key, modifiers),
+            keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                Message::KeyEvent(key, modifiers)
+            }
             _ => Message::KeyEvent(
                 keyboard::Key::Named(keyboard::key::Named::Shift),
                 keyboard::Modifiers::default(),
@@ -243,7 +233,6 @@ impl App {
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
 
-        // Track window move/resize for position persistence.
         let window_sub = window::events()
             .map(|(id, event)| Message::WindowEvent(id, event));
 
@@ -343,16 +332,14 @@ impl App {
         };
 
         let emoji = self.use_emoji;
-        let mut items: Vec<IndexItem> = Vec::new();
 
-        // Dynamic label for the IME toggle based on current state.
         let ime_label = if self.reset_ime_on_launch {
             "IME: Reset to English on Launch [ON]"
         } else {
             "IME: Reset to English on Launch [OFF]"
         };
 
-        let settings_entries: Vec<(&str, &str, &str)> = vec![
+        let settings_entries: &[(&str, &str, &str)] = &[
             ("Edit Config File", "kmd:settings:config", if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }),
             ("Open Config Directory", "kmd:settings:dir", if emoji { "\u{1F4C2}" } else { "[DIR]" }),
             ("Reset Window Position", "kmd:settings:reset_position", if emoji { "\u{1F4CD}" } else { "[POS]" }),
@@ -365,18 +352,18 @@ impl App {
             ("Rebuild Index", "kmd:settings:rebuild", if emoji { "\u{1F504}" } else { "[IDX]" }),
         ];
 
-        for (name, path, icon) in settings_entries {
-            if filter.is_empty() || name.to_lowercase().contains(&filter) {
-                items.push(IndexItem {
-                    name: name.to_string(),
-                    path: path.to_string(),
-                    icon: icon.to_string(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    keywords: String::new(),
-                });
-            }
-        }
+        let items: Vec<IndexItem> = settings_entries
+            .iter()
+            .filter(|(name, _, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
+            .map(|(name, path, icon)| IndexItem {
+                name: name.to_string(),
+                path: path.to_string(),
+                icon: icon.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                keywords: String::new(),
+            })
+            .collect();
 
         self.results = items_to_results(items);
         self.search_mode = kmd_core::SearchMode::Contains;
@@ -385,7 +372,7 @@ impl App {
 
     fn handle_help_query(&mut self) {
         let emoji = self.use_emoji;
-        let entries: Vec<(&str, &str, &str)> = vec![
+        let entries: &[(&str, &str, &str)] = &[
             ("@  Web Search", "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
              if emoji { "\u{1F310}" } else { "[WEB]" }),
             (":calc  Calculator", "Type :calc expression  (e.g. :calc (2+3)*4)",
@@ -405,7 +392,7 @@ impl App {
         ];
 
         let items: Vec<IndexItem> = entries
-            .into_iter()
+            .iter()
             .map(|(name, desc, icon)| IndexItem {
                 name: name.to_string(),
                 path: desc.to_string(),
@@ -439,16 +426,13 @@ impl App {
                 let _ = open::that(&config_dir);
             }
             "reset_position" => {
-                // Reset window state and move to default 1/3 position.
                 WindowState::reset();
                 self.window_state = WindowState::default();
                 self.window_width = DEFAULT_WIDTH;
                 self.state_dirty = false;
 
-                // Resize to default width + move to center-top.
                 if let Some(id) = self.window_id {
                     let resize = window::resize(id, Size::new(DEFAULT_WIDTH, SEARCH_BAR_HEIGHT));
-                    // Get monitor size to calculate default position.
                     let move_task = window::monitor_size(id).then(move |maybe_size| {
                         if let Some(mon) = maybe_size {
                             let x = (mon.width - DEFAULT_WIDTH) / 2.0;
@@ -486,17 +470,9 @@ impl App {
                 self.reset_ime_on_launch = !self.reset_ime_on_launch;
                 let new_val = self.reset_ime_on_launch;
                 tracing::info!("reset_ime_on_launch = {new_val}");
+                save_config(|cfg| cfg.general.reset_ime_on_launch = new_val);
 
-                // Persist the change to the config file.
-                let config_dir = kmd_core::Config::default_config_dir();
-                if let Ok(mut cfg) = kmd_core::Config::load(&config_dir) {
-                    cfg.general.reset_ime_on_launch = new_val;
-                    if let Err(e) = cfg.save() {
-                        tracing::warn!("Failed to save config: {e}");
-                    }
-                }
-
-                // Re-open the settings list so the user sees the updated label.
+                // Re-open settings so the user sees the updated [ON/OFF] label.
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
                 return self.resize_window();
@@ -505,6 +481,10 @@ impl App {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
                 self.theme = crate::theme::from_name(theme_name);
                 tracing::info!("Theme changed to: {}", self.theme.name);
+
+                // Persist theme selection to config file.
+                let name_owned = theme_name.to_string();
+                save_config(|cfg| cfg.general.theme = name_owned);
             }
             _ => {
                 tracing::warn!("Unknown settings action: {action}");
@@ -553,7 +533,6 @@ impl App {
             return self.handle_settings_action(&result);
         }
 
-        // Save window state before launching (app may exit).
         if self.state_dirty {
             self.window_state.save();
         }
@@ -584,14 +563,14 @@ impl App {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                return self.scroll_to_selected();
+                self.scroll_to_selected()
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 let max = self.results.len().saturating_sub(1);
                 if self.selected < max {
                     self.selected += 1;
                 }
-                return self.scroll_to_selected();
+                self.scroll_to_selected()
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !self.query.is_empty() {
@@ -600,23 +579,17 @@ impl App {
                     self.selected = 0;
                     return self.resize_window();
                 }
-                // Save state before quitting.
                 if self.state_dirty {
                     self.window_state.save();
                 }
-                return iced::exit();
+                iced::exit()
             }
-            _ => {}
+            _ => Task::none(),
         }
-        Task::none()
     }
 
     fn scroll_to_selected(&self) -> Task<Message> {
-        let top_row = if self.selected >= MAX_VISIBLE_ROWS {
-            self.selected - MAX_VISIBLE_ROWS + 1
-        } else {
-            0
-        };
+        let top_row = self.selected.saturating_sub(MAX_VISIBLE_ROWS - 1);
         let y_offset = top_row as f32 * ROW_HEIGHT;
         scroll_to(
             self.scrollable_id.clone(),
@@ -703,12 +676,7 @@ impl App {
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
-
-        // [ui1] Stronger border for visibility
-        let border_color = Color {
-            a: 0.35,
-            ..t.accent
-        };
+        let border_color = Color { a: 0.35, ..t.accent };
 
         container(content)
             .width(Fill)
@@ -719,8 +687,6 @@ impl App {
                     width: 1.5,
                     color: border_color,
                 },
-                // [fix2] Minimal shadow — a heavy blur (was 32px) extends as a
-                // visible dark rectangle outside rounded corners on light desktops.
                 shadow: Shadow {
                     color: Color::from_rgba(0.0, 0.0, 0.0, 0.25 * shadow_i),
                     offset: Vector::new(0.0, 2.0),
@@ -740,8 +706,6 @@ impl App {
         let surface = t.surface;
         let has_results = !self.results.is_empty();
 
-        // Search bar surface — slightly lighter than theme surface for depth.
-        // Defined early so the text_input closure can capture it (fixes IME bg).
         let bar_surface = Color {
             r: (surface.r + 0.03).min(1.0),
             g: (surface.g + 0.03).min(1.0),
@@ -750,9 +714,6 @@ impl App {
         };
 
         let radius = t.corner_radius;
-
-        // [fix3] Border/shadow only when standalone (no results). When
-        // results are visible the outer container already provides the border.
         let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
         let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
@@ -764,9 +725,6 @@ impl App {
             "Search anything...  (:help for commands)"
         };
 
-        // [fix1] Use bar_surface as text_input background so the IME
-        // composition indicator blends with the search bar instead of
-        // falling back to the system default (black/white rectangle).
         let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
@@ -780,17 +738,10 @@ impl App {
                 icon: overlay_color,
                 placeholder: overlay_color,
                 value: text_color,
-                selection: Color {
-                    a: 0.3,
-                    ..accent_color
-                },
+                selection: Color { a: 0.3, ..accent_color },
             });
 
-        let mode_text = if self.query.is_empty() {
-            ""
-        } else {
-            self.search_mode.label()
-        };
+        let mode_text = if self.query.is_empty() { "" } else { self.search_mode.label() };
         let badge = text(mode_text).size(11).color(t.overlay);
 
         let bar_content = row![brand, input, badge]
@@ -798,15 +749,10 @@ impl App {
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
 
-        // ── Depth layering (raised card 3D effect) ────────────────────────
-
+        // Depth layering (raised card 3D effect)
         let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
-
-        let border_glow = Color {
-            a: 0.30,
-            ..accent_color
-        };
+        let border_glow = Color { a: 0.30, ..accent_color };
 
         let top_highlight = container(text(""))
             .width(Fill)
@@ -889,20 +835,13 @@ impl App {
         let is_selected = index == self.selected;
         let item = &result.item;
 
-        let sel_color = if is_selected {
-            t.accent
-        } else {
-            Color::TRANSPARENT
-        };
+        let sel_color = if is_selected { t.accent } else { Color::TRANSPARENT };
         let left_bar = container(text(""))
             .width(3)
             .height(ROW_HEIGHT - 8.0)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(sel_color)),
-                border: Border {
-                    radius: 1.5.into(),
-                    ..Default::default()
-                },
+                border: Border { radius: 1.5.into(), ..Default::default() },
                 ..Default::default()
             });
 
@@ -913,31 +852,17 @@ impl App {
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
-        let badge_bg = Color {
-            a: 0.12,
-            ..kind_color
-        };
-        let badge_border = Color {
-            a: 0.25,
-            ..kind_color
-        };
+        let badge_bg = Color { a: 0.12, ..kind_color };
+        let badge_border = Color { a: 0.25, ..kind_color };
         let badge = container(text(kind_label).size(10).color(kind_color))
             .padding(Padding::from([2, 6]))
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(badge_bg)),
-                border: Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: badge_border,
-                },
+                border: Border { radius: 4.0.into(), width: 1.0, color: badge_border },
                 ..Default::default()
             });
 
-        let bg = if is_selected {
-            t.surface2
-        } else {
-            Color::TRANSPARENT
-        };
+        let bg = if is_selected { t.surface2 } else { Color::TRANSPARENT };
 
         let row_content = row![left_bar, icon, info, Space::new().width(Fill), badge]
             .spacing(10)
@@ -1004,4 +929,18 @@ fn items_to_results(
             score: SCORE_PLUGIN,
         })
         .collect()
+}
+
+/// Load → mutate → save the user config file. Logs on failure.
+fn save_config(f: impl FnOnce(&mut kmd_core::Config)) {
+    let config_dir = kmd_core::Config::default_config_dir();
+    match kmd_core::Config::load(&config_dir) {
+        Ok(mut cfg) => {
+            f(&mut cfg);
+            if let Err(e) = cfg.save() {
+                tracing::warn!("Failed to save config: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("Failed to load config for save: {e}"),
+    }
 }

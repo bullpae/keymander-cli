@@ -17,12 +17,8 @@ mod window_state;
 use iced::{window, Color, Point, Size};
 use std::sync::Mutex;
 
+use crate::app::{DEFAULT_WIDTH, SEARCH_BAR_HEIGHT};
 use crate::window_state::WindowState;
-
-/// Default window width when no saved state exists.
-const DEFAULT_WIDTH: f32 = 680.0;
-/// Search bar height — initial window height.
-const SEARCH_BAR_HEIGHT: f32 = 56.0;
 
 /// Default position: horizontally centered, vertically at 1/3 from top.
 fn default_position(win: Size, monitor: Size) -> Point {
@@ -32,28 +28,20 @@ fn default_position(win: Size, monitor: Size) -> Point {
     )
 }
 
-/// Create a simple 32×32 RGBA icon (accent-colored rounded square).
+/// Create a simple 32x32 RGBA icon (accent-colored square).
 fn create_icon() -> Option<window::Icon> {
     let size = 32u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    let (r, g, b) = (0x56u8, 0xD2u8, 0xFFu8); // accent color
+    let (r, g, b) = (0x56u8, 0xD2u8, 0xFFu8);
 
     let center = size as f32 / 2.0;
     let outer = center - 2.0;
-    let corner_r = 7.0;
 
     for y in 0..size {
         for x in 0..size {
             let dx = (x as f32 - center).abs();
             let dy = (y as f32 - center).abs();
-            // Rounded-rect SDF
-            let inside = if dx > outer - corner_r && dy > outer - corner_r {
-                let cx = dx - (outer - corner_r);
-                let cy = dy - (outer - corner_r);
-                (cx * cx + cy * cy).sqrt() <= corner_r
-            } else {
-                dx <= outer && dy <= outer
-            };
+            let inside = dx <= outer && dy <= outer;
             if inside {
                 rgba.extend_from_slice(&[r, g, b, 255]);
             } else {
@@ -101,7 +89,6 @@ fn main() -> iced::Result {
 
     let icon = create_icon();
 
-    // Wrap boot data in Mutex<Option<>> so the Fn closure can take it once.
     let boot_data = Mutex::new(Some((guard, config, window_state)));
 
     iced::application(
