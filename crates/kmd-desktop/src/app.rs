@@ -82,6 +82,8 @@ pub enum Message {
     Submit,
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
+    StartWindowDrag,
+    StartWindowResize(window::Direction),
     GotWindowId(Option<window::Id>),
     EngineReady,
     CheckQuitSignal,
@@ -157,6 +159,20 @@ impl App {
                 self.launch_selected()
             }
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
+            Message::StartWindowDrag => match self.window_id {
+                Some(id) => window::drag(id),
+                None => window::oldest().then(|maybe_id| match maybe_id {
+                    Some(id) => window::drag(id),
+                    None => Task::none(),
+                }),
+            },
+            Message::StartWindowResize(direction) => match self.window_id {
+                Some(id) => window::drag_resize(id, direction),
+                None => window::oldest().then(move |maybe_id| match maybe_id {
+                    Some(id) => window::drag_resize(id, direction),
+                    None => Task::none(),
+                }),
+            },
             Message::GotWindowId(id) => {
                 self.window_id = id;
                 crate::platform::force_square_corners();
@@ -220,14 +236,11 @@ impl App {
     // ─── Subscription ─────────────────────────────────────────────────────
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keyboard_sub = keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                Message::KeyEvent(key, modifiers)
-            }
-            _ => Message::KeyEvent(
-                keyboard::Key::Named(keyboard::key::Named::Shift),
-                keyboard::Modifiers::default(),
-            ),
+        let keyboard_sub = iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key, modifiers, ..
+            }) => Some(Message::KeyEvent(key, modifiers)),
+            _ => None,
         });
 
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
@@ -332,6 +345,7 @@ impl App {
         };
 
         let emoji = self.use_emoji;
+        let current_theme = self.theme.name;
 
         let ime_label = if self.reset_ime_on_launch {
             "IME: Reset to English on Launch [ON]"
@@ -339,24 +353,82 @@ impl App {
             "IME: Reset to English on Launch [OFF]"
         };
 
-        let settings_entries: &[(&str, &str, &str)] = &[
-            ("Edit Config File", "kmd:settings:config", if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }),
-            ("Open Config Directory", "kmd:settings:dir", if emoji { "\u{1F4C2}" } else { "[DIR]" }),
-            ("Reset Window Position", "kmd:settings:reset_position", if emoji { "\u{1F4CD}" } else { "[POS]" }),
-            (ime_label, "kmd:settings:toggle_ime_reset", if emoji { "\u{1F310}" } else { "[IME]" }),
-            ("Theme: Midnight (default)", "kmd:settings:theme:midnight", if emoji { "\u{1F319}" } else { "[THM]" }),
-            ("Theme: Obsidian", "kmd:settings:theme:obsidian", if emoji { "\u{2B1B}" } else { "[THM]" }),
-            ("Theme: Snow", "kmd:settings:theme:snow", if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" }),
-            ("Theme: Rose Pine", "kmd:settings:theme:rose_pine", if emoji { "\u{1F339}" } else { "[THM]" }),
-            ("Theme: Nord", "kmd:settings:theme:nord", if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" }),
-            ("Rebuild Index", "kmd:settings:rebuild", if emoji { "\u{1F504}" } else { "[IDX]" }),
+        let label = |base: &str, theme_name: &str| -> String {
+            if current_theme.eq_ignore_ascii_case(theme_name) {
+                format!("{base} [Current]")
+            } else {
+                base.to_string()
+            }
+        };
+
+        let settings_entries: Vec<(String, &'static str, &'static str)> = vec![
+            (
+                "Edit Config File".to_string(),
+                "kmd:settings:config",
+                if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" },
+            ),
+            (
+                "Open Config Directory".to_string(),
+                "kmd:settings:dir",
+                if emoji { "\u{1F4C2}" } else { "[DIR]" },
+            ),
+            (
+                "Reset Window Position".to_string(),
+                "kmd:settings:reset_position",
+                if emoji { "\u{1F4CD}" } else { "[POS]" },
+            ),
+            (
+                "Move Window: drag the '»' handle".to_string(),
+                "kmd:settings:noop",
+                if emoji { "\u{1F6C8}" } else { "[TIP]" },
+            ),
+            (
+                "Resize Window: drag the right-edge grip".to_string(),
+                "kmd:settings:noop",
+                if emoji { "\u{1F6C8}" } else { "[TIP]" },
+            ),
+            (
+                ime_label.to_string(),
+                "kmd:settings:toggle_ime_reset",
+                if emoji { "\u{1F310}" } else { "[IME]" },
+            ),
+            (
+                label("Theme: Midnight (default)", "Midnight"),
+                "kmd:settings:theme:midnight",
+                if emoji { "\u{1F319}" } else { "[THM]" },
+            ),
+            (
+                label("Theme: Obsidian", "Obsidian"),
+                "kmd:settings:theme:obsidian",
+                if emoji { "\u{2B1B}" } else { "[THM]" },
+            ),
+            (
+                label("Theme: Snow", "Snow"),
+                "kmd:settings:theme:snow",
+                if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" },
+            ),
+            (
+                label("Theme: Rose Pine", "Rose Pine"),
+                "kmd:settings:theme:rose_pine",
+                if emoji { "\u{1F339}" } else { "[THM]" },
+            ),
+            (
+                label("Theme: Nord", "Nord"),
+                "kmd:settings:theme:nord",
+                if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" },
+            ),
+            (
+                "Rebuild Index".to_string(),
+                "kmd:settings:rebuild",
+                if emoji { "\u{1F504}" } else { "[IDX]" },
+            ),
         ];
 
         let items: Vec<IndexItem> = settings_entries
             .iter()
             .filter(|(name, _, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
             .map(|(name, path, icon)| IndexItem {
-                name: name.to_string(),
+                name: name.clone(),
                 path: path.to_string(),
                 icon: icon.to_string(),
                 kind: ItemKind::SystemCommand,
@@ -412,6 +484,9 @@ impl App {
         let action = result.item.path.strip_prefix("kmd:settings:").unwrap_or("");
 
         match action {
+            "noop" => {
+                return Task::none();
+            }
             "config" => {
                 let config_dir = kmd_core::Config::default_config_dir();
                 let config_path = config_dir.join(kmd_core::CONFIG_FILENAME);
@@ -717,7 +792,12 @@ impl App {
         let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
         let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
-        let brand = text("\u{00BB}").size(24).color(t.peach);
+        // Dedicated drag handle: click/hold and move to drag the window.
+        let brand_handle = mouse_area(
+            container(text("\u{00BB}").size(24).color(t.peach))
+                .padding(Padding::from([0, 4]))
+        )
+        .on_press(Message::StartWindowDrag);
 
         let placeholder = if self.loading {
             "Loading..."
@@ -743,8 +823,13 @@ impl App {
 
         let mode_text = if self.query.is_empty() { "" } else { self.search_mode.label() };
         let badge = text(mode_text).size(11).color(t.overlay);
+        let resize_grip = mouse_area(
+            container(text("↔").size(12).color(t.overlay))
+                .padding(Padding::from([0, 4])),
+        )
+        .on_press(Message::StartWindowResize(window::Direction::East));
 
-        let bar_content = row![brand, input, badge]
+        let bar_content = row![brand_handle, input, badge, resize_grip]
             .spacing(12)
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
