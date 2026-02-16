@@ -674,18 +674,20 @@ impl App {
         };
 
         container(content)
-            .width(Fill) // Fill the window (width is managed by window resize)
+            .width(Fill)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.5, // slightly thicker border
+                    width: 1.5,
                     color: border_color,
                 },
+                // [fix2] Minimal shadow — a heavy blur (was 32px) extends as a
+                // visible dark rectangle outside rounded corners on light desktops.
                 shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.6 * shadow_i),
-                    offset: Vector::new(0.0, 8.0),
-                    blur_radius: 32.0,
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25 * shadow_i),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 6.0,
                 },
                 text_color: None,
                 snap: false,
@@ -700,7 +702,29 @@ impl App {
         let accent_color = t.accent;
         let surface = t.surface;
         let has_results = !self.results.is_empty();
-        let radius: f32 = if has_results { 0.0 } else { t.corner_radius };
+
+        // Search bar surface — slightly lighter than theme surface for depth.
+        // Defined early so the text_input closure can capture it (fixes IME bg).
+        let bar_surface = Color {
+            r: (surface.r + 0.03).min(1.0),
+            g: (surface.g + 0.03).min(1.0),
+            b: (surface.b + 0.03).min(1.0),
+            a: surface.a,
+        };
+
+        // [fix3] Corners: full round when standalone, top-only when results
+        // are visible so the top shape matches the outer container.
+        let corner = t.corner_radius;
+        let radius: [f32; 4] = if has_results {
+            [corner, corner, 0.0, 0.0]
+        } else {
+            [corner, corner, corner, corner]
+        };
+
+        // [fix3] Border/shadow only when standalone (no results). When
+        // results are visible the outer container already provides the border.
+        let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
+        let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
         let brand = text("\u{00BB}").size(24).color(t.peach);
 
@@ -710,7 +734,9 @@ impl App {
             "Search anything...  (:help for commands)"
         };
 
-        // [ui7] Input takes Fill width — no more text cutoff.
+        // [fix1] Use bar_surface as text_input background so the IME
+        // composition indicator blends with the search bar instead of
+        // falling back to the system default (black/white rectangle).
         let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
@@ -719,7 +745,7 @@ impl App {
             .size(18)
             .padding(0)
             .style(move |_theme, _status| text_input::Style {
-                background: Background::Color(Color::TRANSPARENT),
+                background: Background::Color(bar_surface),
                 border: Border::default(),
                 icon: overlay_color,
                 placeholder: overlay_color,
@@ -737,7 +763,6 @@ impl App {
         };
         let badge = text(mode_text).size(11).color(t.overlay);
 
-        // [ui7] Removed Space between input and badge — input now fills all available space.
         let bar_content = row![brand, input, badge]
             .spacing(12)
             .align_y(iced::Alignment::Center)
@@ -748,17 +773,9 @@ impl App {
         let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
 
-        // [ui1] Stronger border glow for visibility.
         let border_glow = Color {
             a: 0.30,
             ..accent_color
-        };
-
-        let bar_surface = Color {
-            r: (surface.r + 0.03).min(1.0),
-            g: (surface.g + 0.03).min(1.0),
-            b: (surface.b + 0.03).min(1.0),
-            a: surface.a,
         };
 
         let top_highlight = container(text(""))
@@ -795,13 +812,13 @@ impl App {
                 background: Some(Background::Color(bar_surface)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.5, // [ui1] thicker inner border
+                    width: bar_border_width,
                     color: border_glow,
                 },
                 shadow: Shadow {
                     color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
                     offset: Vector::new(0.0, 2.0),
-                    blur_radius: 8.0,
+                    blur_radius: bar_shadow_blur,
                 },
                 text_color: None,
                 snap: false,
@@ -934,13 +951,15 @@ impl App {
 
     fn view_accent_bar(&self) -> Element<'_, Message> {
         let accent = self.theme.accent;
+        let corner = self.theme.corner_radius;
+        // [fix3] Bottom corners match the outer container's rounded shape.
         container(text(""))
             .width(Fill)
             .height(2)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(accent)),
                 border: Border {
-                    radius: 12.0.into(),
+                    radius: [0.0, 0.0, corner, corner].into(),
                     ..Default::default()
                 },
                 ..Default::default()
