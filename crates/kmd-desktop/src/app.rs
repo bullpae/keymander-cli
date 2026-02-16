@@ -378,12 +378,12 @@ impl App {
                 if emoji { "\u{1F4CD}" } else { "[POS]" },
             ),
             (
-                "Move Window: drag the '»' handle".to_string(),
+                "Move Window: drag top strip".to_string(),
                 "kmd:settings:noop",
                 if emoji { "\u{1F6C8}" } else { "[TIP]" },
             ),
             (
-                "Resize Window: drag the right-edge grip".to_string(),
+                "Resize Window: drag left/right edges".to_string(),
                 "kmd:settings:noop",
                 if emoji { "\u{1F6C8}" } else { "[TIP]" },
             ),
@@ -753,8 +753,9 @@ impl App {
         let shadow_i = t.shadow_intensity;
         let border_color = Color { a: 0.35, ..t.accent };
 
-        container(content)
+        let body = container(content)
             .width(Fill)
+            .height(Fill)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bg)),
                 border: Border {
@@ -769,7 +770,17 @@ impl App {
                 },
                 text_color: None,
                 snap: false,
-            })
+            });
+
+        // Invisible edge grips for natural resize on borderless window.
+        let left_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::West));
+        let right_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::East));
+
+        row![left_edge_resize, body, right_edge_resize]
+            .width(Fill)
+            .height(Fill)
             .into()
     }
 
@@ -792,12 +803,7 @@ impl App {
         let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
         let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
-        // Dedicated drag handle: click/hold and move to drag the window.
-        let brand_handle = mouse_area(
-            container(text("\u{00BB}").size(24).color(t.peach))
-                .padding(Padding::from([0, 4]))
-        )
-        .on_press(Message::StartWindowDrag);
+        let brand = text("\u{00BB}").size(24).color(t.peach);
 
         let placeholder = if self.loading {
             "Loading..."
@@ -823,13 +829,8 @@ impl App {
 
         let mode_text = if self.query.is_empty() { "" } else { self.search_mode.label() };
         let badge = text(mode_text).size(11).color(t.overlay);
-        let resize_grip = mouse_area(
-            container(text("↔").size(12).color(t.overlay))
-                .padding(Padding::from([0, 4])),
-        )
-        .on_press(Message::StartWindowResize(window::Direction::East));
 
-        let bar_content = row![brand_handle, input, badge, resize_grip]
+        let bar_content = row![brand, input, badge]
             .spacing(12)
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 16]));
@@ -839,17 +840,21 @@ impl App {
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
         let border_glow = Color { a: 0.30, ..accent_color };
 
-        let top_highlight = container(text(""))
+        // Full-width drag strip so users can move window naturally.
+        let top_drag_strip = mouse_area(
+            container(text(""))
             .width(Fill)
-            .height(1)
+            .height(8)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(highlight_color)),
                 ..Default::default()
-            });
+            }),
+        )
+        .on_press(Message::StartWindowDrag);
 
         let main_bar = container(bar_content)
             .width(Fill)
-            .height(SEARCH_BAR_HEIGHT - 2.0)
+            .height(SEARCH_BAR_HEIGHT - 9.0)
             .center_y(Fill);
 
         let bottom_shadow = container(text(""))
@@ -864,7 +869,7 @@ impl App {
                 ..Default::default()
             });
 
-        let layered = column![top_highlight, main_bar, bottom_shadow];
+        let layered = column![top_drag_strip, main_bar, bottom_shadow];
 
         container(layered)
             .width(Fill)
