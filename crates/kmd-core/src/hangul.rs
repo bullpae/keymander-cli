@@ -64,14 +64,13 @@ enum State {
 
 /// 초성 (initial consonant) compatibility jamo characters for standalone display
 const CHO_CHARS: [char; 19] = [
-    'ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ',
-    'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
+    'ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ',
+    'ㅌ', 'ㅍ', 'ㅎ',
 ];
 
 /// 중성 (medial vowel) compatibility jamo characters for standalone display
 const JUNG_CHARS: [char; 21] = [
-    'ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ',
-    'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ',
+    'ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ',
     'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ',
 ];
 
@@ -224,41 +223,41 @@ fn jung_to_char(jung: u32) -> char {
 pub fn key_to_jamo(c: char) -> Option<Jamo> {
     match c {
         // ── Consonants (초성) ──
-        'r' => Some(Jamo::Consonant(0)),   // ㄱ
-        'R' => Some(Jamo::Consonant(1)),   // ㄲ
-        's' | 'S' => Some(Jamo::Consonant(2)),   // ㄴ
-        'e' => Some(Jamo::Consonant(3)),   // ㄷ
-        'E' => Some(Jamo::Consonant(4)),   // ㄸ
-        'f' | 'F' => Some(Jamo::Consonant(5)),   // ㄹ
-        'a' | 'A' => Some(Jamo::Consonant(6)),   // ㅁ
-        'q' => Some(Jamo::Consonant(7)),   // ㅂ
-        'Q' => Some(Jamo::Consonant(8)),   // ㅃ
-        't' => Some(Jamo::Consonant(9)),   // ㅅ
-        'T' => Some(Jamo::Consonant(10)),  // ㅆ
-        'd' | 'D' => Some(Jamo::Consonant(11)),  // ㅇ
-        'w' => Some(Jamo::Consonant(12)),  // ㅈ
-        'W' => Some(Jamo::Consonant(13)),  // ㅉ
-        'c' | 'C' => Some(Jamo::Consonant(14)),  // ㅊ
-        'z' | 'Z' => Some(Jamo::Consonant(15)),  // ㅋ
-        'x' | 'X' => Some(Jamo::Consonant(16)),  // ㅌ
-        'v' | 'V' => Some(Jamo::Consonant(17)),  // ㅍ
-        'g' | 'G' => Some(Jamo::Consonant(18)),  // ㅎ
+        'r' => Some(Jamo::Consonant(0)),        // ㄱ
+        'R' => Some(Jamo::Consonant(1)),        // ㄲ
+        's' | 'S' => Some(Jamo::Consonant(2)),  // ㄴ
+        'e' => Some(Jamo::Consonant(3)),        // ㄷ
+        'E' => Some(Jamo::Consonant(4)),        // ㄸ
+        'f' | 'F' => Some(Jamo::Consonant(5)),  // ㄹ
+        'a' | 'A' => Some(Jamo::Consonant(6)),  // ㅁ
+        'q' => Some(Jamo::Consonant(7)),        // ㅂ
+        'Q' => Some(Jamo::Consonant(8)),        // ㅃ
+        't' => Some(Jamo::Consonant(9)),        // ㅅ
+        'T' => Some(Jamo::Consonant(10)),       // ㅆ
+        'd' | 'D' => Some(Jamo::Consonant(11)), // ㅇ
+        'w' => Some(Jamo::Consonant(12)),       // ㅈ
+        'W' => Some(Jamo::Consonant(13)),       // ㅉ
+        'c' | 'C' => Some(Jamo::Consonant(14)), // ㅊ
+        'z' | 'Z' => Some(Jamo::Consonant(15)), // ㅋ
+        'x' | 'X' => Some(Jamo::Consonant(16)), // ㅌ
+        'v' | 'V' => Some(Jamo::Consonant(17)), // ㅍ
+        'g' | 'G' => Some(Jamo::Consonant(18)), // ㅎ
 
         // ── Vowels (중성) ──
-        'k' | 'K' => Some(Jamo::Vowel(0)),   // ㅏ
-        'o' => Some(Jamo::Vowel(1)),          // ㅐ
-        'i' | 'I' => Some(Jamo::Vowel(2)),   // ㅑ
-        'O' => Some(Jamo::Vowel(3)),          // ㅒ
-        'j' | 'J' => Some(Jamo::Vowel(4)),   // ㅓ
-        'p' => Some(Jamo::Vowel(5)),          // ㅔ
-        'u' | 'U' => Some(Jamo::Vowel(6)),   // ㅕ
-        'P' => Some(Jamo::Vowel(7)),          // ㅖ
-        'h' | 'H' => Some(Jamo::Vowel(8)),   // ㅗ
-        'y' | 'Y' => Some(Jamo::Vowel(12)),  // ㅛ
-        'n' | 'N' => Some(Jamo::Vowel(13)),  // ㅜ
-        'b' | 'B' => Some(Jamo::Vowel(17)),  // ㅠ
-        'm' | 'M' => Some(Jamo::Vowel(18)),  // ㅡ
-        'l' | 'L' => Some(Jamo::Vowel(20)),  // ㅣ
+        'k' | 'K' => Some(Jamo::Vowel(0)),  // ㅏ
+        'o' => Some(Jamo::Vowel(1)),        // ㅐ
+        'i' | 'I' => Some(Jamo::Vowel(2)),  // ㅑ
+        'O' => Some(Jamo::Vowel(3)),        // ㅒ
+        'j' | 'J' => Some(Jamo::Vowel(4)),  // ㅓ
+        'p' => Some(Jamo::Vowel(5)),        // ㅔ
+        'u' | 'U' => Some(Jamo::Vowel(6)),  // ㅕ
+        'P' => Some(Jamo::Vowel(7)),        // ㅖ
+        'h' | 'H' => Some(Jamo::Vowel(8)),  // ㅗ
+        'y' | 'Y' => Some(Jamo::Vowel(12)), // ㅛ
+        'n' | 'N' => Some(Jamo::Vowel(13)), // ㅜ
+        'b' | 'B' => Some(Jamo::Vowel(17)), // ㅠ
+        'm' | 'M' => Some(Jamo::Vowel(18)), // ㅡ
+        'l' | 'L' => Some(Jamo::Vowel(20)), // ㅣ
 
         _ => None,
     }
@@ -351,7 +350,10 @@ impl HangulComposer {
             (State::ChoseongJungseong { cho, jung }, Jamo::Vowel(new_jung)) => {
                 // Try compound vowel
                 if let Some(compound) = compound_jung(jung, new_jung) {
-                    self.state = State::ChoseongJungseong { cho, jung: compound };
+                    self.state = State::ChoseongJungseong {
+                        cho,
+                        jung: compound,
+                    };
                     ComposeResult {
                         committed: None,
                         composing: Some(compose_syllable(cho, compound, 0)),
@@ -390,7 +392,11 @@ impl HangulComposer {
                 // Try compound 종성
                 if let Some(new_jong_idx) = CHO_TO_JONG[new_cho as usize] {
                     if let Some(compound) = compound_jong(jong, new_jong_idx) {
-                        self.state = State::Full { cho, jung, jong: compound };
+                        self.state = State::Full {
+                            cho,
+                            jung,
+                            jong: compound,
+                        };
                         return ComposeResult {
                             committed: None,
                             composing: Some(compose_syllable(cho, jung, compound)),
@@ -411,7 +417,10 @@ impl HangulComposer {
                     // Compound 종성: split it
                     let committed = compose_syllable(cho, jung, remaining);
                     let new_cho = jong_to_cho(detached).unwrap_or(0);
-                    self.state = State::ChoseongJungseong { cho: new_cho, jung: new_jung };
+                    self.state = State::ChoseongJungseong {
+                        cho: new_cho,
+                        jung: new_jung,
+                    };
                     ComposeResult {
                         committed: Some(committed),
                         composing: Some(compose_syllable(new_cho, new_jung, 0)),
@@ -420,7 +429,10 @@ impl HangulComposer {
                     // Simple 종성 → whole thing moves
                     let committed = compose_syllable(cho, jung, 0);
                     let new_cho = jong_to_cho(jong).unwrap_or(0);
-                    self.state = State::ChoseongJungseong { cho: new_cho, jung: new_jung };
+                    self.state = State::ChoseongJungseong {
+                        cho: new_cho,
+                        jung: new_jung,
+                    };
                     ComposeResult {
                         committed: Some(committed),
                         composing: Some(compose_syllable(new_cho, new_jung, 0)),
@@ -467,7 +479,11 @@ impl HangulComposer {
             State::Full { cho, jung, jong } => {
                 // Try decomposing compound 종성
                 if let Some((first, _)) = decompose_jong(jong) {
-                    self.state = State::Full { cho, jung, jong: first };
+                    self.state = State::Full {
+                        cho,
+                        jung,
+                        jong: first,
+                    };
                 } else {
                     self.state = State::ChoseongJungseong { cho, jung };
                 }
@@ -493,12 +509,8 @@ impl HangulComposer {
             State::Empty => None,
             State::Choseong { cho } => Some(cho_to_char(cho)),
             State::Jungseong { jung } => Some(jung_to_char(jung)),
-            State::ChoseongJungseong { cho, jung } => {
-                Some(compose_syllable(cho, jung, 0))
-            }
-            State::Full { cho, jung, jong } => {
-                Some(compose_syllable(cho, jung, jong))
-            }
+            State::ChoseongJungseong { cho, jung } => Some(compose_syllable(cho, jung, 0)),
+            State::Full { cho, jung, jong } => Some(compose_syllable(cho, jung, jong)),
         }
     }
 

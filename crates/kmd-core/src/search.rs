@@ -50,10 +50,7 @@ impl SearchMode {
         }
 
         // Extension shortcut: .doc -> *.doc
-        if q.starts_with('.')
-            && q.len() >= 2
-            && q[1..].chars().all(|c| c.is_ascii_alphanumeric())
-        {
+        if q.starts_with('.') && q.len() >= 2 && q[1..].chars().all(|c| c.is_ascii_alphanumeric()) {
             return (Self::Glob, format!("*{}", q));
         }
 
@@ -119,7 +116,9 @@ impl SearchEngine {
         Self {
             nucleo,
             all_items: Vec::new(),
-            lowercase_cache: LowercaseCache { entries: Vec::new() },
+            lowercase_cache: LowercaseCache {
+                entries: Vec::new(),
+            },
             kind_weights: KindWeights::default(),
         }
     }
@@ -168,7 +167,7 @@ impl SearchEngine {
     }
 
     /// Apply kind_weights boost to search results and re-sort by score descending
-    fn apply_kind_boost(&self, results: &mut Vec<SearchResult>) {
+    fn apply_kind_boost(&self, results: &mut [SearchResult]) {
         for result in results.iter_mut() {
             let boost = self.kind_weights.weight_for(result.item.kind);
             result.score = result.score.saturating_add(boost);
@@ -178,13 +177,9 @@ impl SearchEngine {
 
     /// Fuzzy search using Nucleo
     fn search_fuzzy(&mut self, pattern: &str, limit: usize) -> Vec<SearchResult> {
-        self.nucleo.pattern.reparse(
-            0,
-            pattern,
-            CaseMatching::Smart,
-            Normalization::Never,
-            false,
-        );
+        self.nucleo
+            .pattern
+            .reparse(0, pattern, CaseMatching::Smart, Normalization::Never, false);
         // timeout in milliseconds — wait for worker threads to finish matching.
         // 10ms keeps the UI responsive while still giving Nucleo time to
         // process most queries on typical indexes (< 20k items).
@@ -199,7 +194,7 @@ impl SearchEngine {
             .map(|(i, item)| SearchResult {
                 item: item.data.clone(),
                 // Higher rank = higher score (first result gets highest)
-                score: (count as u32).saturating_sub(i as u32) * 10,
+                score: count.saturating_sub(i as u32) * 10,
             })
             .collect()
     }
@@ -301,9 +296,7 @@ fn matches_domain_pattern(s: &str) -> bool {
     }
     let tld = parts.last().unwrap_or(&"");
     let tld_part = tld.split('/').next().unwrap_or(tld);
-    tld_part.len() >= 2
-        && tld_part.len() <= 6
-        && tld_part.chars().all(|c| c.is_ascii_alphabetic())
+    tld_part.len() >= 2 && tld_part.len() <= 6 && tld_part.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 fn normalize_url(s: &str) -> String {
@@ -425,10 +418,7 @@ mod tests {
     #[test]
     fn test_search_mode_url() {
         assert_eq!(SearchMode::detect("google.com").0, SearchMode::Url);
-        assert_eq!(
-            SearchMode::detect("https://example.com").0,
-            SearchMode::Url
-        );
+        assert_eq!(SearchMode::detect("https://example.com").0, SearchMode::Url);
     }
 
     #[test]

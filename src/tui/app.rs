@@ -2,9 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -13,7 +11,10 @@ use ratatui::Terminal;
 
 use kmd_core::action;
 use kmd_core::hangul::{self, HangulComposer};
-use kmd_core::index::{files::{icon_for_path, dir_icon}, ItemKind, Source};
+use kmd_core::index::{
+    files::{dir_icon, icon_for_path},
+    ItemKind, Source,
+};
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
@@ -91,6 +92,8 @@ pub struct AppState {
     pub is_portable: bool,
     /// Use emoji icons (mirrors config.general.emoji_icons)
     pub use_emoji: bool,
+    /// Selected LLM providers used by @llm multi prompt.
+    pub selected_llm_providers: Vec<String>,
     /// Cached effective query (query + composing char), updated on every input change
     cached_effective_query: String,
     /// Whether the UI needs to be redrawn
@@ -159,7 +162,6 @@ pub fn run_app(
     instance_guard: Option<kmd_core::single_instance::Guard>,
     show_on_ready: bool,
 ) -> color_eyre::Result<()> {
-
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
     let index = crate::cmd::load_or_build_index(&config.launcher, config.general.emoji_icons);
@@ -192,6 +194,7 @@ pub fn run_app(
         settings: None,
         is_portable: kmd_core::portable::is_portable(),
         use_emoji: config.general.emoji_icons,
+        selected_llm_providers: config.launcher.multi_llm_providers.clone(),
         cached_effective_query: String::new(),
         dirty: true,
     };
@@ -248,12 +251,7 @@ pub fn run_app(
                 state.mark_dirty();
                 // Route keys to settings if modal is open
                 if state.settings.is_some() {
-                    handle_settings_key_event(
-                        &mut state,
-                        key,
-                        &mut config,
-                        &mut engine,
-                    );
+                    handle_settings_key_event(&mut state, key, &mut config, &mut engine);
                 } else {
                     handle_key(&mut state, key, &mut engine, db.as_ref());
                 }
@@ -328,8 +326,7 @@ fn handle_settings_key_event(
 
             // Save to file
             if let Err(e) = config.save() {
-                state.status_message =
-                    Some(format!("[!] Save failed: {}", e));
+                state.status_message = Some(format!("[!] Save failed: {}", e));
                 state.settings = Some(settings_state);
                 return;
             }
@@ -338,6 +335,7 @@ fn handle_settings_key_event(
             state.show_preview = config.general.show_preview;
             state.preview_width_percent = config.general.preview_width_percent;
             state.quit_on_launch = config.launcher.quit_on_launch;
+            state.selected_llm_providers = config.launcher.multi_llm_providers.clone();
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
             if needs_rebuild {
@@ -356,8 +354,7 @@ fn handle_settings_key_event(
                     state.total_items
                 ));
             } else {
-                state.status_message =
-                    Some("\u{2705} Settings saved".to_string());
+                state.status_message = Some("\u{2705} Settings saved".to_string());
             }
 
             // Close modal after save
@@ -366,18 +363,17 @@ fn handle_settings_key_event(
         SettingsAction::Reset => {
             // Reset to defaults
             let default_config = kmd_core::Config::default();
-            settings_state.config.launcher.kind_weights =
-                default_config.launcher.kind_weights;
-            settings_state.config.launcher.search_depth =
-                default_config.launcher.search_depth;
-            settings_state.config.launcher.max_results =
-                default_config.launcher.max_results;
+            settings_state.config.launcher.kind_weights = default_config.launcher.kind_weights;
+            settings_state.config.launcher.search_depth = default_config.launcher.search_depth;
+            settings_state.config.launcher.max_results = default_config.launcher.max_results;
             settings_state.config.launcher.ignore_patterns =
                 default_config.launcher.ignore_patterns;
             settings_state.config.launcher.index_directories =
                 default_config.launcher.index_directories;
             settings_state.config.launcher.file_search_provider =
                 default_config.launcher.file_search_provider;
+            settings_state.config.launcher.multi_llm_providers =
+                default_config.launcher.multi_llm_providers;
             settings_state.config.general = default_config.general;
             settings_state.config.keybindings = default_config.keybindings;
             settings_state.dirty = true;
@@ -408,8 +404,10 @@ fn handle_key(
                 Err(e) => {
                     let config = kmd_core::Config::default();
                     state.settings = Some(SettingsState::new(config));
-                    state.status_message =
-                        Some(format!("\u{26A0}\u{FE0F} Config load failed, using defaults: {}", e));
+                    state.status_message = Some(format!(
+                        "\u{26A0}\u{FE0F} Config load failed, using defaults: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -570,7 +568,8 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path)); // ✅
+            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path));
+            // ✅
         }
         return;
     }
@@ -579,7 +578,8 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     if result.item.kind == ItemKind::Emoji && !result.item.path.is_empty() {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(&result.item.path);
-            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path)); // ✅
+            state.status_message = Some(format!("\u{2705} Copied: {}", result.item.path));
+            // ✅
         }
         return;
     }
@@ -605,6 +605,35 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     }
 
     // Web query
+    if result.item.kind == ItemKind::WebSearch {
+        if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
+            for url in urls {
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+    }
+
+    // Multi LLM query from raw input
+    if let Some((services, web_query)) =
+        web::parse_multi_llm_query(&state.query, &state.selected_llm_providers)
+    {
+        if !web_query.is_empty() {
+            for service in services {
+                let url = web::build_search_url(service, &web_query);
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+    }
+
+    // Web query (single provider)
     if let Some((service, web_query)) = web::parse_web_query(&state.query) {
         if !web_query.is_empty() {
             let url = web::build_search_url(service, &web_query);
@@ -647,8 +676,8 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
             }
         }
         action::ActionResult::NeedsConfirmation(name) => {
-            state.status_message =
-                Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name)); // ⚠️
+            state.status_message = Some(format!("\u{26A0}\u{FE0F} Confirmation needed: {}", name));
+            // ⚠️
         }
         action::ActionResult::Error(e) => {
             state.status_message = Some(format!("\u{274C} {}", e)); // ❌
@@ -659,11 +688,7 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
 // ── Search ───────────────────────────────────────────────────────────────────
 
 /// Update search results based on current query (including composing char)
-fn update_search(
-    state: &mut AppState,
-    engine: &mut SearchEngine,
-    db: Option<&kmd_core::Database>,
-) {
+fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&kmd_core::Database>) {
     // Borrow the cached effective query (no allocation)
     let query = state.effective_query().to_owned();
 
@@ -723,16 +748,28 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
 /// Handle @prefix web service queries
 fn handle_web_query(query: &str, state: &mut AppState) {
     let emoji = state.use_emoji;
+    if let Some((_services, q)) = web::parse_multi_llm_query(query, &state.selected_llm_providers) {
+        state.results = items_to_results(
+            web::multi_llm_result_items(&q, &state.selected_llm_providers, emoji),
+            SCORE_WEB_SEARCH,
+        );
+        state.search_mode = SearchMode::Contains;
+        state.selected_index = 0;
+        return;
+    }
+
     if let Some((service, q)) = web::parse_web_query(query) {
         if q.is_empty() {
-            state.results = items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
+            state.results =
+                items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
         } else {
             let item = web::search_result_item(service, &q, emoji);
             state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
         }
     } else {
         let filter = query.trim_start_matches('@');
-        state.results = items_to_results(web::list_services_as_items(filter, emoji), SCORE_WEB_LIST);
+        state.results =
+            items_to_results(web::list_services_as_items(filter, emoji), SCORE_WEB_LIST);
     }
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -835,7 +872,9 @@ fn drill_back(state: &mut AppState) {
     if let Some(prev) = state.drill_stack.pop() {
         state.query = prev.query;
         state.results = prev.results;
-        state.selected_index = prev.selected_index.min(state.results.len().saturating_sub(1));
+        state.selected_index = prev
+            .selected_index
+            .min(state.results.len().saturating_sub(1));
         state.search_mode = prev.search_mode;
         state.drill_path = prev.parent_drill_path;
     }
@@ -893,9 +932,18 @@ fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
     }
 
     let sort_by_name = |a: &SearchResult, b: &SearchResult| {
-        a.item.name.as_bytes().iter()
+        a.item
+            .name
+            .as_bytes()
+            .iter()
             .map(|b| b.to_ascii_lowercase())
-            .cmp(b.item.name.as_bytes().iter().map(|b| b.to_ascii_lowercase()))
+            .cmp(
+                b.item
+                    .name
+                    .as_bytes()
+                    .iter()
+                    .map(|b| b.to_ascii_lowercase()),
+            )
     };
     directories.sort_by(sort_by_name);
     files.sort_by(sort_by_name);

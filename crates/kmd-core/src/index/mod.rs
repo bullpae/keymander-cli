@@ -138,8 +138,7 @@ impl Index {
         );
         tracing::info!("Detected file provider: {}", provider_kind);
 
-        let general_files =
-            files::collect_files(provider_kind, &provider_config, priority_count);
+        let general_files = files::collect_files(provider_kind, &provider_config, priority_count);
         tracing::info!("General file scan: {} items", general_files.len());
         items.extend(general_files);
 

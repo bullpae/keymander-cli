@@ -1,9 +1,9 @@
 //! Search input bar widget — the primary interaction point
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::AppState;
@@ -12,7 +12,7 @@ use crate::tui::theme::Theme;
 /// Render the search input bar
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let prompt = if state.hangul_mode {
-        "\u{D55C}> "  // 한>
+        "\u{D55C}> " // 한>
     } else {
         "> "
     };

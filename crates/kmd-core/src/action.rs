@@ -128,9 +128,6 @@ pub fn do_execute_system_command(cmd: &system_commands::SystemCommand) -> Action
 
     match command.spawn() {
         Ok(_) => ActionResult::Launched,
-        Err(e) => ActionResult::Error(format!(
-            "Failed to execute '{}': {}",
-            cmd.display_name, e
-        )),
+        Err(e) => ActionResult::Error(format!("Failed to execute '{}': {}", cmd.display_name, e)),
     }
 }

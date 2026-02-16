@@ -50,7 +50,10 @@ impl WindowState {
         let path = Self::state_path();
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("Failed to create window state directory ({}): {e}", parent.display());
+                tracing::warn!(
+                    "Failed to create window state directory ({}): {e}",
+                    parent.display()
+                );
                 return;
             }
         }

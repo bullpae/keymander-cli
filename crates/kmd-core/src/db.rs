@@ -127,12 +127,7 @@ impl Database {
     }
 
     /// Add a bookmark
-    pub fn add_bookmark(
-        &self,
-        name: &str,
-        value: &str,
-        item_type: &str,
-    ) -> Result<(), DbError> {
+    pub fn add_bookmark(&self, name: &str, value: &str, item_type: &str) -> Result<(), DbError> {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO bookmarks(name, value, item_type) VALUES (?1, ?2, ?3)",
@@ -171,11 +166,9 @@ impl Database {
     /// Get a value from kv_store
     pub fn kv_get(&self, key: &str) -> Option<String> {
         self.conn
-            .query_row(
-                "SELECT value FROM kv_store WHERE key = ?1",
-                [key],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM kv_store WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
             .ok()
     }
 

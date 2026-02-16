@@ -58,7 +58,11 @@ pub fn collect_executables(use_emoji: bool) -> Vec<IndexItem> {
                     path: full_path.clone(),
                     kind: ItemKind::Executable,
                     source: Source::Path,
-                    icon: if use_emoji { "\u{26A1}".to_string() } else { "Ex".to_string() },
+                    icon: if use_emoji {
+                        "\u{26A1}".to_string()
+                    } else {
+                        "Ex".to_string()
+                    },
                     keywords: full_path,
                 });
             }

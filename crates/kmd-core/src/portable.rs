@@ -29,9 +29,7 @@ pub fn portable_data_dir() -> Option<PathBuf> {
 /// Portable mode is active when a `kmd-data/` directory exists next to the
 /// executable.
 pub fn is_portable() -> bool {
-    portable_data_dir()
-        .map(|d| d.is_dir())
-        .unwrap_or(false)
+    portable_data_dir().map(|d| d.is_dir()).unwrap_or(false)
 }
 
 /// Enable portable mode by creating the `kmd-data/` directory.
@@ -39,7 +37,7 @@ pub fn is_portable() -> bool {
 /// Returns the path to the created directory.
 pub fn enable() -> std::io::Result<PathBuf> {
     let dir = portable_data_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Cannot determine exe directory"))?;
+        .ok_or_else(|| std::io::Error::other("Cannot determine exe directory"))?;
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -50,7 +48,7 @@ pub fn enable() -> std::io::Result<PathBuf> {
 /// files out first.
 pub fn disable() -> std::io::Result<()> {
     let dir = portable_data_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Cannot determine exe directory"))?;
+        .ok_or_else(|| std::io::Error::other("Cannot determine exe directory"))?;
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir)?;
     }

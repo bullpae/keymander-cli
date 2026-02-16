@@ -17,7 +17,11 @@ pub struct SystemCommand {
 
 impl SystemCommand {
     pub fn pick_icon(&self, use_emoji: bool) -> &str {
-        if use_emoji { self.emoji_icon } else { self.icon }
+        if use_emoji {
+            self.emoji_icon
+        } else {
+            self.icon
+        }
     }
 }
 
@@ -27,7 +31,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Shutdown",
         keywords: &["shutdown", "poweroff", "종료", "시스템종료"],
         icon: "!!",
-        emoji_icon: "\u{23FB}",  // ⏻
+        emoji_icon: "\u{23FB}", // ⏻
         command: "shutdown",
         args: &["/s", "/t", "0"],
         confirm: true,
@@ -36,7 +40,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Restart",
         keywords: &["restart", "reboot", "재시작"],
         icon: "<>",
-        emoji_icon: "\u{1F504}",  // 🔄
+        emoji_icon: "\u{1F504}", // 🔄
         command: "shutdown",
         args: &["/r", "/t", "0"],
         confirm: true,
@@ -45,7 +49,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Sleep",
         keywords: &["sleep", "suspend", "절전"],
         icon: "Zz",
-        emoji_icon: "\u{1F4A4}",  // 💤
+        emoji_icon: "\u{1F4A4}", // 💤
         command: "rundll32",
         args: &["powrprof.dll,SetSuspendState", "0,1,0"],
         confirm: false,
@@ -54,7 +58,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Lock Screen",
         keywords: &["lock", "잠금", "lockscreen"],
         icon: "Lk",
-        emoji_icon: "\u{1F512}",  // 🔒
+        emoji_icon: "\u{1F512}", // 🔒
         command: "rundll32",
         args: &["user32.dll,LockWorkStation"],
         confirm: false,
@@ -63,7 +67,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Logout",
         keywords: &["logout", "logoff", "로그아웃"],
         icon: "->",
-        emoji_icon: "\u{1F6AA}",  // 🚪
+        emoji_icon: "\u{1F6AA}", // 🚪
         command: "shutdown",
         args: &["/l"],
         confirm: true,
@@ -72,7 +76,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Settings",
         keywords: &["settings", "설정", "windowssettings"],
         icon: "**",
-        emoji_icon: "\u{2699}\u{FE0F}",  // ⚙️
+        emoji_icon: "\u{2699}\u{FE0F}", // ⚙️
         command: "cmd",
         args: &["/c", "start", "ms-settings:"],
         confirm: false,
@@ -81,7 +85,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Task Manager",
         keywords: &["taskmgr", "taskmanager", "작업관리자"],
         icon: "Tm",
-        emoji_icon: "\u{1F4CA}",  // 📊
+        emoji_icon: "\u{1F4CA}", // 📊
         command: "taskmgr",
         args: &[],
         confirm: false,
@@ -90,7 +94,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         display_name: "Recycle Bin",
         keywords: &["trash", "recyclebin", "휴지통"],
         icon: "Rb",
-        emoji_icon: "\u{1F5D1}",  // 🗑
+        emoji_icon: "\u{1F5D1}", // 🗑
         command: "explorer",
         args: &["shell:RecycleBinFolder"],
         confirm: false,
@@ -224,7 +228,5 @@ pub fn collect_system_commands(use_emoji: bool) -> Vec<IndexItem> {
 
 /// Find a system command by its display name
 pub fn find_by_display_name(name: &str) -> Option<&'static SystemCommand> {
-    SYSTEM_COMMANDS
-        .iter()
-        .find(|cmd| cmd.display_name == name)
+    SYSTEM_COMMANDS.iter().find(|cmd| cmd.display_name == name)
 }

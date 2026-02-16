@@ -9,7 +9,11 @@ use super::{IndexItem, ItemKind, Source};
 
 /// Icon for applications
 fn app_icon(use_emoji: bool) -> String {
-    if use_emoji { "\u{1F4E6}".into() } else { "Ap".into() }  // 📦 / Ap
+    if use_emoji {
+        "\u{1F4E6}".into()
+    } else {
+        "Ap".into()
+    } // 📦 / Ap
 }
 
 /// Collect installed applications from OS-specific locations
@@ -119,8 +123,10 @@ foreach ($item in $folder.Items()) {
         .args([
             "-NoProfile",
             "-NonInteractive",
-            "-ExecutionPolicy", "Bypass",
-            "-Command", ps_script,
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ps_script,
         ])
         .output();
 

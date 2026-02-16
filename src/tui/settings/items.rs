@@ -34,7 +34,13 @@ pub struct SettingItem {
 
 /// File search provider options
 const PROVIDER_OPTIONS: &[&str] = &[
-    "auto", "builtin", "fd", "everything", "winfs", "mdfind", "locate",
+    "auto",
+    "builtin",
+    "fd",
+    "everything",
+    "winfs",
+    "mdfind",
+    "locate",
 ];
 
 /// Get the setting items for a given tab

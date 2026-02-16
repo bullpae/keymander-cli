@@ -187,7 +187,10 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
         }
     }
 
-    tracing::info!("Scan directories: {} items (files + dirs) found", items.len());
+    tracing::info!(
+        "Scan directories: {} items (files + dirs) found",
+        items.len()
+    );
     items
 }
 
@@ -318,7 +321,13 @@ fn collect_builtin(config: &ProviderConfig) -> Vec<IndexItem> {
                 true
             });
 
-        walkdir_into_items(walker, &mut items, &mut seen, config.max_results, config.use_emoji);
+        walkdir_into_items(
+            walker,
+            &mut items,
+            &mut seen,
+            config.max_results,
+            config.use_emoji,
+        );
 
         if items.len() >= config.max_results {
             break;
@@ -377,7 +386,12 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
 
         match output {
             Ok(output) => {
-                parse_line_output_into(&output.stdout, &mut all_items, config.max_results, config.use_emoji);
+                parse_line_output_into(
+                    &output.stdout,
+                    &mut all_items,
+                    config.max_results,
+                    config.use_emoji,
+                );
             }
             Err(e) => {
                 tracing::warn!("fd failed for {}: {}", dir.display(), e);
@@ -428,7 +442,12 @@ fn collect_everything(config: &ProviderConfig) -> Vec<IndexItem> {
     match cmd.output() {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
+            parse_line_output_into(
+                &output.stdout,
+                &mut items,
+                config.max_results,
+                config.use_emoji,
+            );
             tracing::info!("Everything provider: {} files found", items.len());
             items
         }
@@ -457,7 +476,12 @@ fn collect_spotlight(config: &ProviderConfig) -> Vec<IndexItem> {
     {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
+            parse_line_output_into(
+                &output.stdout,
+                &mut items,
+                config.max_results,
+                config.use_emoji,
+            );
             tracing::info!("Spotlight provider: {} files found", items.len());
             items
         }
@@ -492,7 +516,12 @@ fn collect_locate(config: &ProviderConfig) -> Vec<IndexItem> {
     {
         Ok(output) => {
             let mut items = Vec::new();
-            parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
+            parse_line_output_into(
+                &output.stdout,
+                &mut items,
+                config.max_results,
+                config.use_emoji,
+            );
             tracing::info!("locate provider: {} files found", items.len());
             items
         }
@@ -560,7 +589,12 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
 
         match cmd.output() {
             Ok(output) => {
-                parse_line_output_into(&output.stdout, &mut items, config.max_results, config.use_emoji);
+                parse_line_output_into(
+                    &output.stdout,
+                    &mut items,
+                    config.max_results,
+                    config.use_emoji,
+                );
             }
             Err(e) => {
                 tracing::warn!("PowerShell scan failed for {}: {}", root.display(), e);
@@ -628,9 +662,17 @@ fn walkdir_into_items<I>(
         items.push(IndexItem {
             name: name.clone(),
             path: path_str.clone(),
-            kind: if is_dir { ItemKind::Directory } else { ItemKind::File },
+            kind: if is_dir {
+                ItemKind::Directory
+            } else {
+                ItemKind::File
+            },
             source: Source::FileProvider,
-            icon: if is_dir { dir_icon(use_emoji) } else { icon_for_path(path, use_emoji) },
+            icon: if is_dir {
+                dir_icon(use_emoji)
+            } else {
+                icon_for_path(path, use_emoji)
+            },
             keywords: path_str,
         });
 
@@ -767,40 +809,70 @@ pub const ICON_WIDTH: usize = 2;
 /// (extensions, emoji, ascii)
 const ICON_TABLE: &[(&[&str], &str, &str)] = &[
     // Programming
-    (&["rs"],                                          "\u{1F980}", "Rs"), // 🦀
-    (&["py", "pyw"],                                   "\u{1F40D}", "Py"), // 🐍
-    (&["js", "ts", "jsx", "tsx", "mjs"],               "\u{1F4DC}", "Js"), // 📜
-    (&["go"],                                          "\u{1F535}", "Go"), // 🔵
-    (&["java", "kt", "kts"],                           "\u{2615}",  "Jv"), // ☕
-    (&["c", "cpp", "h", "hpp", "cc", "cxx"],           "\u{2699}",  "C+"), // ⚙
-    (&["cs"],                                          "\u{1F7E3}", "C#"), // 🟣
-    (&["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"], "\u{1F41A}", "$>"), // 🐚
+    (&["rs"], "\u{1F980}", "Rs"),                               // 🦀
+    (&["py", "pyw"], "\u{1F40D}", "Py"),                        // 🐍
+    (&["js", "ts", "jsx", "tsx", "mjs"], "\u{1F4DC}", "Js"),    // 📜
+    (&["go"], "\u{1F535}", "Go"),                               // 🔵
+    (&["java", "kt", "kts"], "\u{2615}", "Jv"),                 // ☕
+    (&["c", "cpp", "h", "hpp", "cc", "cxx"], "\u{2699}", "C+"), // ⚙
+    (&["cs"], "\u{1F7E3}", "C#"),                               // 🟣
+    (
+        &["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"],
+        "\u{1F41A}",
+        "$>",
+    ), // 🐚
     // Documents
-    (&["md", "txt", "rtf", "log"],                     "\u{1F4DD}", "Tx"), // 📝
-    (&["pdf"],                                         "\u{1F4D5}", "Pd"), // 📕
-    (&["hwp", "hwpx"],                                 "\u{1F4D8}", "Hw"), // 📘
-    (&["doc", "docx", "odt"],                          "\u{1F4C4}", "Dc"), // 📄
-    (&["xls", "xlsx", "ods", "csv"],                   "\u{1F4CA}", "Xl"), // 📊
-    (&["ppt", "pptx", "odp"],                          "\u{1F4CA}", "Pt"), // 📊
+    (&["md", "txt", "rtf", "log"], "\u{1F4DD}", "Tx"), // 📝
+    (&["pdf"], "\u{1F4D5}", "Pd"),                     // 📕
+    (&["hwp", "hwpx"], "\u{1F4D8}", "Hw"),             // 📘
+    (&["doc", "docx", "odt"], "\u{1F4C4}", "Dc"),      // 📄
+    (&["xls", "xlsx", "ods", "csv"], "\u{1F4CA}", "Xl"), // 📊
+    (&["ppt", "pptx", "odp"], "\u{1F4CA}", "Pt"),      // 📊
     // Data / Config
-    (&["json", "yaml", "yml", "toml", "xml", "ini", "conf"], "\u{1F4CB}", "{}"), // 📋
-    (&["sql", "db", "sqlite", "sqlite3"],              "\u{1F5C3}", "Db"), // 🗃
-    (&["html", "htm", "css", "scss", "less"],          "\u{1F310}", "<>"), // 🌐
+    (
+        &["json", "yaml", "yml", "toml", "xml", "ini", "conf"],
+        "\u{1F4CB}",
+        "{}",
+    ), // 📋
+    (&["sql", "db", "sqlite", "sqlite3"], "\u{1F5C3}", "Db"), // 🗃
+    (&["html", "htm", "css", "scss", "less"], "\u{1F310}", "<>"), // 🌐
     // Media
-    (&["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "tiff"], "\u{1F5BC}", "Im"), // 🖼
-    (&["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"], "\u{1F3B5}", "Au"), // 🎵
-    (&["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"], "\u{1F3AC}", "Vd"), // 🎬
+    (
+        &[
+            "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "tiff",
+        ],
+        "\u{1F5BC}",
+        "Im",
+    ), // 🖼
+    (
+        &["mp3", "wav", "flac", "aac", "ogg", "m4a", "wma"],
+        "\u{1F3B5}",
+        "Au",
+    ), // 🎵
+    (
+        &["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
+        "\u{1F3AC}",
+        "Vd",
+    ), // 🎬
     // Archives
-    (&["zip", "tar", "gz", "7z", "rar", "bz2", "xz", "zst"], "\u{1F4E6}", "Pk"), // 📦
+    (
+        &["zip", "tar", "gz", "7z", "rar", "bz2", "xz", "zst"],
+        "\u{1F4E6}",
+        "Pk",
+    ), // 📦
     // Executables / Installers
-    (&["exe", "msi", "appimage", "deb", "rpm", "dmg"], "\u{1F4E6}", "Ex"), // 📦
+    (
+        &["exe", "msi", "appimage", "deb", "rpm", "dmg"],
+        "\u{1F4E6}",
+        "Ex",
+    ), // 📦
     // Fonts
-    (&["ttf", "otf", "woff", "woff2"],                "\u{1F524}", "Ft"), // 🔤
+    (&["ttf", "otf", "woff", "woff2"], "\u{1F524}", "Ft"), // 🔤
 ];
 
 const DEFAULT_EMOJI: &str = "\u{1F4C4}"; // 📄
 const DEFAULT_ASCII: &str = "--";
-const DIR_EMOJI: &str = "\u{1F4C1}";     // 📁
+const DIR_EMOJI: &str = "\u{1F4C1}"; // 📁
 const DIR_ASCII: &str = ">>";
 
 /// Get an icon for a file path.  When `use_emoji` is true, rich emoji icons
@@ -824,10 +896,19 @@ pub fn icon_for_path(path: &Path, use_emoji: bool) -> String {
         }
     }
 
-    if use_emoji { DEFAULT_EMOJI } else { DEFAULT_ASCII }.into()
+    if use_emoji {
+        DEFAULT_EMOJI
+    } else {
+        DEFAULT_ASCII
+    }
+    .into()
 }
 
 /// Directory icon appropriate for the given mode.
 pub fn dir_icon(use_emoji: bool) -> String {
-    if use_emoji { DIR_EMOJI.into() } else { DIR_ASCII.into() }
+    if use_emoji {
+        DIR_EMOJI.into()
+    } else {
+        DIR_ASCII.into()
+    }
 }

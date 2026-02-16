@@ -1,9 +1,9 @@
 //! Preview panel widget — shows details of the selected item
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use ratatui::Frame;
 
 use kmd_core::index::ItemKind;
 
@@ -49,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
                 theme.preview_empty_style(),
             )]),
             Line::from(vec![Span::styled(
-                "    \u{2191}\u{2193} to navigate results",  // ↑↓
+                "    \u{2191}\u{2193} to navigate results", // ↑↓
                 theme.preview_empty_style(),
             )]),
         ]
@@ -76,25 +76,26 @@ fn render_calc_preview<'a>(
             Span::styled("Calculator", theme.kind_calc_style()),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Expression", theme.preview_label_style()),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!("  {}", query.strip_prefix(":calc").unwrap_or(query).trim()),
-                theme.preview_value_style(),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Expression",
+            theme.preview_label_style(),
+        )]),
+        Line::from(vec![Span::styled(
+            format!("  {}", query.strip_prefix(":calc").unwrap_or(query).trim()),
+            theme.preview_value_style(),
+        )]),
     ];
 
     if !item.path.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Result", theme.preview_label_style()),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", item.path), theme.header_accent_style()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Result",
+            theme.preview_label_style(),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", item.path),
+            theme.header_accent_style(),
+        )]));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("  Press ", theme.preview_dim_style()),
@@ -107,25 +108,16 @@ fn render_calc_preview<'a>(
 }
 
 /// Render emoji-specific preview — large emoji with name and category
-fn render_emoji_preview<'a>(
-    item: &kmd_core::index::IndexItem,
-    theme: &'a Theme,
-) -> Vec<Line<'a>> {
+fn render_emoji_preview<'a>(item: &kmd_core::index::IndexItem, theme: &'a Theme) -> Vec<Line<'a>> {
     // item.path = emoji char
     // item.name = "😀 grinning face (활짝 웃는 얼굴)" or "😀 grinning face"
     let emoji = &item.path;
-    let full_name = item
-        .name
-        .strip_prefix(emoji)
-        .unwrap_or(&item.name)
-        .trim();
+    let full_name = item.name.strip_prefix(emoji).unwrap_or(&item.name).trim();
 
     // Split English name and Korean name if present: "grinning face (활짝 웃는 얼굴)"
     let (en_name, ko_name) = if let Some(paren_start) = full_name.rfind(" (") {
         let en = full_name[..paren_start].trim();
-        let ko = full_name[paren_start + 2..]
-            .trim_end_matches(')')
-            .trim();
+        let ko = full_name[paren_start + 2..].trim_end_matches(')').trim();
         (en, ko)
     } else {
         (full_name, "")
@@ -134,17 +126,17 @@ fn render_emoji_preview<'a>(
     let mut lines = vec![
         Line::from(""),
         // Large emoji display
-        Line::from(vec![
-            Span::styled(format!("    {}", emoji), theme.header_accent_style()),
-        ]),
+        Line::from(vec![Span::styled(
+            format!("    {}", emoji),
+            theme.header_accent_style(),
+        )]),
         Line::from(""),
         // English Name
-        Line::from(vec![
-            Span::styled("  Name", theme.preview_label_style()),
-        ]),
-        Line::from(vec![
-            Span::styled(format!("  {}", en_name), theme.preview_value_style()),
-        ]),
+        Line::from(vec![Span::styled("  Name", theme.preview_label_style())]),
+        Line::from(vec![Span::styled(
+            format!("  {}", en_name),
+            theme.preview_value_style(),
+        )]),
     ];
 
     // Korean name (if available)
@@ -153,9 +145,10 @@ fn render_emoji_preview<'a>(
         lines.push(Line::from(vec![
             Span::styled("  \u{D55C}\u{AD6D}\u{C5B4}", theme.preview_label_style()), // 한국어
         ]));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", ko_name), theme.preview_value_style()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", ko_name),
+            theme.preview_value_style(),
+        )]));
     }
 
     // Unicode codepoints
@@ -165,12 +158,14 @@ fn render_emoji_preview<'a>(
         .collect::<Vec<_>>()
         .join(" ");
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  Codepoint", theme.preview_label_style()),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {}", codepoints), theme.preview_dim_style()),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "  Codepoint",
+        theme.preview_label_style(),
+    )]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("  {}", codepoints),
+        theme.preview_dim_style(),
+    )]));
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
@@ -183,10 +178,7 @@ fn render_emoji_preview<'a>(
 }
 
 /// Render shell command preview
-fn render_shell_preview<'a>(
-    item: &kmd_core::index::IndexItem,
-    theme: &'a Theme,
-) -> Vec<Line<'a>> {
+fn render_shell_preview<'a>(item: &kmd_core::index::IndexItem, theme: &'a Theme) -> Vec<Line<'a>> {
     let is_quick_action = !item.name.contains("Run:");
 
     let mut lines = vec![
@@ -194,7 +186,11 @@ fn render_shell_preview<'a>(
         Line::from(vec![
             Span::styled(format!("  {} ", item.icon), theme.preview_value_style()),
             Span::styled(
-                if is_quick_action { "Quick Action" } else { "Shell Command" },
+                if is_quick_action {
+                    "Quick Action"
+                } else {
+                    "Shell Command"
+                },
                 theme.kind_calc_style(),
             ),
         ]),
@@ -208,29 +204,35 @@ fn render_shell_preview<'a>(
             .strip_prefix(&item.icon)
             .unwrap_or(&item.name)
             .trim();
-        lines.push(Line::from(vec![
-            Span::styled("  Action", theme.preview_label_style()),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", name), theme.preview_value_style()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Action",
+            theme.preview_label_style(),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", name),
+            theme.preview_value_style(),
+        )]));
         if !item.keywords.is_empty() {
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  Description", theme.preview_label_style()),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {}", item.keywords), theme.preview_dim_style()),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "  Description",
+                theme.preview_label_style(),
+            )]));
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {}", item.keywords),
+                theme.preview_dim_style(),
+            )]));
         }
     } else {
         // Raw command
-        lines.push(Line::from(vec![
-            Span::styled("  Command", theme.preview_label_style()),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", item.path), theme.preview_value_style()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Command",
+            theme.preview_label_style(),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", item.path),
+            theme.preview_value_style(),
+        )]));
     }
 
     lines.push(Line::from(""));
@@ -275,23 +277,24 @@ fn render_item_preview<'a>(
         ]),
         Line::from(""),
         // Path
-        Line::from(vec![
-            Span::styled("  Path", theme.preview_label_style()),
-        ]),
-        Line::from(vec![
-            Span::styled(format!("  {}", item.path), theme.preview_dim_style()),
-        ]),
+        Line::from(vec![Span::styled("  Path", theme.preview_label_style())]),
+        Line::from(vec![Span::styled(
+            format!("  {}", item.path),
+            theme.preview_dim_style(),
+        )]),
     ];
 
     // Keywords (if present)
     if !item.keywords.is_empty() && item.keywords != item.path {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Keywords", theme.preview_label_style()),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {}", item.keywords), theme.preview_dim_style()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Keywords",
+            theme.preview_label_style(),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", item.keywords),
+            theme.preview_dim_style(),
+        )]));
     }
 
     // Score (if nonzero)

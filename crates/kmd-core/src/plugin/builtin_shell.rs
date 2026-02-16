@@ -5,8 +5,8 @@
 
 use std::process::Command;
 
-use crate::index::{IndexItem, ItemKind, Source};
 use super::{Extension, ExtensionAction};
+use crate::index::{IndexItem, ItemKind, Source};
 
 /// Quick action: a pre-defined system info command
 struct QuickAction {
@@ -148,13 +148,9 @@ impl ShellExtension {
         }
 
         let output = if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .args(["/c", cmd_line])
-                .output()
+            Command::new("cmd").args(["/c", cmd_line]).output()
         } else {
-            Command::new("sh")
-                .args(["-c", cmd_line])
-                .output()
+            Command::new("sh").args(["-c", cmd_line]).output()
         };
 
         match output {

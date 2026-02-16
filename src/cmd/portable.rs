@@ -44,7 +44,8 @@ fn show_status() -> Result<()> {
     }
 
     if let Some(portable_dir) = kmd_core::portable::portable_data_dir() {
-        println!("Portable dir ({}): {}",
+        println!(
+            "Portable dir ({}): {}",
             if is_portable { "active" } else { "inactive" },
             portable_dir.display(),
         );

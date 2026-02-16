@@ -1,20 +1,20 @@
 //! Search results list widget — the main results display
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation,
     ScrollbarState,
 };
+use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::AppState;
 use crate::tui::theme::Theme;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
-const ICON_COL_WIDTH: usize = 4;       // " XX " — space + 2-char icon + space
-const NAME_WIDTH_PCT: usize = 35;      // % of inner width for name column
+const ICON_COL_WIDTH: usize = 4; // " XX " — space + 2-char icon + space
+const NAME_WIDTH_PCT: usize = 35; // % of inner width for name column
 const NAME_MIN: usize = 15;
 const NAME_MAX: usize = 40;
 const KIND_COL_WIDTH: usize = 8;
@@ -24,7 +24,7 @@ const DRILL_PATH_DISPLAY_LEN: usize = 50;
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     // Calculate available width for dynamic column sizing
     let inner_width = area.width.saturating_sub(4) as usize; // borders + highlight symbol
-    let name_width = (inner_width * NAME_WIDTH_PCT / 100).max(NAME_MIN).min(NAME_MAX);
+    let name_width = (inner_width * NAME_WIDTH_PCT / 100).clamp(NAME_MIN, NAME_MAX);
     let path_width = inner_width.saturating_sub(name_width + KIND_COL_WIDTH + ICON_COL_WIDTH + 2);
 
     let items: Vec<ListItem> = state
@@ -84,8 +84,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     // Scrollbar (only if results exceed visible area)
     let visible_rows = area.height.saturating_sub(2) as usize; // minus borders
     if state.results.len() > visible_rows {
-        let mut scrollbar_state = ScrollbarState::new(state.results.len())
-            .position(state.selected_index);
+        let mut scrollbar_state =
+            ScrollbarState::new(state.results.len()).position(state.selected_index);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(theme.scrollbar_style())
@@ -122,9 +122,7 @@ fn build_title<'a>(state: &AppState, theme: &'a Theme) -> Line<'a> {
             Span::raw(" "),
         ])
     } else {
-        Line::from(vec![
-            Span::styled(" Results ", theme.list_title_style()),
-        ])
+        Line::from(vec![Span::styled(" Results ", theme.list_title_style())])
     }
 }
 

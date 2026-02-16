@@ -41,7 +41,7 @@ pub fn render_modal(frame: &mut Frame, area: Rect, state: &SettingsState, theme:
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // tab bar
-            Constraint::Min(3),   // content
+            Constraint::Min(3),    // content
             Constraint::Length(2), // help + description
         ])
         .split(inner);
@@ -110,12 +110,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &SettingsState, theme: &
 }
 
 /// Render setting items (Priority, SearchTool, Display, Keybindings)
-fn render_items_content(
-    frame: &mut Frame,
-    area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-) {
+fn render_items_content(frame: &mut Frame, area: Rect, state: &SettingsState, theme: &Theme) {
     let setting_items = items::items_for_tab(&state.active_tab);
     let mut lines = Vec::new();
     lines.push(Line::raw("")); // top padding
@@ -227,10 +222,7 @@ fn render_list_content(
                 Style::default().fg(theme.subtext)
             };
 
-            lines.push(Line::styled(
-                format!("{}{}", indicator, item_text),
-                style,
-            ));
+            lines.push(Line::styled(format!("{}{}", indicator, item_text), style));
         }
     }
 
@@ -279,24 +271,64 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &SettingsState, theme: 
     // Key hints
     let hints = if state.editing {
         vec![
-            Span::styled("  Enter", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  Enter",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" confirm  ", Style::default().fg(theme.overlay)),
-            Span::styled("Esc", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" cancel", Style::default().fg(theme.overlay)),
         ]
     } else {
         vec![
-            Span::styled("  \u{2190}\u{2192}", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  \u{2190}\u{2192}",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" tab  ", Style::default().fg(theme.overlay)),
-            Span::styled("\u{2191}\u{2193}", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "\u{2191}\u{2193}",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" select  ", Style::default().fg(theme.overlay)),
-            Span::styled("+/-", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "+/-",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" adjust  ", Style::default().fg(theme.overlay)),
-            Span::styled("S", Style::default().fg(theme.green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "S",
+                Style::default()
+                    .fg(theme.green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" save  ", Style::default().fg(theme.overlay)),
-            Span::styled("R", Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "R",
+                Style::default()
+                    .fg(theme.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" reset  ", Style::default().fg(theme.overlay)),
-            Span::styled("Esc", Style::default().fg(theme.accent_dim).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.accent_dim)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" close", Style::default().fg(theme.overlay)),
         ]
     };

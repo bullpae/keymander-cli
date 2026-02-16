@@ -26,7 +26,8 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **File & folder indexing**: Indexes both files and directories with configurable scan scope
 - **Folder drill-down** (TUI): Navigate into folders with Tab/→, go back with ←/Esc
 - **Web services**: `@g rust tutorial`, `@gh keymander`, `@yt lofi music`
-- **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`
+- **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`, `@grok ask`
+- **Multi LLM compare**: `@llm same prompt` opens selected LLMs at once for side-by-side comparison
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
 - **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
 - **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
@@ -177,6 +178,7 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 |--------|------|---------|-------------|
 | `@prefix` | Web search | `@g rust tutorial` | Search via web service |
 | `@ai` | AI search | `@ai why is the sky blue` | Ask Perplexity AI |
+| `@llm` / `@multi` / `@cmp` | Multi LLM compare | `@llm explain Rust lifetimes` | Open selected LLMs with same prompt |
 | `:calc` | Calculator | `:calc (2+3)*4` | Evaluate math expression |
 | `:emoji` / `:e` | Emoji | `:e fire`, `:e 하트` | Search & copy emoji |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
@@ -206,6 +208,20 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 | `@gpt` / `@chatgpt` | ChatGPT |
 | `@claude` | Claude AI |
 | `@gemini` | Google Gemini |
+| `@grok` | xAI Grok |
+
+### Multi LLM Prompting
+
+`@llm` (or `@multi`, `@cmp`) sends one prompt to multiple LLM web UIs by opening each selected provider URL in parallel browser tabs.
+
+Recommended `@` commands:
+
+- `@llm summarize this article` — compare multiple LLM answers quickly
+- `@gpt write unit tests for this Rust function`
+- `@claude refactor this module for readability`
+- `@gemini explain this error stack trace`
+- `@grok suggest edge cases for this feature`
+- `@ai find latest docs and sources for this topic` (Perplexity)
 
 ## Keybindings
 
@@ -306,6 +322,7 @@ quit_on_launch = true
 index_directories = true       # include folders in search index
 scan_drives = true             # auto-discover drive roots (C:\, D:\, etc.)
 drive_scan_depth = 3           # shallow depth for drive root scanning
+multi_llm_providers = ["chatgpt", "gemini", "claude", "grok", "perplexity"]  # providers used by @llm
 
 # Search priority weights (0-100, higher = ranked higher)
 [launcher.kind_weights]

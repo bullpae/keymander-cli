@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Top-level configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub general: GeneralConfig,
@@ -17,17 +17,6 @@ pub struct Config {
     /// Config file path (excluded from serialization)
     #[serde(skip)]
     pub config_path: Option<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            launcher: LauncherConfig::default(),
-            keybindings: KeybindingsConfig::default(),
-            config_path: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -93,6 +82,10 @@ pub struct LauncherConfig {
     /// Custom web services
     #[serde(default)]
     pub web_services: Vec<CustomWebService>,
+    /// LLM IDs to open for `@llm` multi-prompt compare.
+    /// Supported: chatgpt, gemini, claude, grok, perplexity
+    #[serde(default = "default_multi_llm_providers")]
+    pub multi_llm_providers: Vec<String>,
 }
 
 impl Default for LauncherConfig {
@@ -159,8 +152,19 @@ impl Default for LauncherConfig {
             drive_scan_depth: 3,
             kind_weights: KindWeights::default(),
             web_services: vec![],
+            multi_llm_providers: default_multi_llm_providers(),
         }
     }
+}
+
+fn default_multi_llm_providers() -> Vec<String> {
+    vec![
+        "chatgpt".to_string(),
+        "gemini".to_string(),
+        "claude".to_string(),
+        "grok".to_string(),
+        "perplexity".to_string(),
+    ]
 }
 
 /// Platform-specific default search paths (user directories).
@@ -203,11 +207,7 @@ fn default_search_paths() -> Vec<PathBuf> {
                 }
             }
         }
-        for env_key in &[
-            "XDG_DESKTOP_DIR",
-            "XDG_DOCUMENTS_DIR",
-            "XDG_DOWNLOAD_DIR",
-        ] {
+        for env_key in &["XDG_DESKTOP_DIR", "XDG_DOCUMENTS_DIR", "XDG_DOWNLOAD_DIR"] {
             if let Ok(val) = std::env::var(env_key) {
                 let dir = PathBuf::from(val);
                 if dir.is_dir() && !dirs.contains(&dir) {
@@ -258,8 +258,8 @@ impl KindWeights {
             ItemKind::SystemCommand => self.system_cmd,
             ItemKind::WebSearch => self.web_search,
             ItemKind::Calculator => 0, // handled separately
-            ItemKind::Emoji => 0,     // handled separately
-            ItemKind::Shell => 0,     // handled separately
+            ItemKind::Emoji => 0,      // handled separately
+            ItemKind::Shell => 0,      // handled separately
         }
     }
 }
@@ -316,20 +316,15 @@ impl Config {
 
     /// Save config to its TOML file
     pub fn save(&self) -> Result<(), ConfigError> {
-        let path = self
-            .config_path
-            .as_ref()
-            .ok_or(ConfigError::NoPath)?;
+        let path = self.config_path.as_ref().ok_or(ConfigError::NoPath)?;
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ConfigError::Io(path.clone(), e))?;
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io(path.clone(), e))?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        std::fs::write(path, content)
-            .map_err(|e| ConfigError::Io(path.clone(), e))?;
+        let content =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
+        std::fs::write(path, content).map_err(|e| ConfigError::Io(path.clone(), e))?;
         Ok(())
     }
 
@@ -337,44 +332,58 @@ impl Config {
     pub fn get_value(&self, key: &str) -> Option<String> {
         // Macro to reduce duplication between get/set match arms
         macro_rules! get {
-            ($field:expr) => { Some($field.to_string()) };
-            (str $field:expr) => { Some($field.clone()) };
-            (opt $field:expr) => { Some($field.clone().unwrap_or_default()) };
+            ($field:expr) => {
+                Some($field.to_string())
+            };
+            (str $field:expr) => {
+                Some($field.clone())
+            };
+            (opt $field:expr) => {
+                Some($field.clone().unwrap_or_default())
+            };
         }
         match key {
             // general
-            "general.render_fps"            => get!(self.general.render_fps),
-            "general.show_preview"          => get!(self.general.show_preview),
+            "general.render_fps" => get!(self.general.render_fps),
+            "general.show_preview" => get!(self.general.show_preview),
             "general.preview_width_percent" => get!(self.general.preview_width_percent),
-            "general.theme"                 => get!(str self.general.theme),
-            "general.editor"                => get!(opt self.general.editor),
-            "general.emoji_icons"           => get!(self.general.emoji_icons),
-            "general.reset_ime_on_launch"   => get!(self.general.reset_ime_on_launch),
+            "general.theme" => get!(str self.general.theme),
+            "general.editor" => get!(opt self.general.editor),
+            "general.emoji_icons" => get!(self.general.emoji_icons),
+            "general.reset_ime_on_launch" => get!(self.general.reset_ime_on_launch),
             // launcher
             "launcher.file_search_provider" => get!(str self.launcher.file_search_provider),
-            "launcher.max_results"          => get!(self.launcher.max_results),
-            "launcher.search_depth"         => get!(self.launcher.search_depth),
-            "launcher.quit_on_launch"       => get!(self.launcher.quit_on_launch),
-            "launcher.index_directories"    => get!(self.launcher.index_directories),
-            "launcher.scan_drives"          => get!(self.launcher.scan_drives),
-            "launcher.drive_scan_depth"     => get!(self.launcher.drive_scan_depth),
+            "launcher.max_results" => get!(self.launcher.max_results),
+            "launcher.search_depth" => get!(self.launcher.search_depth),
+            "launcher.quit_on_launch" => get!(self.launcher.quit_on_launch),
+            "launcher.index_directories" => get!(self.launcher.index_directories),
+            "launcher.scan_drives" => get!(self.launcher.scan_drives),
+            "launcher.drive_scan_depth" => get!(self.launcher.drive_scan_depth),
             // kind_weights
-            "launcher.kind_weights.directory"   => get!(self.launcher.kind_weights.directory),
-            "launcher.kind_weights.app"         => get!(self.launcher.kind_weights.app),
-            "launcher.kind_weights.file"        => get!(self.launcher.kind_weights.file),
-            "launcher.kind_weights.executable"  => get!(self.launcher.kind_weights.executable),
-            "launcher.kind_weights.system_cmd"  => get!(self.launcher.kind_weights.system_cmd),
-            "launcher.kind_weights.web_search"  => get!(self.launcher.kind_weights.web_search),
+            "launcher.kind_weights.directory" => get!(self.launcher.kind_weights.directory),
+            "launcher.kind_weights.app" => get!(self.launcher.kind_weights.app),
+            "launcher.kind_weights.file" => get!(self.launcher.kind_weights.file),
+            "launcher.kind_weights.executable" => get!(self.launcher.kind_weights.executable),
+            "launcher.kind_weights.system_cmd" => get!(self.launcher.kind_weights.system_cmd),
+            "launcher.kind_weights.web_search" => get!(self.launcher.kind_weights.web_search),
+            "launcher.multi_llm_providers" => Some(self.launcher.multi_llm_providers.join(",")),
             // keybindings
-            "keybindings.global_hotkey"    => get!(str self.keybindings.global_hotkey),
-            "keybindings.quit"             => get!(str self.keybindings.quit),
-            "keybindings.next"             => get!(str self.keybindings.next),
-            "keybindings.prev"             => get!(str self.keybindings.prev),
-            "keybindings.select"           => get!(str self.keybindings.select),
-            "keybindings.toggle_preview"   => get!(str self.keybindings.toggle_preview),
+            "keybindings.global_hotkey" => get!(str self.keybindings.global_hotkey),
+            "keybindings.quit" => get!(str self.keybindings.quit),
+            "keybindings.next" => get!(str self.keybindings.next),
+            "keybindings.prev" => get!(str self.keybindings.prev),
+            "keybindings.select" => get!(str self.keybindings.select),
+            "keybindings.toggle_preview" => get!(str self.keybindings.toggle_preview),
             // virtual keys (read-only, computed at runtime)
-            "_portable_mode" => Some(if crate::portable::is_portable() { "Portable" } else { "System" }.into()),
-            "_data_path"     => Some(Self::default_data_dir().to_string_lossy().to_string()),
+            "_portable_mode" => Some(
+                if crate::portable::is_portable() {
+                    "Portable"
+                } else {
+                    "System"
+                }
+                .into(),
+            ),
+            "_data_path" => Some(Self::default_data_dir().to_string_lossy().to_string()),
             _ => None,
         }
     }
@@ -388,35 +397,89 @@ impl Config {
 
         match key {
             // general
-            "general.render_fps"            => self.general.render_fps = parse_or(value, self.general.render_fps),
-            "general.show_preview"          => self.general.show_preview = parse_or(value, self.general.show_preview),
-            "general.preview_width_percent" => self.general.preview_width_percent = parse_or(value, self.general.preview_width_percent),
-            "general.theme"                 => self.general.theme = value.to_string(),
-            "general.editor"                => self.general.editor = if value.is_empty() { None } else { Some(value.to_string()) },
-            "general.emoji_icons"           => self.general.emoji_icons = parse_or(value, self.general.emoji_icons),
-            "general.reset_ime_on_launch"   => self.general.reset_ime_on_launch = parse_or(value, self.general.reset_ime_on_launch),
+            "general.render_fps" => {
+                self.general.render_fps = parse_or(value, self.general.render_fps)
+            }
+            "general.show_preview" => {
+                self.general.show_preview = parse_or(value, self.general.show_preview)
+            }
+            "general.preview_width_percent" => {
+                self.general.preview_width_percent =
+                    parse_or(value, self.general.preview_width_percent)
+            }
+            "general.theme" => self.general.theme = value.to_string(),
+            "general.editor" => {
+                self.general.editor = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            }
+            "general.emoji_icons" => {
+                self.general.emoji_icons = parse_or(value, self.general.emoji_icons)
+            }
+            "general.reset_ime_on_launch" => {
+                self.general.reset_ime_on_launch = parse_or(value, self.general.reset_ime_on_launch)
+            }
             // launcher
-            "launcher.file_search_provider" => self.launcher.file_search_provider = value.to_string(),
-            "launcher.max_results"          => self.launcher.max_results = parse_or(value, self.launcher.max_results),
-            "launcher.search_depth"         => self.launcher.search_depth = parse_or(value, self.launcher.search_depth),
-            "launcher.quit_on_launch"       => self.launcher.quit_on_launch = parse_or(value, self.launcher.quit_on_launch),
-            "launcher.index_directories"    => self.launcher.index_directories = parse_or(value, self.launcher.index_directories),
-            "launcher.scan_drives"          => self.launcher.scan_drives = parse_or(value, self.launcher.scan_drives),
-            "launcher.drive_scan_depth"     => self.launcher.drive_scan_depth = parse_or(value, self.launcher.drive_scan_depth),
+            "launcher.file_search_provider" => {
+                self.launcher.file_search_provider = value.to_string()
+            }
+            "launcher.max_results" => {
+                self.launcher.max_results = parse_or(value, self.launcher.max_results)
+            }
+            "launcher.search_depth" => {
+                self.launcher.search_depth = parse_or(value, self.launcher.search_depth)
+            }
+            "launcher.quit_on_launch" => {
+                self.launcher.quit_on_launch = parse_or(value, self.launcher.quit_on_launch)
+            }
+            "launcher.index_directories" => {
+                self.launcher.index_directories = parse_or(value, self.launcher.index_directories)
+            }
+            "launcher.scan_drives" => {
+                self.launcher.scan_drives = parse_or(value, self.launcher.scan_drives)
+            }
+            "launcher.drive_scan_depth" => {
+                self.launcher.drive_scan_depth = parse_or(value, self.launcher.drive_scan_depth)
+            }
             // kind_weights
-            "launcher.kind_weights.directory"   => self.launcher.kind_weights.directory = parse_or(value, self.launcher.kind_weights.directory),
-            "launcher.kind_weights.app"         => self.launcher.kind_weights.app = parse_or(value, self.launcher.kind_weights.app),
-            "launcher.kind_weights.file"        => self.launcher.kind_weights.file = parse_or(value, self.launcher.kind_weights.file),
-            "launcher.kind_weights.executable"  => self.launcher.kind_weights.executable = parse_or(value, self.launcher.kind_weights.executable),
-            "launcher.kind_weights.system_cmd"  => self.launcher.kind_weights.system_cmd = parse_or(value, self.launcher.kind_weights.system_cmd),
-            "launcher.kind_weights.web_search"  => self.launcher.kind_weights.web_search = parse_or(value, self.launcher.kind_weights.web_search),
+            "launcher.kind_weights.directory" => {
+                self.launcher.kind_weights.directory =
+                    parse_or(value, self.launcher.kind_weights.directory)
+            }
+            "launcher.kind_weights.app" => {
+                self.launcher.kind_weights.app = parse_or(value, self.launcher.kind_weights.app)
+            }
+            "launcher.kind_weights.file" => {
+                self.launcher.kind_weights.file = parse_or(value, self.launcher.kind_weights.file)
+            }
+            "launcher.kind_weights.executable" => {
+                self.launcher.kind_weights.executable =
+                    parse_or(value, self.launcher.kind_weights.executable)
+            }
+            "launcher.kind_weights.system_cmd" => {
+                self.launcher.kind_weights.system_cmd =
+                    parse_or(value, self.launcher.kind_weights.system_cmd)
+            }
+            "launcher.kind_weights.web_search" => {
+                self.launcher.kind_weights.web_search =
+                    parse_or(value, self.launcher.kind_weights.web_search)
+            }
+            "launcher.multi_llm_providers" => {
+                self.launcher.multi_llm_providers = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
             // keybindings
-            "keybindings.global_hotkey"    => self.keybindings.global_hotkey = value.to_string(),
-            "keybindings.quit"             => self.keybindings.quit = value.to_string(),
-            "keybindings.next"             => self.keybindings.next = value.to_string(),
-            "keybindings.prev"             => self.keybindings.prev = value.to_string(),
-            "keybindings.select"           => self.keybindings.select = value.to_string(),
-            "keybindings.toggle_preview"   => self.keybindings.toggle_preview = value.to_string(),
+            "keybindings.global_hotkey" => self.keybindings.global_hotkey = value.to_string(),
+            "keybindings.quit" => self.keybindings.quit = value.to_string(),
+            "keybindings.next" => self.keybindings.next = value.to_string(),
+            "keybindings.prev" => self.keybindings.prev = value.to_string(),
+            "keybindings.select" => self.keybindings.select = value.to_string(),
+            "keybindings.toggle_preview" => self.keybindings.toggle_preview = value.to_string(),
             _ => return Err(ConfigError::UnknownKey(key.to_string())),
         }
         Ok(())
@@ -495,6 +558,10 @@ mod tests {
         assert!(config.launcher.index_directories);
         assert!(config.launcher.scan_drives);
         assert_eq!(config.launcher.drive_scan_depth, 3);
+        assert_eq!(
+            config.launcher.multi_llm_providers,
+            vec!["chatgpt", "gemini", "claude", "grok", "perplexity"]
+        );
     }
 
     #[test]
@@ -509,6 +576,14 @@ mod tests {
         assert_eq!(
             config.get_value("launcher.kind_weights.directory"),
             Some("90".to_string())
+        );
+
+        config
+            .set_value("launcher.multi_llm_providers", "chatgpt,claude,perplexity")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.multi_llm_providers"),
+            Some("chatgpt,claude,perplexity".to_string())
         );
     }
 

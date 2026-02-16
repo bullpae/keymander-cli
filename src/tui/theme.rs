@@ -11,32 +11,32 @@ use ratatui::style::{Color, Modifier, Style};
 // Inspired by modern dark themes with boosted vibrancy (Dracula, Synthwave, Raycast)
 
 /// Accent — vivid cyan for primary interactive elements
-const ACCENT: Color = Color::Rgb(86, 210, 255);         // #56D2FF — electric cyan
+const ACCENT: Color = Color::Rgb(86, 210, 255); // #56D2FF — electric cyan
 /// Accent dim — lighter blue for secondary accents
-const ACCENT_DIM: Color = Color::Rgb(120, 190, 255);    // #78BEFF — bright lavender
+const ACCENT_DIM: Color = Color::Rgb(120, 190, 255); // #78BEFF — bright lavender
 /// Green — success, directories, active states
-const GREEN: Color = Color::Rgb(80, 250, 123);          // #50FA7B — electric green
+const GREEN: Color = Color::Rgb(80, 250, 123); // #50FA7B — electric green
 /// Yellow — composing state, warnings, kind tags
-const YELLOW: Color = Color::Rgb(255, 230, 120);        // #FFE678 — bright gold
+const YELLOW: Color = Color::Rgb(255, 230, 120); // #FFE678 — bright gold
 /// Peach — warm accent for brand separator, special items
-const PEACH: Color = Color::Rgb(255, 165, 96);          // #FFA560 — vivid orange
+const PEACH: Color = Color::Rgb(255, 165, 96); // #FFA560 — vivid orange
 /// Red — errors, system commands
-const RED: Color = Color::Rgb(255, 110, 140);           // #FF6E8C — vivid pink-red
+const RED: Color = Color::Rgb(255, 110, 140); // #FF6E8C — vivid pink-red
 /// Teal — web/URL items
-const TEAL: Color = Color::Rgb(80, 240, 210);           // #50F0D2 — bright teal
+const TEAL: Color = Color::Rgb(80, 240, 210); // #50F0D2 — bright teal
 
 /// Text — primary readable text
-const TEXT: Color = Color::Rgb(220, 228, 255);           // #DCE4FF — brighter white-blue
+const TEXT: Color = Color::Rgb(220, 228, 255); // #DCE4FF — brighter white-blue
 /// Subtext — secondary, less important text
-const SUBTEXT: Color = Color::Rgb(180, 190, 220);       // #B4BEDC — lifted subtext
+const SUBTEXT: Color = Color::Rgb(180, 190, 220); // #B4BEDC — lifted subtext
 /// Overlay — muted text, hints, placeholders
-const OVERLAY: Color = Color::Rgb(130, 140, 170);       // #828CAA — more visible hints
+const OVERLAY: Color = Color::Rgb(130, 140, 170); // #828CAA — more visible hints
 /// Surface 2 — lighter surface for selected items
-const SURFACE2: Color = Color::Rgb(68, 72, 98);         // #444862 — selection highlight
+const SURFACE2: Color = Color::Rgb(68, 72, 98); // #444862 — selection highlight
 /// Surface 1 — medium surface for borders
-const SURFACE1: Color = Color::Rgb(55, 58, 80);         // #373A50 — visible borders
+const SURFACE1: Color = Color::Rgb(55, 58, 80); // #373A50 — visible borders
 /// Mantle — slightly darker than base for header/status
-const MANTLE: Color = Color::Rgb(20, 20, 32);           // #141420 — deep dark
+const MANTLE: Color = Color::Rgb(20, 20, 32); // #141420 — deep dark
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,6 @@ impl Default for Theme {
 }
 
 impl Theme {
-
     // ── Brand ─────────────────────────────────────────────────────────────
 
     /// "key»mander" brand spans (reusable in header & settings modal).

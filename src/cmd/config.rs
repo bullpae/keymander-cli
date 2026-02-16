@@ -13,14 +13,12 @@ pub fn run(action: Option<Action>) -> Result<()> {
     let mut config = super::load_config()?;
 
     match action {
-        Some(Action::Get(key)) => {
-            match config.get_value(&key) {
-                Some(value) => println!("{}", value),
-                None => {
-                    return Err(color_eyre::eyre::eyre!("Unknown config key: {}", key));
-                }
+        Some(Action::Get(key)) => match config.get_value(&key) {
+            Some(value) => println!("{}", value),
+            None => {
+                return Err(color_eyre::eyre::eyre!("Unknown config key: {}", key));
             }
-        }
+        },
         Some(Action::Set(key, value)) => {
             config
                 .set_value(&key, &value)

@@ -16,8 +16,10 @@ pub fn run(action: Action) -> Result<()> {
         Action::Start => {
             println!("Starting kmd daemon...");
             println!();
-            println!("  Hotkey: {} (configurable via `kmd config set keybindings.global_hotkey`)",
-                kmd_core::Config::default().keybindings.global_hotkey);
+            println!(
+                "  Hotkey: {} (configurable via `kmd config set keybindings.global_hotkey`)",
+                kmd_core::Config::default().keybindings.global_hotkey
+            );
             println!();
             println!("Note: Global hotkey daemon is planned for a future release.");
             println!("For now, you can bind `kmd` to a keyboard shortcut in your OS or terminal.");

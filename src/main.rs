@@ -167,14 +167,13 @@ fn main() -> color_eyre::Result<()> {
 
     // ── 2. Single-instance check ─────────────────────────────────────────
     let data_dir = kmd_core::Config::default_data_dir();
-    let instance_guard =
-        match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
-            kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
-            kmd_core::single_instance::InstanceAction::SignalledExisting => {
-                // Existing instance was told to quit — exit with hidden console.
-                return Ok(());
-            }
-        };
+    let instance_guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
+        kmd_core::single_instance::InstanceAction::Acquired(guard) => Some(guard),
+        kmd_core::single_instance::InstanceAction::SignalledExisting => {
+            // Existing instance was told to quit — exit with hidden console.
+            return Ok(());
+        }
+    };
 
     // ── 3. Set up UTF-8 / VT processing ─────────────────────────────────
     // Window centering is handled by Windows Terminal's `centerOnLaunch`
@@ -250,7 +249,12 @@ fn main() -> color_eyre::Result<()> {
                 PortableAction::Disable => cmd::portable::Action::Disable,
             }))?;
         }
-        Some(Commands::Emoji { query, list, json, copy }) => {
+        Some(Commands::Emoji {
+            query,
+            list,
+            json,
+            copy,
+        }) => {
             cmd::emoji::run(query.as_deref().unwrap_or(""), list, json, copy)?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
@@ -320,7 +324,11 @@ mod win_console {
     pub fn capture_terminal_window() {
         unsafe {
             let fg = GetForegroundWindow();
-            let hwnd = if !fg.is_null() { fg } else { GetConsoleWindow() };
+            let hwnd = if !fg.is_null() {
+                fg
+            } else {
+                GetConsoleWindow()
+            };
             if !hwnd.is_null() {
                 TERMINAL_HWND.store(hwnd as isize, Ordering::SeqCst);
             }
@@ -348,7 +356,9 @@ mod win_console {
     pub fn hide() {
         let hwnd = terminal_hwnd();
         if !hwnd.is_null() {
-            unsafe { ShowWindow(hwnd, SW_HIDE); }
+            unsafe {
+                ShowWindow(hwnd, SW_HIDE);
+            }
         }
     }
 
@@ -356,7 +366,9 @@ mod win_console {
     pub fn show() {
         let hwnd = terminal_hwnd();
         if !hwnd.is_null() {
-            unsafe { ShowWindow(hwnd, SW_SHOW); }
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+            }
         }
     }
 

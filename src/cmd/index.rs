@@ -33,7 +33,10 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
             }
         }
         if config.launcher.scan_drives {
-            println!("Auto-scan drives: enabled (depth {})", config.launcher.drive_scan_depth);
+            println!(
+                "Auto-scan drives: enabled (depth {})",
+                config.launcher.drive_scan_depth
+            );
         }
 
         println!("Building index...");
@@ -64,10 +67,26 @@ fn print_stats(index: &kmd_core::Index) {
     use std::collections::HashMap;
 
     let total = index.len();
-    let apps = index.items.iter().filter(|i| i.source == Source::Apps).count();
-    let path_exes = index.items.iter().filter(|i| i.source == Source::Path).count();
-    let files = index.items.iter().filter(|i| i.source == Source::FileProvider).count();
-    let sys_cmds = index.items.iter().filter(|i| i.source == Source::SystemCommand).count();
+    let apps = index
+        .items
+        .iter()
+        .filter(|i| i.source == Source::Apps)
+        .count();
+    let path_exes = index
+        .items
+        .iter()
+        .filter(|i| i.source == Source::Path)
+        .count();
+    let files = index
+        .items
+        .iter()
+        .filter(|i| i.source == Source::FileProvider)
+        .count();
+    let sys_cmds = index
+        .items
+        .iter()
+        .filter(|i| i.source == Source::SystemCommand)
+        .count();
 
     println!("\nIndex Statistics:");
     println!("  Total items:      {}", total);
@@ -79,7 +98,11 @@ fn print_stats(index: &kmd_core::Index) {
     // Show top file extensions
     if files > 0 {
         let mut ext_counts: HashMap<String, usize> = HashMap::new();
-        for item in index.items.iter().filter(|i| i.source == Source::FileProvider) {
+        for item in index
+            .items
+            .iter()
+            .filter(|i| i.source == Source::FileProvider)
+        {
             let ext = std::path::Path::new(&item.path)
                 .extension()
                 .and_then(|e| e.to_str())

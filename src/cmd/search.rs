@@ -5,6 +5,31 @@ use color_eyre::Result;
 pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
 
+    // Check for multi-LLM query (@llm / @multi / @cmp)
+    if let Some((_services, llm_query)) =
+        kmd_core::web::parse_multi_llm_query(query, &config.launcher.multi_llm_providers)
+    {
+        let items = kmd_core::web::multi_llm_result_items(
+            &llm_query,
+            &config.launcher.multi_llm_providers,
+            config.general.emoji_icons,
+        );
+        if json {
+            print_items_json(&items)?;
+        } else if llm_query.is_empty() {
+            println!("Configured multi-LLM providers:");
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+            println!("\nUsage: @llm <prompt>");
+        } else {
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+        }
+        return Ok(());
+    }
+
     // Check for web query (@prefix)
     if let Some((service, web_query)) = kmd_core::web::parse_web_query(query) {
         if web_query.is_empty() {
@@ -18,7 +43,8 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
                 }
             }
         } else {
-            let item = kmd_core::web::search_result_item(service, &web_query, config.general.emoji_icons);
+            let item =
+                kmd_core::web::search_result_item(service, &web_query, config.general.emoji_icons);
             let url = kmd_core::web::build_search_url(service, &web_query);
             if json {
                 print_items_json(&[item])?;
@@ -43,7 +69,12 @@ pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
         let json_str = serde_json::to_string_pretty(&items)?;
         println!("{}", json_str);
     } else {
-        println!("Search: \"{}\" [{}] ({} results)\n", query, mode.label(), results.len());
+        println!(
+            "Search: \"{}\" [{}] ({} results)\n",
+            query,
+            mode.label(),
+            results.len()
+        );
         for (i, result) in results.iter().enumerate() {
             println!(
                 "  {:>2}. {} {:<30} [{}]  {}",

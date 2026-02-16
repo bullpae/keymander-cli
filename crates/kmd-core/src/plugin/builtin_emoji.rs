@@ -52,10 +52,7 @@ fn emoji_db() -> &'static [EmojiEntry] {
                 let name = parts.next()?.trim();
                 let category = parts.next().unwrap_or("").trim();
 
-                let (ko_name, ko_keywords) = ko_map
-                    .get(emoji)
-                    .copied()
-                    .unwrap_or(("", ""));
+                let (ko_name, ko_keywords) = ko_map.get(emoji).copied().unwrap_or(("", ""));
 
                 Some(EmojiEntry {
                     emoji,
@@ -84,11 +81,7 @@ impl EmojiExtension {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
             // Return popular emoji when no query
-            return emoji_db()
-                .iter()
-                .take(50)
-                .map(emoji_to_item)
-                .collect();
+            return emoji_db().iter().take(50).map(emoji_to_item).collect();
         }
 
         let tokens: Vec<&str> = query.split_whitespace().collect();
@@ -271,9 +264,9 @@ mod tests {
             "Expected results for Korean '하트' search"
         );
         // Should contain heart-related emoji
-        let has_heart = results.iter().any(|r| {
-            r.name.contains("heart") || r.name.contains("하트")
-        });
+        let has_heart = results
+            .iter()
+            .any(|r| r.name.contains("heart") || r.name.contains("하트"));
         assert!(has_heart, "Expected heart emoji in results for '하트'");
     }
 

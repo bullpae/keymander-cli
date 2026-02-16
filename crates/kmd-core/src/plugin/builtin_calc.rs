@@ -3,17 +3,25 @@
 //! Activated with `:calc` prefix or when the query looks like a math expression.
 //! Supports basic arithmetic: +, -, *, /, %, parentheses.
 
-use crate::index::{IndexItem, ItemKind, Source};
 use super::{Extension, ExtensionAction};
+use crate::index::{IndexItem, ItemKind, Source};
 
 pub struct CalcExtension;
 
 /// Calculator icon (success / error)
 pub(crate) fn calc_icon(use_emoji: bool) -> String {
-    if use_emoji { "\u{1F5A9}".into() } else { "=#".into() }  // 🖩 / =#
+    if use_emoji {
+        "\u{1F5A9}".into()
+    } else {
+        "=#".into()
+    } // 🖩 / =#
 }
 pub(crate) fn calc_error_icon(use_emoji: bool) -> String {
-    if use_emoji { "\u{274C}".into() } else { "!!".into() }  // ❌ / !!
+    if use_emoji {
+        "\u{274C}".into()
+    } else {
+        "!!".into()
+    } // ❌ / !!
 }
 
 impl Extension for CalcExtension {

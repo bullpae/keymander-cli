@@ -57,12 +57,18 @@ pub fn run(query: &str, list: bool, json: bool, copy_nth: Option<usize>) -> Resu
 
     // Print results
     for (i, item) in results.iter().enumerate() {
-        let marker = if copy_index == Some(i + 1) { " ←" } else { "" };
+        let marker = if copy_index == Some(i + 1) {
+            " ←"
+        } else {
+            ""
+        };
         println!(
             "  {:>2}. {} {}{}",
             i + 1,
-            item.path,  // the emoji character
-            item.name.strip_prefix(&format!("{} ", item.path)).unwrap_or(&item.name),
+            item.path, // the emoji character
+            item.name
+                .strip_prefix(&format!("{} ", item.path))
+                .unwrap_or(&item.name),
             marker,
         );
     }

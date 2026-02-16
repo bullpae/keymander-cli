@@ -9,8 +9,8 @@
 pub fn force_square_corners(raw_id: u64) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DWM_WINDOW_CORNER_PREFERENCE,
     };
 
     unsafe {
@@ -48,9 +48,7 @@ pub fn force_square_corners(_raw_id: u64) {
 #[cfg(target_os = "windows")]
 pub fn force_english_ime(raw_id: u64) {
     use windows::Win32::Foundation::{BOOL, HWND};
-    use windows::Win32::UI::Input::Ime::{
-        ImmGetContext, ImmReleaseContext, ImmSetOpenStatus,
-    };
+    use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmReleaseContext, ImmSetOpenStatus};
 
     unsafe {
         let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);

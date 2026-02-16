@@ -9,10 +9,7 @@ const HISTORY_BOOST_LIMIT: usize = 500;
 const FREQUENCY_BOOST_SCORE: u32 = 100;
 
 /// Boost search results based on usage history
-pub fn boost_results(
-    results: &mut [SearchResult],
-    db: &Database,
-) {
+pub fn boost_results(results: &mut [SearchResult], db: &Database) {
     let history = db.query_history(HISTORY_BOOST_LIMIT);
 
     // Build a frequency map: value -> frequency
@@ -69,10 +66,7 @@ mod tests {
             record_launch(&db, "file", "b", None);
         }
 
-        let mut results = vec![
-            make_result("a", 500),
-            make_result("b", 100),
-        ];
+        let mut results = vec![make_result("a", 500), make_result("b", 100)];
 
         boost_results(&mut results, &db);
 
@@ -83,10 +77,7 @@ mod tests {
             record_launch(&db, "file", "b", None);
         }
         // Now frequency=8, score = 100 + 800 = 900 > 500
-        let mut results = vec![
-            make_result("a", 500),
-            make_result("b", 100),
-        ];
+        let mut results = vec![make_result("a", 500), make_result("b", 100)];
         boost_results(&mut results, &db);
 
         assert_eq!(results[0].item.path, "b");
@@ -98,10 +89,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
 
-        let mut results = vec![
-            make_result("a", 500),
-            make_result("b", 300),
-        ];
+        let mut results = vec![make_result("a", 500), make_result("b", 300)];
 
         boost_results(&mut results, &db);
 

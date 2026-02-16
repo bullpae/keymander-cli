@@ -136,7 +136,11 @@ fn is_process_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 unsafe extern "system" {
-    fn OpenProcess(desired_access: u32, inherit_handles: i32, process_id: u32) -> *mut std::ffi::c_void;
+    fn OpenProcess(
+        desired_access: u32,
+        inherit_handles: i32,
+        process_id: u32,
+    ) -> *mut std::ffi::c_void;
     fn GetExitCodeProcess(process: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
     fn CloseHandle(object: *mut std::ffi::c_void) -> i32;
 }

@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::keyboard;
+use iced::widget::operation::scroll_to;
+use iced::widget::scrollable as scrollable_mod;
 use iced::widget::{
     column, container, mouse_area, row, scrollable, text, text_input, Column, Space,
 };
-use iced::widget::operation::scroll_to;
-use iced::widget::scrollable as scrollable_mod;
 use iced::{
     window, Background, Border, Color, Element, Fill, Padding, Point, Shadow, Size, Subscription,
     Task, Vector,
@@ -46,7 +46,7 @@ const QUIT_POLL_MS: u64 = 300;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
-type EngineSlot = Arc<Mutex<Option<(kmd_core::SearchEngine, bool)>>>;
+type EngineSlot = Arc<Mutex<Option<(kmd_core::SearchEngine, bool, Vec<String>)>>>;
 
 // ─── App State ────────────────────────────────────────────────────────────────
 
@@ -61,6 +61,7 @@ pub struct App {
     scrollable_id: iced::widget::Id,
     window_id: Option<window::Id>,
     use_emoji: bool,
+    selected_llm_providers: Vec<String>,
     loading: bool,
     engine_slot: EngineSlot,
     _guard: Guard,
@@ -104,6 +105,7 @@ impl App {
         let engine = kmd_core::SearchEngine::new();
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
+        let selected_llm_providers = config.launcher.multi_llm_providers.clone();
         let reset_ime = config.general.reset_ime_on_launch;
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
@@ -116,7 +118,8 @@ impl App {
             let _ = tokio::task::spawn_blocking(move || {
                 let eng = crate::engine::create_search_engine(&config);
                 let emoji = config.general.emoji_icons;
-                *slot_for_task.lock().expect("engine_slot poisoned") = Some((eng, emoji));
+                let llm = config.launcher.multi_llm_providers.clone();
+                *slot_for_task.lock().expect("engine_slot poisoned") = Some((eng, emoji, llm));
             })
             .await;
             Message::EngineReady
@@ -133,6 +136,7 @@ impl App {
             scrollable_id,
             window_id: None,
             use_emoji,
+            selected_llm_providers,
             loading: true,
             engine_slot,
             _guard: guard,
@@ -218,9 +222,10 @@ impl App {
                     .expect("engine_slot poisoned")
                     .take();
 
-                if let Some((engine, emoji)) = loaded {
+                if let Some((engine, emoji, llm)) = loaded {
                     self.engine = engine;
                     self.use_emoji = emoji;
+                    self.selected_llm_providers = llm;
                     self.loading = false;
                     tracing::info!("Search engine ready");
                     if !self.query.trim().is_empty() {
@@ -267,17 +272,16 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let keyboard_sub = iced::event::listen_with(|event, _status, _window| match event {
-            iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                key, modifiers, ..
-            }) => Some(Message::KeyEvent(key, modifiers)),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                Some(Message::KeyEvent(key, modifiers))
+            }
             _ => None,
         });
 
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
 
-        let window_sub = window::events()
-            .map(|(id, event)| Message::WindowEvent(id, event));
+        let window_sub = window::events().map(|(id, event)| Message::WindowEvent(id, event));
 
         Subscription::batch([keyboard_sub, quit_sub, window_sub])
     }
@@ -310,13 +314,13 @@ impl App {
             self.search_mode = kmd_core::SearchMode::Fuzzy;
         } else {
             match prefix_of(trimmed) {
-                Prefix::Web      => self.handle_web_query(trimmed),
-                Prefix::Calc     => self.handle_calc_query(trimmed),
-                Prefix::Emoji    => self.handle_emoji_query(trimmed),
+                Prefix::Web => self.handle_web_query(trimmed),
+                Prefix::Calc => self.handle_calc_query(trimmed),
+                Prefix::Emoji => self.handle_emoji_query(trimmed),
                 Prefix::Settings => self.handle_settings_query(trimmed),
-                Prefix::Help     => self.handle_help_query(),
-                Prefix::Shell    => self.handle_shell_query(trimmed),
-                Prefix::General  => self.handle_main_search(trimmed),
+                Prefix::Help => self.handle_help_query(),
+                Prefix::Shell => self.handle_shell_query(trimmed),
+                Prefix::General => self.handle_main_search(trimmed),
             }
         }
 
@@ -325,6 +329,19 @@ impl App {
 
     fn handle_web_query(&mut self, query: &str) {
         let emoji = self.use_emoji;
+        if let Some((_services, q)) =
+            web::parse_multi_llm_query(query, &self.selected_llm_providers)
+        {
+            self.results = items_to_results(web::multi_llm_result_items(
+                &q,
+                &self.selected_llm_providers,
+                emoji,
+            ));
+            self.search_mode = kmd_core::SearchMode::Contains;
+            self.selected = 0;
+            return;
+        }
+
         if let Some((service, q)) = web::parse_web_query(query) {
             if q.is_empty() {
                 self.results = items_to_results(web::list_services_as_items("", emoji));
@@ -488,22 +505,46 @@ impl App {
     fn handle_help_query(&mut self) {
         let emoji = self.use_emoji;
         let entries: &[(&str, &str, &str)] = &[
-            ("@  Web Search", "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
-             if emoji { "\u{1F310}" } else { "[WEB]" }),
-            (":calc  Calculator", "Type :calc expression  (e.g. :calc (2+3)*4)",
-             if emoji { "\u{1F522}" } else { "[CAL]" }),
-            (":emoji  Emoji Search", "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
-             if emoji { "\u{1F60A}" } else { "[EMO]" }),
-            (":set  Settings", "Type :set or :settings to manage config, themes, index",
-             if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" }),
-            ("!  Shell Command", "Type !command  (e.g. !ip, !hostname, !echo hello)",
-             if emoji { "\u{1F4BB}" } else { "[SHL]" }),
-            ("Fuzzy Search", "Just type to search files, apps, folders  (e.g. firefox)",
-             if emoji { "\u{1F50D}" } else { "[FZF]" }),
-            ("*.ext  Glob Pattern", "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
-             if emoji { "\u{1F4C4}" } else { "[GLB]" }),
-            ("/regex/  Regular Expression", "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
-             if emoji { "\u{1F9EA}" } else { "[RGX]" }),
+            (
+                "@  Web Search",
+                "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
+                if emoji { "\u{1F310}" } else { "[WEB]" },
+            ),
+            (
+                ":calc  Calculator",
+                "Type :calc expression  (e.g. :calc (2+3)*4)",
+                if emoji { "\u{1F522}" } else { "[CAL]" },
+            ),
+            (
+                ":emoji  Emoji Search",
+                "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
+                if emoji { "\u{1F60A}" } else { "[EMO]" },
+            ),
+            (
+                ":set  Settings",
+                "Type :set or :settings to manage config, themes, index",
+                if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" },
+            ),
+            (
+                "!  Shell Command",
+                "Type !command  (e.g. !ip, !hostname, !echo hello)",
+                if emoji { "\u{1F4BB}" } else { "[SHL]" },
+            ),
+            (
+                "Fuzzy Search",
+                "Just type to search files, apps, folders  (e.g. firefox)",
+                if emoji { "\u{1F50D}" } else { "[FZF]" },
+            ),
+            (
+                "*.ext  Glob Pattern",
+                "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
+                if emoji { "\u{1F4C4}" } else { "[GLB]" },
+            ),
+            (
+                "/regex/  Regular Expression",
+                "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
+                if emoji { "\u{1F9EA}" } else { "[RGX]" },
+            ),
         ];
 
         let items: Vec<IndexItem> = entries
@@ -597,7 +638,8 @@ impl App {
                         let config = crate::engine::load_config();
                         let eng = crate::engine::create_search_engine(&config);
                         let emoji = config.general.emoji_icons;
-                        *slot.lock().expect("engine_slot poisoned") = Some((eng, emoji));
+                        let llm = config.launcher.multi_llm_providers.clone();
+                        *slot.lock().expect("engine_slot poisoned") = Some((eng, emoji, llm));
                     })
                     .await;
                     Message::EngineReady
@@ -683,6 +725,15 @@ impl App {
             self.window_state.save();
         }
 
+        if result.item.kind == ItemKind::WebSearch {
+            if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
+                for url in urls {
+                    let _ = kmd_core::action::open_url(&url);
+                }
+                return iced::exit();
+            }
+        }
+
         let action_result = kmd_core::action::execute(&result);
         match action_result {
             kmd_core::action::ActionResult::Launched => {
@@ -736,7 +787,10 @@ impl App {
         let y_offset = top_row as f32 * ROW_HEIGHT;
         scroll_to(
             self.scrollable_id.clone(),
-            scrollable_mod::AbsoluteOffset { x: 0.0, y: y_offset },
+            scrollable_mod::AbsoluteOffset {
+                x: 0.0,
+                y: y_offset,
+            },
         )
         .into()
     }
@@ -812,15 +866,12 @@ impl App {
 
         if has_results {
             let border_color = t.border;
-            content = content.push(
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(move |_: &_| container::Style {
-                        background: Some(Background::Color(border_color)),
-                        ..Default::default()
-                    }),
-            );
+            content = content.push(container(text("")).width(Fill).height(1).style(
+                move |_: &_| container::Style {
+                    background: Some(Background::Color(border_color)),
+                    ..Default::default()
+                },
+            ));
             content = content.push(self.view_results_list());
             content = content.push(self.view_status_bar());
             content = content.push(self.view_accent_bar());
@@ -829,7 +880,10 @@ impl App {
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
-        let border_color = Color { a: 0.35, ..t.accent };
+        let border_color = Color {
+            a: 0.35,
+            ..t.accent
+        };
 
         let body = container(content)
             .width(Fill)
@@ -884,8 +938,7 @@ impl App {
         let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
 
         let brand = mouse_area(
-            container(text("\u{00BB}").size(24).color(t.peach))
-                .padding(Padding::from([0, 4])),
+            container(text("\u{00BB}").size(24).color(t.peach)).padding(Padding::from([0, 4])),
         )
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
@@ -910,10 +963,17 @@ impl App {
                 icon: overlay_color,
                 placeholder: overlay_color,
                 value: text_color,
-                selection: Color { a: 0.3, ..accent_color },
+                selection: Color {
+                    a: 0.3,
+                    ..accent_color
+                },
             });
 
-        let mode_text = if self.query.is_empty() { "" } else { self.search_mode.label() };
+        let mode_text = if self.query.is_empty() {
+            ""
+        } else {
+            self.search_mode.label()
+        };
         let badge = text(mode_text).size(11).color(t.overlay);
 
         let bar_content = row![brand, input, badge]
@@ -924,18 +984,18 @@ impl App {
         // Depth layering (raised card 3D effect)
         let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
         let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
-        let border_glow = Color { a: 0.30, ..accent_color };
+        let border_glow = Color {
+            a: 0.30,
+            ..accent_color
+        };
 
         // Full-width drag strip so users can move window naturally.
-        let top_drag_strip = mouse_area(
-            container(text(""))
-            .width(Fill)
-            .height(12)
-            .style(move |_: &_| container::Style {
+        let top_drag_strip = mouse_area(container(text("")).width(Fill).height(12).style(
+            move |_: &_| container::Style {
                 background: Some(Background::Color(highlight_color)),
                 ..Default::default()
-            }),
-        )
+            },
+        ))
         .on_press(Message::StartWindowDrag)
         .interaction(iced::mouse::Interaction::Grab);
 
@@ -1012,13 +1072,20 @@ impl App {
         let is_selected = index == self.selected;
         let item = &result.item;
 
-        let sel_color = if is_selected { t.accent } else { Color::TRANSPARENT };
+        let sel_color = if is_selected {
+            t.accent
+        } else {
+            Color::TRANSPARENT
+        };
         let left_bar = container(text(""))
             .width(3)
             .height(ROW_HEIGHT - 8.0)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(sel_color)),
-                border: Border { radius: 1.5.into(), ..Default::default() },
+                border: Border {
+                    radius: 1.5.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             });
 
@@ -1029,17 +1096,31 @@ impl App {
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
-        let badge_bg = Color { a: 0.12, ..kind_color };
-        let badge_border = Color { a: 0.25, ..kind_color };
+        let badge_bg = Color {
+            a: 0.12,
+            ..kind_color
+        };
+        let badge_border = Color {
+            a: 0.25,
+            ..kind_color
+        };
         let badge = container(text(kind_label).size(10).color(kind_color))
             .padding(Padding::from([2, 6]))
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(badge_bg)),
-                border: Border { radius: 4.0.into(), width: 1.0, color: badge_border },
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: badge_border,
+                },
                 ..Default::default()
             });
 
-        let bg = if is_selected { t.surface2 } else { Color::TRANSPARENT };
+        let bg = if is_selected {
+            t.surface2
+        } else {
+            Color::TRANSPARENT
+        };
 
         let row_content = row![left_bar, icon, info, Space::new().width(Fill), badge]
             .spacing(10)

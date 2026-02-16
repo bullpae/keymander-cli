@@ -191,10 +191,7 @@ pub fn handle_settings_key(
 }
 
 /// Handle key events in edit mode
-fn handle_edit_key(
-    state: &mut SettingsState,
-    key: crossterm::event::KeyEvent,
-) -> SettingsAction {
+fn handle_edit_key(state: &mut SettingsState, key: crossterm::event::KeyEvent) -> SettingsAction {
     match key.code {
         KeyCode::Esc => {
             // Cancel edit
@@ -254,18 +251,12 @@ fn handle_enter(state: &mut SettingsState) {
         }
         items::WidgetKind::Text | items::WidgetKind::Number => {
             // Enter edit mode
-            state.edit_buffer = state
-                .config
-                .get_value(item.key)
-                .unwrap_or_default();
+            state.edit_buffer = state.config.get_value(item.key).unwrap_or_default();
             state.editing = true;
         }
         items::WidgetKind::Slider => {
             // For sliders, Enter also enters edit mode for direct number input
-            state.edit_buffer = state
-                .config
-                .get_value(item.key)
-                .unwrap_or_default();
+            state.edit_buffer = state.config.get_value(item.key).unwrap_or_default();
             state.editing = true;
         }
         items::WidgetKind::Select(options) => {
@@ -295,13 +286,16 @@ fn adjust_current_value(state: &mut SettingsState, delta: i32) {
         return;
     };
 
-    if !matches!(item.widget, items::WidgetKind::Slider | items::WidgetKind::Number) {
+    if !matches!(
+        item.widget,
+        items::WidgetKind::Slider | items::WidgetKind::Number
+    ) {
         return;
     }
 
     if let Some(current) = state.config.get_value(item.key) {
         if let Ok(val) = current.parse::<i32>() {
-            let new_val = (val + delta).max(0).min(100);
+            let new_val = (val + delta).clamp(0, 100);
             let _ = state.config.set_value(item.key, &new_val.to_string());
             state.dirty = true;
         }
@@ -335,13 +329,17 @@ fn handle_delete_item(state: &mut SettingsState) {
         SettingsTab::SearchPaths => {
             remove_list_item(
                 &mut state.config.launcher.search_paths,
-                idx, &mut state.dirty, &mut state.selected_item,
+                idx,
+                &mut state.dirty,
+                &mut state.selected_item,
             );
         }
         SettingsTab::IgnorePatterns => {
             remove_list_item(
                 &mut state.config.launcher.ignore_patterns,
-                idx, &mut state.dirty, &mut state.selected_item,
+                idx,
+                &mut state.dirty,
+                &mut state.selected_item,
             );
         }
         _ => {}

@@ -7,9 +7,7 @@ pub fn run(target: &str) -> Result<()> {
     let config = super::load_config()?;
 
     // Check if it's a URL
-    if target.starts_with("http://")
-        || target.starts_with("https://")
-        || target.starts_with("www.")
+    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with("www.")
     {
         let url = if target.starts_with("www.") {
             format!("https://{}", target)
