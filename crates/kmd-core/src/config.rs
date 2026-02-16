@@ -98,6 +98,25 @@ pub struct LauncherConfig {
     /// Example: @m, @mw, @msearch
     #[serde(default = "default_multi_web_prefixes")]
     pub multi_web_prefixes: Vec<String>,
+    /// Providers used by spelling check command.
+    /// Supported: naver_spell, pusan_spell
+    #[serde(default = "default_spell_providers")]
+    pub spell_providers: Vec<String>,
+    /// Command aliases for spelling check.
+    /// Example: @sp, @spell
+    #[serde(default = "default_spell_prefixes")]
+    pub spell_prefixes: Vec<String>,
+    /// Providers used by translate command.
+    /// Supported: google_translate, papago, deepl
+    #[serde(default = "default_translate_providers")]
+    pub translate_providers: Vec<String>,
+    /// Command aliases for translate.
+    /// Example: @tr, @trko, @tren
+    #[serde(default = "default_translate_prefixes")]
+    pub translate_prefixes: Vec<String>,
+    /// Keymap integration settings (prototype).
+    #[serde(default)]
+    pub keymap: KeymapConfig,
 }
 
 impl Default for LauncherConfig {
@@ -168,6 +187,11 @@ impl Default for LauncherConfig {
             multi_llm_prefixes: default_multi_llm_prefixes(),
             multi_web_providers: default_multi_web_providers(),
             multi_web_prefixes: default_multi_web_prefixes(),
+            spell_providers: default_spell_providers(),
+            spell_prefixes: default_spell_prefixes(),
+            translate_providers: default_translate_providers(),
+            translate_prefixes: default_translate_prefixes(),
+            keymap: KeymapConfig::default(),
         }
     }
 }
@@ -209,6 +233,50 @@ fn default_multi_web_prefixes() -> Vec<String> {
         "@searchall".to_string(),
         "@krsearch".to_string(),
     ]
+}
+
+fn default_spell_providers() -> Vec<String> {
+    vec!["naver_spell".to_string(), "pusan_spell".to_string()]
+}
+
+fn default_spell_prefixes() -> Vec<String> {
+    vec!["@sp".to_string(), "@spell".to_string()]
+}
+
+fn default_translate_providers() -> Vec<String> {
+    vec![
+        "google_translate".to_string(),
+        "papago".to_string(),
+        "deepl".to_string(),
+    ]
+}
+
+fn default_translate_prefixes() -> Vec<String> {
+    vec!["@tr".to_string(), "@trko".to_string(), "@tren".to_string()]
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct KeymapConfig {
+    /// Backend type. Current prototype supports `kanata`.
+    pub backend: String,
+    /// Path to kanata executable. Empty = PATH lookup.
+    pub kanata_path: Option<PathBuf>,
+    /// Directory containing keymap profile files.
+    pub profile_dir: Option<PathBuf>,
+    /// Active profile file name (e.g. vim-nav.kbd).
+    pub active_profile: String,
+}
+
+impl Default for KeymapConfig {
+    fn default() -> Self {
+        Self {
+            backend: "kanata".to_string(),
+            kanata_path: None,
+            profile_dir: None,
+            active_profile: "vim-nav.kbd".to_string(),
+        }
+    }
 }
 
 /// Platform-specific default search paths (user directories).
@@ -414,6 +482,30 @@ impl Config {
             "launcher.multi_llm_prefixes" => Some(self.launcher.multi_llm_prefixes.join(",")),
             "launcher.multi_web_providers" => Some(self.launcher.multi_web_providers.join(",")),
             "launcher.multi_web_prefixes" => Some(self.launcher.multi_web_prefixes.join(",")),
+            "launcher.spell_providers" => Some(self.launcher.spell_providers.join(",")),
+            "launcher.spell_prefixes" => Some(self.launcher.spell_prefixes.join(",")),
+            "launcher.translate_providers" => Some(self.launcher.translate_providers.join(",")),
+            "launcher.translate_prefixes" => Some(self.launcher.translate_prefixes.join(",")),
+            "launcher.keymap.backend" => Some(self.launcher.keymap.backend.clone()),
+            "launcher.keymap.kanata_path" => Some(
+                self.launcher
+                    .keymap
+                    .kanata_path
+                    .clone()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            "launcher.keymap.profile_dir" => Some(
+                self.launcher
+                    .keymap
+                    .profile_dir
+                    .clone()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            "launcher.keymap.active_profile" => Some(self.launcher.keymap.active_profile.clone()),
             // keybindings
             "keybindings.global_hotkey" => get!(str self.keybindings.global_hotkey),
             "keybindings.quit" => get!(str self.keybindings.quit),
@@ -555,6 +647,66 @@ impl Config {
                     })
                     .collect();
             }
+            "launcher.spell_providers" => {
+                self.launcher.spell_providers = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "launcher.spell_prefixes" => {
+                self.launcher.spell_prefixes = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        if s.starts_with('@') {
+                            s
+                        } else {
+                            format!("@{s}")
+                        }
+                    })
+                    .collect();
+            }
+            "launcher.translate_providers" => {
+                self.launcher.translate_providers = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "launcher.translate_prefixes" => {
+                self.launcher.translate_prefixes = value
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        if s.starts_with('@') {
+                            s
+                        } else {
+                            format!("@{s}")
+                        }
+                    })
+                    .collect();
+            }
+            "launcher.keymap.backend" => self.launcher.keymap.backend = value.to_string(),
+            "launcher.keymap.kanata_path" => {
+                self.launcher.keymap.kanata_path = if value.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            "launcher.keymap.profile_dir" => {
+                self.launcher.keymap.profile_dir = if value.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            "launcher.keymap.active_profile" => {
+                self.launcher.keymap.active_profile = value.to_string()
+            }
             // keybindings
             "keybindings.global_hotkey" => self.keybindings.global_hotkey = value.to_string(),
             "keybindings.quit" => self.keybindings.quit = value.to_string(),
@@ -663,6 +815,21 @@ mod tests {
                 "@krsearch"
             ]
         );
+        assert_eq!(
+            config.launcher.spell_providers,
+            vec!["naver_spell", "pusan_spell"]
+        );
+        assert_eq!(config.launcher.spell_prefixes, vec!["@sp", "@spell"]);
+        assert_eq!(
+            config.launcher.translate_providers,
+            vec!["google_translate", "papago", "deepl"]
+        );
+        assert_eq!(
+            config.launcher.translate_prefixes,
+            vec!["@tr", "@trko", "@tren"]
+        );
+        assert_eq!(config.launcher.keymap.backend, "kanata");
+        assert_eq!(config.launcher.keymap.active_profile, "vim-nav.kbd");
     }
 
     #[test]
@@ -707,6 +874,27 @@ mod tests {
         assert_eq!(
             config.get_value("launcher.multi_web_prefixes"),
             Some("@m,@mw,@msearch".to_string())
+        );
+        config
+            .set_value("launcher.spell_prefixes", "sp,spell")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.spell_prefixes"),
+            Some("@sp,@spell".to_string())
+        );
+        config
+            .set_value("launcher.translate_prefixes", "tr,trko,tren")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.translate_prefixes"),
+            Some("@tr,@trko,@tren".to_string())
+        );
+        config
+            .set_value("launcher.keymap.active_profile", "coding.kbd")
+            .unwrap();
+        assert_eq!(
+            config.get_value("launcher.keymap.active_profile"),
+            Some("coding.kbd".to_string())
         );
     }
 

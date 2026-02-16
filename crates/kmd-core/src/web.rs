@@ -15,6 +15,32 @@ pub struct WebService {
     pub description: &'static str,
 }
 
+/// Built-in spelling service definition.
+pub struct SpellService {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub icon: &'static str,
+    pub emoji_icon: &'static str,
+    pub url_template: &'static str,
+    pub description: &'static str,
+}
+
+/// Built-in translation service definition.
+pub struct TranslateService {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub icon: &'static str,
+    pub emoji_icon: &'static str,
+    pub description: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslateDirection {
+    Auto,
+    EnToKo,
+    KoToEn,
+}
+
 /// Built-in web services
 pub const WEB_SERVICES: &[WebService] = &[
     WebService {
@@ -173,8 +199,71 @@ pub const WEB_SERVICES: &[WebService] = &[
     },
 ];
 
+pub const SPELL_SERVICES: &[SpellService] = &[
+    SpellService {
+        id: "naver_spell",
+        name: "Naver Spell",
+        icon: "Sp",
+        emoji_icon: "\u{270D}\u{FE0F}", // ✍️
+        url_template: "https://search.naver.com/search.naver?query={query}+맞춤법+검사",
+        description: "Korean spelling check via Naver",
+    },
+    SpellService {
+        id: "pusan_spell",
+        name: "Pusan Spell",
+        icon: "Ps",
+        emoji_icon: "\u{1F4D6}", // 📖
+        url_template: "https://search.naver.com/search.naver?query=부산대+맞춤법+{query}",
+        description: "Open Pusan spell checker search",
+    },
+];
+
+pub const TRANSLATE_SERVICES: &[TranslateService] = &[
+    TranslateService {
+        id: "google_translate",
+        name: "Google Translate",
+        icon: "Tr",
+        emoji_icon: "\u{1F310}", // 🌐
+        description: "Translate with Google",
+    },
+    TranslateService {
+        id: "papago",
+        name: "Papago",
+        icon: "Pg",
+        emoji_icon: "\u{1F1F0}\u{1F1F7}", // 🇰🇷
+        description: "Translate with Papago",
+    },
+    TranslateService {
+        id: "deepl",
+        name: "DeepL",
+        icon: "Dl",
+        emoji_icon: "\u{1F4D8}", // 📘
+        description: "Translate with DeepL",
+    },
+];
+
 impl WebService {
     /// Pick the right icon based on emoji support.
+    pub fn pick_icon(&self, use_emoji: bool) -> &str {
+        if use_emoji {
+            self.emoji_icon
+        } else {
+            self.icon
+        }
+    }
+}
+
+impl SpellService {
+    pub fn pick_icon(&self, use_emoji: bool) -> &str {
+        if use_emoji {
+            self.emoji_icon
+        } else {
+            self.icon
+        }
+    }
+}
+
+impl TranslateService {
     pub fn pick_icon(&self, use_emoji: bool) -> &str {
         if use_emoji {
             self.emoji_icon
@@ -273,6 +362,53 @@ pub fn parse_multi_web_query_with_prefixes(
     Some((selected_multi_web_services(selected_ids), query))
 }
 
+/// Parse spelling query with user-defined aliases.
+pub fn parse_spell_query_with_prefixes(input: &str, prefixes: &[String]) -> Option<String> {
+    if !input.starts_with('@') {
+        return None;
+    }
+    let first_space = input.find(' ');
+    let prefix = input[..first_space.unwrap_or(input.len())].to_lowercase();
+    let aliases = normalized_aliases(prefixes, &["@sp", "@spell"]);
+    if !aliases.iter().any(|p| p == &prefix) {
+        return None;
+    }
+    Some(
+        first_space
+            .map(|i| input[i + 1..].trim())
+            .unwrap_or("")
+            .to_string(),
+    )
+}
+
+/// Parse translate query with user-defined aliases.
+pub fn parse_translate_query_with_prefixes(
+    input: &str,
+    prefixes: &[String],
+) -> Option<(TranslateDirection, String)> {
+    if !input.starts_with('@') {
+        return None;
+    }
+    let first_space = input.find(' ');
+    let prefix = input[..first_space.unwrap_or(input.len())].to_lowercase();
+    let aliases = normalized_aliases(prefixes, &["@tr", "@trko", "@tren"]);
+    if !aliases.iter().any(|p| p == &prefix) {
+        return None;
+    }
+    let direction = if prefix.ends_with("ko") {
+        TranslateDirection::EnToKo
+    } else if prefix.ends_with("en") {
+        TranslateDirection::KoToEn
+    } else {
+        TranslateDirection::Auto
+    };
+    let query = first_space
+        .map(|i| input[i + 1..].trim())
+        .unwrap_or("")
+        .to_string();
+    Some((direction, query))
+}
+
 /// Build a search URL with query encoding
 pub fn build_search_url(service: &WebService, query: &str) -> String {
     let encoded = url_encode(query);
@@ -336,6 +472,37 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
             source: Source::Plugin,
             icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
             keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
+        });
+    }
+
+    let spell_match = filter_lower.is_empty()
+        || "@sp".contains(&filter_lower)
+        || "@spell".contains(&filter_lower)
+        || "spelling".contains(&filter_lower);
+    if spell_match {
+        items.push(IndexItem {
+            name: "@sp         Korean spelling check".to_string(),
+            path: "Run spelling check providers with one query".to_string(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{270D}\u{FE0F}" } else { "Sp" }.to_string(),
+            keywords: "@sp @spell spelling checker".to_string(),
+        });
+    }
+
+    let translate_match = filter_lower.is_empty()
+        || "@tr".contains(&filter_lower)
+        || "@trko".contains(&filter_lower)
+        || "@tren".contains(&filter_lower)
+        || "translate".contains(&filter_lower);
+    if translate_match {
+        items.push(IndexItem {
+            name: "@tr         Translate (auto / ko / en)".to_string(),
+            path: "Open selected translate providers in parallel".to_string(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{1F5E3}\u{FE0F}" } else { "Tr" }.to_string(),
+            keywords: "@tr @trko @tren translate".to_string(),
         });
     }
 
@@ -457,6 +624,109 @@ pub fn multi_web_result_items(
     items
 }
 
+pub fn spell_result_items(query: &str, selected_ids: &[String], use_emoji: bool) -> Vec<IndexItem> {
+    let services = selected_spell_services(selected_ids);
+    if query.is_empty() {
+        return services
+            .into_iter()
+            .map(|s| IndexItem {
+                name: format!("@sp {:<14} {}", s.id, s.description),
+                path: s.url_template.to_string(),
+                kind: ItemKind::WebSearch,
+                source: Source::Plugin,
+                icon: s.pick_icon(use_emoji).to_string(),
+                keywords: format!("{} spell", s.id),
+            })
+            .collect();
+    }
+
+    let mut items = Vec::new();
+    let urls: Vec<String> = services
+        .iter()
+        .map(|svc| svc.url_template.replace("{query}", &url_encode(query)))
+        .collect();
+    let provider_names = services
+        .iter()
+        .map(|svc| svc.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker = format!("kmd:spell_urls\n{}", urls.join("\n"));
+    items.push(IndexItem {
+        name: format!("Spell check ({})", services.len()),
+        path: format!("Run spelling check for: \"{}\"", query),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{270D}\u{FE0F}" } else { "Sp" }.to_string(),
+        keywords: format!("{}\nproviders: {}", marker, provider_names),
+    });
+    for service in services {
+        let url = service.url_template.replace("{query}", &url_encode(query));
+        items.push(IndexItem {
+            name: format!("{}: \"{}\"", service.name, query),
+            path: url.clone(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: service.pick_icon(use_emoji).to_string(),
+            keywords: url,
+        });
+    }
+    items
+}
+
+pub fn translate_result_items(
+    query: &str,
+    direction: TranslateDirection,
+    selected_ids: &[String],
+    use_emoji: bool,
+) -> Vec<IndexItem> {
+    let services = selected_translate_services(selected_ids);
+    if query.is_empty() {
+        return services
+            .into_iter()
+            .map(|s| IndexItem {
+                name: format!("@tr {:<16} {}", s.id, s.description),
+                path: s.description.to_string(),
+                kind: ItemKind::WebSearch,
+                source: Source::Plugin,
+                icon: s.pick_icon(use_emoji).to_string(),
+                keywords: format!("{} translate", s.id),
+            })
+            .collect();
+    }
+
+    let mut items = Vec::new();
+    let urls: Vec<String> = services
+        .iter()
+        .map(|svc| build_translate_url(svc, query, direction))
+        .collect();
+    let provider_names = services
+        .iter()
+        .map(|svc| svc.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker = format!("kmd:translate_urls\n{}", urls.join("\n"));
+    items.push(IndexItem {
+        name: format!("Translate ({})", services.len()),
+        path: format!("Translate: \"{}\"", query),
+        kind: ItemKind::WebSearch,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F5E3}\u{FE0F}" } else { "Tr" }.to_string(),
+        keywords: format!("{}\nproviders: {}", marker, provider_names),
+    });
+    for service in services {
+        let url = build_translate_url(service, query, direction);
+        items.push(IndexItem {
+            name: format!("{}: \"{}\"", service.name, query),
+            path: url.clone(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: service.pick_icon(use_emoji).to_string(),
+            keywords: url,
+        });
+    }
+    items
+}
+
 /// Decode multi-LLM URLs from an item generated by `multi_llm_result_items`.
 pub fn extract_multi_llm_urls(item: &IndexItem) -> Option<Vec<String>> {
     let prefix = "kmd:multi_llm_urls\n";
@@ -480,6 +750,44 @@ pub fn extract_multi_llm_urls(item: &IndexItem) -> Option<Vec<String>> {
 /// Decode multi-web URLs from an item generated by `multi_web_result_items`.
 pub fn extract_multi_web_urls(item: &IndexItem) -> Option<Vec<String>> {
     let prefix = "kmd:multi_web_urls\n";
+    if !item.keywords.starts_with(prefix) {
+        return None;
+    }
+    let urls = item.keywords[prefix.len()..]
+        .lines()
+        .take_while(|line| !line.starts_with("providers:"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        None
+    } else {
+        Some(urls)
+    }
+}
+
+pub fn extract_spell_urls(item: &IndexItem) -> Option<Vec<String>> {
+    let prefix = "kmd:spell_urls\n";
+    if !item.keywords.starts_with(prefix) {
+        return None;
+    }
+    let urls = item.keywords[prefix.len()..]
+        .lines()
+        .take_while(|line| !line.starts_with("providers:"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        None
+    } else {
+        Some(urls)
+    }
+}
+
+pub fn extract_translate_urls(item: &IndexItem) -> Option<Vec<String>> {
+    let prefix = "kmd:translate_urls\n";
     if !item.keywords.starts_with(prefix) {
         return None;
     }
@@ -549,12 +857,83 @@ pub fn selected_multi_web_services(selected_ids: &[String]) -> Vec<&'static WebS
     }
 }
 
+pub fn selected_spell_services(selected_ids: &[String]) -> Vec<&'static SpellService> {
+    let mut matched = Vec::new();
+    for id in selected_ids {
+        let normalized = id.trim().to_lowercase();
+        if normalized.is_empty() || !is_spell_id(&normalized) {
+            continue;
+        }
+        if let Some(service) = SPELL_SERVICES
+            .iter()
+            .find(|svc| svc.id.eq_ignore_ascii_case(&normalized))
+        {
+            matched.push(service);
+        }
+    }
+    if matched.is_empty() {
+        SPELL_SERVICES.iter().collect()
+    } else {
+        matched
+    }
+}
+
+pub fn selected_translate_services(selected_ids: &[String]) -> Vec<&'static TranslateService> {
+    let mut matched = Vec::new();
+    for id in selected_ids {
+        let normalized = id.trim().to_lowercase();
+        if normalized.is_empty() || !is_translate_id(&normalized) {
+            continue;
+        }
+        if let Some(service) = TRANSLATE_SERVICES
+            .iter()
+            .find(|svc| svc.id.eq_ignore_ascii_case(&normalized))
+        {
+            matched.push(service);
+        }
+    }
+    if matched.is_empty() {
+        TRANSLATE_SERVICES.iter().collect()
+    } else {
+        matched
+    }
+}
+
 fn is_llm_id(id: &str) -> bool {
     matches!(id, "chatgpt" | "gemini" | "claude" | "grok" | "perplexity")
 }
 
 fn is_multi_web_id(id: &str) -> bool {
     matches!(id, "google" | "naver_search" | "daum")
+}
+
+fn is_spell_id(id: &str) -> bool {
+    matches!(id, "naver_spell" | "pusan_spell")
+}
+
+fn is_translate_id(id: &str) -> bool {
+    matches!(id, "google_translate" | "papago" | "deepl")
+}
+
+fn build_translate_url(
+    service: &TranslateService,
+    query: &str,
+    direction: TranslateDirection,
+) -> String {
+    let encoded = url_encode(query);
+    let (sl, tl) = match direction {
+        TranslateDirection::Auto => ("auto", "ko"),
+        TranslateDirection::EnToKo => ("en", "ko"),
+        TranslateDirection::KoToEn => ("ko", "en"),
+    };
+    match service.id {
+        "google_translate" => {
+            format!("https://translate.google.com/?sl={sl}&tl={tl}&text={encoded}&op=translate")
+        }
+        "papago" => format!("https://papago.naver.com/?sk={sl}&tk={tl}&st={encoded}"),
+        "deepl" => format!("https://www.deepl.com/translator#{sl}/{tl}/{encoded}"),
+        _ => format!("https://translate.google.com/?sl={sl}&tl={tl}&text={encoded}&op=translate"),
+    }
 }
 
 fn normalized_aliases(aliases: &[String], defaults: &[&str]) -> Vec<String> {
@@ -679,6 +1058,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_spell_query() {
+        let prefixes = vec!["@sp".to_string(), "@spell".to_string()];
+        let parsed = parse_spell_query_with_prefixes("@sp 안녕 하세요", &prefixes);
+        assert_eq!(parsed, Some("안녕 하세요".to_string()));
+    }
+
+    #[test]
+    fn test_parse_translate_query() {
+        let prefixes = vec!["@tr".to_string(), "@trko".to_string(), "@tren".to_string()];
+        let parsed = parse_translate_query_with_prefixes("@trko hello world", &prefixes).unwrap();
+        assert_eq!(parsed.0, TranslateDirection::EnToKo);
+        assert_eq!(parsed.1, "hello world");
+    }
+
+    #[test]
     fn test_multi_llm_item_urls_roundtrip() {
         let selected = vec!["chatgpt".to_string(), "gemini".to_string()];
         let items = multi_llm_result_items("rust lifetimes", &selected, false);
@@ -700,8 +1094,27 @@ mod tests {
     }
 
     #[test]
+    fn test_spell_item_urls_roundtrip() {
+        let selected = vec!["naver_spell".to_string(), "pusan_spell".to_string()];
+        let items = spell_result_items("문장 검사", &selected, false);
+        let urls = extract_spell_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+    }
+
+    #[test]
+    fn test_translate_item_urls_roundtrip() {
+        let selected = vec!["google_translate".to_string(), "papago".to_string()];
+        let items = translate_result_items("hello", TranslateDirection::EnToKo, &selected, false);
+        let urls = extract_translate_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("sl=en"));
+    }
+
+    #[test]
     fn test_list_services_contains_llm_hint() {
         let items = list_services_as_items("", false);
-        assert!(items.iter().any(|item| item.name.starts_with("@llm")));
+        assert!(items
+            .iter()
+            .any(|item| item.name.starts_with("@ll") || item.name.starts_with("@llm")));
     }
 }

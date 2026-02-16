@@ -127,6 +127,66 @@ pub fn items_for_tab(tab: &SettingsTab) -> Vec<SettingItem> {
                 widget: WidgetKind::Number,
                 description: "Max depth when scanning drive roots (default: 3, shallow to skip system dirs)",
             },
+            SettingItem {
+                label: "Multi LLM prefixes",
+                key: "launcher.multi_llm_prefixes",
+                widget: WidgetKind::Text,
+                description: "Comma-separated aliases (e.g. @ll,@llm,@cmp)",
+            },
+            SettingItem {
+                label: "Multi Web prefixes",
+                key: "launcher.multi_web_prefixes",
+                widget: WidgetKind::Text,
+                description: "Comma-separated aliases (e.g. @m,@mw,@msearch)",
+            },
+            SettingItem {
+                label: "Spell providers",
+                key: "launcher.spell_providers",
+                widget: WidgetKind::Text,
+                description: "Comma-separated IDs (naver_spell,pusan_spell)",
+            },
+            SettingItem {
+                label: "Spell prefixes",
+                key: "launcher.spell_prefixes",
+                widget: WidgetKind::Text,
+                description: "Comma-separated aliases (e.g. @sp,@spell)",
+            },
+            SettingItem {
+                label: "Translate providers",
+                key: "launcher.translate_providers",
+                widget: WidgetKind::Text,
+                description: "Comma-separated IDs (google_translate,papago,deepl)",
+            },
+            SettingItem {
+                label: "Translate prefixes",
+                key: "launcher.translate_prefixes",
+                widget: WidgetKind::Text,
+                description: "Comma-separated aliases (e.g. @tr,@trko,@tren)",
+            },
+            SettingItem {
+                label: "Keymap backend",
+                key: "launcher.keymap.backend",
+                widget: WidgetKind::Text,
+                description: "Prototype backend type (default: kanata)",
+            },
+            SettingItem {
+                label: "Kanata path",
+                key: "launcher.keymap.kanata_path",
+                widget: WidgetKind::Text,
+                description: "Absolute path to kanata binary (empty = PATH)",
+            },
+            SettingItem {
+                label: "Keymap profile dir",
+                key: "launcher.keymap.profile_dir",
+                widget: WidgetKind::Text,
+                description: "Directory containing .kbd profile files",
+            },
+            SettingItem {
+                label: "Active keymap profile",
+                key: "launcher.keymap.active_profile",
+                widget: WidgetKind::Text,
+                description: "Profile file name used by keymap command",
+            },
         ],
         SettingsTab::SearchPaths => {
             // Dynamic list — items are the actual paths

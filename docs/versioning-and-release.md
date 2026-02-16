@@ -40,9 +40,22 @@ It tracks index/data compatibility and can move independently when schema/storag
 6. Create GitHub Release from the tag with:
    - Summary of features/fixes
    - Test/validation notes
+   - Service limitation notes (auto-submit support, clipboard fallback)
 
 ## 4) Practical Policy for This Repo
 
 - Default policy: all three package versions move together.
 - Exception policy: if only internal crates are published separately in the future,
   split policy can be introduced, but only with explicit docs update.
+
+## 5) Release Notes Template (Recommended)
+
+Use this checklist for each release:
+
+- New features
+- Bug fixes / regressions
+- Breaking changes (if any)
+- Validation performed (`cargo fmt`, `cargo clippy`, `cargo test`)
+- Service limitations:
+  - Some web providers may open with prefilled query but require manual Enter
+  - Clipboard fallback is used for providers without URL auto-submit support

@@ -55,6 +55,10 @@ type EngineSlot = Arc<
             Vec<String>,
             Vec<String>,
             Vec<String>,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
         )>,
     >,
 >;
@@ -76,6 +80,10 @@ pub struct App {
     multi_llm_prefixes: Vec<String>,
     selected_multi_web_providers: Vec<String>,
     multi_web_prefixes: Vec<String>,
+    spell_providers: Vec<String>,
+    spell_prefixes: Vec<String>,
+    translate_providers: Vec<String>,
+    translate_prefixes: Vec<String>,
     loading: bool,
     engine_slot: EngineSlot,
     _guard: Guard,
@@ -123,6 +131,10 @@ impl App {
         let multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
         let selected_multi_web_providers = config.launcher.multi_web_providers.clone();
         let multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
+        let spell_providers = config.launcher.spell_providers.clone();
+        let spell_prefixes = config.launcher.spell_prefixes.clone();
+        let translate_providers = config.launcher.translate_providers.clone();
+        let translate_prefixes = config.launcher.translate_prefixes.clone();
         let reset_ime = config.general.reset_ime_on_launch;
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
@@ -139,8 +151,22 @@ impl App {
                 let llm_prefix = config.launcher.multi_llm_prefixes.clone();
                 let mweb = config.launcher.multi_web_providers.clone();
                 let mweb_prefix = config.launcher.multi_web_prefixes.clone();
-                *slot_for_task.lock().expect("engine_slot poisoned") =
-                    Some((eng, emoji, llm, mweb, llm_prefix, mweb_prefix));
+                let spell = config.launcher.spell_providers.clone();
+                let spell_prefix = config.launcher.spell_prefixes.clone();
+                let translate = config.launcher.translate_providers.clone();
+                let translate_prefix = config.launcher.translate_prefixes.clone();
+                *slot_for_task.lock().expect("engine_slot poisoned") = Some((
+                    eng,
+                    emoji,
+                    llm,
+                    mweb,
+                    llm_prefix,
+                    mweb_prefix,
+                    spell,
+                    spell_prefix,
+                    translate,
+                    translate_prefix,
+                ));
             })
             .await;
             Message::EngineReady
@@ -161,6 +187,10 @@ impl App {
             multi_llm_prefixes,
             selected_multi_web_providers,
             multi_web_prefixes,
+            spell_providers,
+            spell_prefixes,
+            translate_providers,
+            translate_prefixes,
             loading: true,
             engine_slot,
             _guard: guard,
@@ -246,13 +276,29 @@ impl App {
                     .expect("engine_slot poisoned")
                     .take();
 
-                if let Some((engine, emoji, llm, mweb, llm_prefix, mweb_prefix)) = loaded {
+                if let Some((
+                    engine,
+                    emoji,
+                    llm,
+                    mweb,
+                    llm_prefix,
+                    mweb_prefix,
+                    spell,
+                    spell_prefix,
+                    translate,
+                    translate_prefix,
+                )) = loaded
+                {
                     self.engine = engine;
                     self.use_emoji = emoji;
                     self.selected_llm_providers = llm;
                     self.selected_multi_web_providers = mweb;
                     self.multi_llm_prefixes = llm_prefix;
                     self.multi_web_prefixes = mweb_prefix;
+                    self.spell_providers = spell;
+                    self.spell_prefixes = spell_prefix;
+                    self.translate_providers = translate;
+                    self.translate_prefixes = translate_prefix;
                     self.loading = false;
                     tracing::info!("Search engine ready");
                     if !self.query.trim().is_empty() {
@@ -371,6 +417,30 @@ impl App {
 
     fn handle_web_query(&mut self, query: &str) {
         let emoji = self.use_emoji;
+        if let Some(spell_query) = web::parse_spell_query_with_prefixes(query, &self.spell_prefixes)
+        {
+            self.results = items_to_results(web::spell_result_items(
+                &spell_query,
+                &self.spell_providers,
+                emoji,
+            ));
+            self.search_mode = kmd_core::SearchMode::Contains;
+            self.selected = 0;
+            return;
+        }
+        if let Some((direction, tr_query)) =
+            web::parse_translate_query_with_prefixes(query, &self.translate_prefixes)
+        {
+            self.results = items_to_results(web::translate_result_items(
+                &tr_query,
+                direction,
+                &self.translate_providers,
+                emoji,
+            ));
+            self.search_mode = kmd_core::SearchMode::Contains;
+            self.selected = 0;
+            return;
+        }
         if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
             query,
             &self.selected_llm_providers,
@@ -618,6 +688,49 @@ impl App {
             ));
         }
 
+        let spell_rows = [
+            ("naver_spell", "Naver Spell"),
+            ("pusan_spell", "Pusan Spell"),
+        ];
+        for (id, provider_name) in spell_rows {
+            let enabled = self
+                .spell_providers
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(id));
+            settings_entries.push((
+                format!(
+                    "Spell: {} [{}]",
+                    provider_name,
+                    if enabled { "ON" } else { "OFF" }
+                ),
+                format!("kmd:settings:spell:toggle:{id}"),
+                if emoji { "\u{270D}\u{FE0F}" } else { "[SPL]" }.to_string(),
+                "Toggle provider for @sp spelling check".to_string(),
+            ));
+        }
+
+        let translate_rows = [
+            ("google_translate", "Google Translate"),
+            ("papago", "Papago"),
+            ("deepl", "DeepL"),
+        ];
+        for (id, provider_name) in translate_rows {
+            let enabled = self
+                .translate_providers
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(id));
+            settings_entries.push((
+                format!(
+                    "Translate: {} [{}]",
+                    provider_name,
+                    if enabled { "ON" } else { "OFF" }
+                ),
+                format!("kmd:settings:translate:toggle:{id}"),
+                if emoji { "\u{1F5E3}\u{FE0F}" } else { "[TR]" }.to_string(),
+                "Toggle provider for @tr translation".to_string(),
+            ));
+        }
+
         settings_entries.extend_from_slice(&[
             (
                 "Rebuild Index".to_string(),
@@ -695,6 +808,16 @@ impl App {
                 "@msearch  Multi Web Search",
                 "Type @m query  (alias: @msearch, open selected web engines)",
                 if emoji { "\u{1F50E}" } else { "[MWEB]" },
+            ),
+            (
+                "@sp  Spell Check",
+                "Type @sp text  (Korean spelling check on selected providers)",
+                if emoji { "\u{270D}\u{FE0F}" } else { "[SPL]" },
+            ),
+            (
+                "@tr  Translate",
+                "Type @tr/@trko/@tren text  (auto / en->ko / ko->en)",
+                if emoji { "\u{1F5E3}\u{FE0F}" } else { "[TR]" },
             ),
             (
                 "Version Info",
@@ -818,8 +941,22 @@ impl App {
                         let llm_prefix = config.launcher.multi_llm_prefixes.clone();
                         let mweb = config.launcher.multi_web_providers.clone();
                         let mweb_prefix = config.launcher.multi_web_prefixes.clone();
-                        *slot.lock().expect("engine_slot poisoned") =
-                            Some((eng, emoji, llm, mweb, llm_prefix, mweb_prefix));
+                        let spell = config.launcher.spell_providers.clone();
+                        let spell_prefix = config.launcher.spell_prefixes.clone();
+                        let translate = config.launcher.translate_providers.clone();
+                        let translate_prefix = config.launcher.translate_prefixes.clone();
+                        *slot.lock().expect("engine_slot poisoned") = Some((
+                            eng,
+                            emoji,
+                            llm,
+                            mweb,
+                            llm_prefix,
+                            mweb_prefix,
+                            spell,
+                            spell_prefix,
+                            translate,
+                            translate_prefix,
+                        ));
                     })
                     .await;
                     Message::EngineReady
@@ -903,6 +1040,59 @@ impl App {
                 self.handle_settings_query(":set");
                 return self.resize_window();
             }
+            spell_toggle if spell_toggle.starts_with("spell:toggle:") => {
+                let target = spell_toggle.strip_prefix("spell:toggle:").unwrap_or("");
+                if !target.is_empty() {
+                    if self
+                        .spell_providers
+                        .iter()
+                        .any(|v| v.eq_ignore_ascii_case(target))
+                    {
+                        self.spell_providers
+                            .retain(|v| !v.eq_ignore_ascii_case(target));
+                    } else {
+                        self.spell_providers.push(target.to_string());
+                    }
+                    if self.spell_providers.is_empty() {
+                        self.spell_providers =
+                            vec!["naver_spell".to_string(), "pusan_spell".to_string()];
+                    }
+                    let selected = self.spell_providers.clone();
+                    save_config(move |cfg| cfg.launcher.spell_providers = selected);
+                }
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.resize_window();
+            }
+            translate_toggle if translate_toggle.starts_with("translate:toggle:") => {
+                let target = translate_toggle
+                    .strip_prefix("translate:toggle:")
+                    .unwrap_or("");
+                if !target.is_empty() {
+                    if self
+                        .translate_providers
+                        .iter()
+                        .any(|v| v.eq_ignore_ascii_case(target))
+                    {
+                        self.translate_providers
+                            .retain(|v| !v.eq_ignore_ascii_case(target));
+                    } else {
+                        self.translate_providers.push(target.to_string());
+                    }
+                    if self.translate_providers.is_empty() {
+                        self.translate_providers = vec![
+                            "google_translate".to_string(),
+                            "papago".to_string(),
+                            "deepl".to_string(),
+                        ];
+                    }
+                    let selected = self.translate_providers.clone();
+                    save_config(move |cfg| cfg.launcher.translate_providers = selected);
+                }
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.resize_window();
+            }
             theme_action if theme_action.starts_with("theme:") => {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
                 self.theme = crate::theme::from_name(theme_name);
@@ -969,6 +1159,18 @@ impl App {
         }
 
         if result.item.kind == ItemKind::WebSearch {
+            if let Some(urls) = web::extract_translate_urls(&result.item) {
+                for url in urls {
+                    let _ = kmd_core::action::open_url(&url);
+                }
+                return iced::exit();
+            }
+            if let Some(urls) = web::extract_spell_urls(&result.item) {
+                for url in urls {
+                    let _ = kmd_core::action::open_url(&url);
+                }
+                return iced::exit();
+            }
             if let Some(urls) = web::extract_multi_web_urls(&result.item) {
                 for url in urls {
                     let _ = kmd_core::action::open_url(&url);

@@ -95,6 +95,11 @@ enum Commands {
     },
     /// Show version information
     Version,
+    /// Manage keymap backend (Kanata prototype)
+    Keymap {
+        #[command(subcommand)]
+        action: KeymapAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -145,6 +150,22 @@ enum PortableAction {
     Enable,
     /// Disable portable mode (migrate data to system paths, remove kmd-data/)
     Disable,
+}
+
+#[derive(Subcommand)]
+enum KeymapAction {
+    /// Start keymap backend process
+    Start,
+    /// Stop keymap backend process
+    Stop,
+    /// Show keymap process status
+    Status,
+    /// List keymap profiles
+    List,
+    /// Set active profile
+    Use { profile: String },
+    /// Create profile template and set active
+    Init { profile: Option<String> },
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -261,6 +282,16 @@ fn main() -> color_eyre::Result<()> {
         }
         Some(Commands::Version) => {
             cmd::version::run();
+        }
+        Some(Commands::Keymap { action }) => {
+            cmd::keymap::run(match action {
+                KeymapAction::Start => cmd::keymap::Action::Start,
+                KeymapAction::Stop => cmd::keymap::Action::Stop,
+                KeymapAction::Status => cmd::keymap::Action::Status,
+                KeymapAction::List => cmd::keymap::Action::List,
+                KeymapAction::Use { profile } => cmd::keymap::Action::Use { profile },
+                KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
+            })?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {

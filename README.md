@@ -29,6 +29,9 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **AI services**: `@ai question`, `@gpt prompt`, `@claude query`, `@gemini ask`, `@grok ask`
 - **Multi LLM compare**: `@ll same prompt` (or `@llm`) opens selected LLMs at once
 - **Multi web search**: `@m same query` (or `@msearch`) opens Google/Naver/Daum together
+- **Korean spelling check**: `@sp 문장` opens selected spelling check providers
+- **Translate EN↔KO**: `@tr text`, `@trko text`, `@tren text`
+- **Keymap backend prototype**: `kmd keymap ...` to manage Kanata profile/process
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
 - **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
 - **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
@@ -154,6 +157,14 @@ kmd emoji star -c 3     # copy 3rd result
 # Plugins
 kmd plugin list
 
+# Keymap backend prototype (Kanata)
+kmd keymap status
+kmd keymap init vim-nav
+kmd keymap list
+kmd keymap use vim-nav
+kmd keymap start
+kmd keymap stop
+
 # Daemon (future)
 kmd daemon start
 kmd daemon status
@@ -181,6 +192,8 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 | `@ai` | AI search | `@ai why is the sky blue` | Ask Perplexity AI |
 | `@ll` / `@llm` / `@cmp` | Multi LLM compare | `@ll explain Rust lifetimes` | Open selected LLMs with same prompt |
 | `@m` / `@mw` / `@msearch` | Multi web search | `@m 러스트 소유권` | Open selected search engines with same query |
+| `@sp` / `@spell` | Korean spelling check | `@sp 안녕 하세요` | Open selected spell check providers |
+| `@tr` / `@trko` / `@tren` | Translate | `@trko hello world` | Translate text in selected providers |
 | `:calc` | Calculator | `:calc (2+3)*4` | Evaluate math expression |
 | `:emoji` / `:e` | Emoji | `:e fire`, `:e 하트` | Search & copy emoji |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
@@ -236,6 +249,25 @@ Recommended commands:
 - `@m rust ownership`
 - `@m 러스트 소유권`
 - `@m cursor ai 단축키`
+
+### Korean Spelling Check
+
+`@sp` (or `@spell`) checks Korean spelling by opening selected providers in parallel tabs.
+
+Recommended commands:
+
+- `@sp 안녕 하세요 오늘 날씨가 좋내요`
+- `@sp 보고서 문장 교정`
+
+### Translate (EN↔KO)
+
+`@tr` (auto detect), `@trko` (English -> Korean), `@tren` (Korean -> English)
+
+Recommended commands:
+
+- `@tr hello world`
+- `@trko Please summarize this code`
+- `@tren 이 문장을 영어로 번역해줘`
 
 ## Keybindings
 
@@ -340,6 +372,16 @@ multi_llm_providers = ["chatgpt", "gemini", "claude", "grok", "perplexity"]  # p
 multi_llm_prefixes = ["@ll", "@llm", "@multi", "@cmp", "@compare"]            # aliases for multi-LLM command
 multi_web_providers = ["google", "naver_search", "daum"]  # engines used by @msearch
 multi_web_prefixes = ["@m", "@mw", "@msearch", "@multisearch", "@searchall", "@krsearch"]  # aliases for multi-web command
+spell_providers = ["naver_spell", "pusan_spell"]
+spell_prefixes = ["@sp", "@spell"]
+translate_providers = ["google_translate", "papago", "deepl"]
+translate_prefixes = ["@tr", "@trko", "@tren"]
+
+[launcher.keymap]
+backend = "kanata"
+kanata_path = ""              # optional absolute path
+profile_dir = ""              # optional profile dir (default: config_dir/keymap)
+active_profile = "vim-nav.kbd"
 
 # Search priority weights (0-100, higher = ranked higher)
 [launcher.kind_weights]

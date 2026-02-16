@@ -5,6 +5,70 @@ use color_eyre::Result;
 pub fn run(query: &str, limit: usize, json: bool) -> Result<()> {
     let config = super::load_config()?;
 
+    // Check spelling query (@sp / @spell)
+    if let Some(spell_query) =
+        kmd_core::web::parse_spell_query_with_prefixes(query, &config.launcher.spell_prefixes)
+    {
+        let items = kmd_core::web::spell_result_items(
+            &spell_query,
+            &config.launcher.spell_providers,
+            config.general.emoji_icons,
+        );
+        if json {
+            print_items_json(&items)?;
+        } else if spell_query.is_empty() {
+            println!("Configured spelling providers:");
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+            let usage = config
+                .launcher
+                .spell_prefixes
+                .first()
+                .map(String::as_str)
+                .unwrap_or("@sp");
+            println!("\nUsage: {} <text>", usage);
+        } else {
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+        }
+        return Ok(());
+    }
+
+    // Check translate query (@tr / @trko / @tren)
+    if let Some((direction, tr_query)) = kmd_core::web::parse_translate_query_with_prefixes(
+        query,
+        &config.launcher.translate_prefixes,
+    ) {
+        let items = kmd_core::web::translate_result_items(
+            &tr_query,
+            direction,
+            &config.launcher.translate_providers,
+            config.general.emoji_icons,
+        );
+        if json {
+            print_items_json(&items)?;
+        } else if tr_query.is_empty() {
+            println!("Configured translate providers:");
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+            let usage = config
+                .launcher
+                .translate_prefixes
+                .first()
+                .map(String::as_str)
+                .unwrap_or("@tr");
+            println!("\nUsage: {} <text>", usage);
+        } else {
+            for item in &items {
+                println!("  {} {}", item.icon, item.name);
+            }
+        }
+        return Ok(());
+    }
+
     // Check for multi-LLM query (@llm / @multi / @cmp)
     if let Some((_services, llm_query)) = kmd_core::web::parse_multi_llm_query_with_prefixes(
         query,

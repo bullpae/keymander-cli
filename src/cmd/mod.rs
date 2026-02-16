@@ -3,6 +3,7 @@ pub mod daemon;
 pub mod emoji;
 pub mod history;
 pub mod index;
+pub mod keymap;
 pub mod launch;
 pub mod plugin;
 pub mod portable;

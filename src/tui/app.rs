@@ -100,6 +100,14 @@ pub struct AppState {
     pub selected_multi_web_providers: Vec<String>,
     /// Command aliases used for multi web query.
     pub multi_web_prefixes: Vec<String>,
+    /// Providers used for spelling check.
+    pub spell_providers: Vec<String>,
+    /// Command aliases used for spelling check.
+    pub spell_prefixes: Vec<String>,
+    /// Providers used for translation.
+    pub translate_providers: Vec<String>,
+    /// Command aliases used for translation.
+    pub translate_prefixes: Vec<String>,
     /// Cached effective query (query + composing char), updated on every input change
     cached_effective_query: String,
     /// Whether the UI needs to be redrawn
@@ -204,6 +212,10 @@ pub fn run_app(
         multi_llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
         selected_multi_web_providers: config.launcher.multi_web_providers.clone(),
         multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+        spell_providers: config.launcher.spell_providers.clone(),
+        spell_prefixes: config.launcher.spell_prefixes.clone(),
+        translate_providers: config.launcher.translate_providers.clone(),
+        translate_prefixes: config.launcher.translate_prefixes.clone(),
         cached_effective_query: String::new(),
         dirty: true,
     };
@@ -348,6 +360,10 @@ fn handle_settings_key_event(
             state.multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
             state.selected_multi_web_providers = config.launcher.multi_web_providers.clone();
             state.multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
+            state.spell_providers = config.launcher.spell_providers.clone();
+            state.spell_prefixes = config.launcher.spell_prefixes.clone();
+            state.translate_providers = config.launcher.translate_providers.clone();
+            state.translate_prefixes = config.launcher.translate_prefixes.clone();
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
             if needs_rebuild {
@@ -392,6 +408,14 @@ fn handle_settings_key_event(
                 default_config.launcher.multi_web_providers;
             settings_state.config.launcher.multi_web_prefixes =
                 default_config.launcher.multi_web_prefixes;
+            settings_state.config.launcher.spell_providers =
+                default_config.launcher.spell_providers;
+            settings_state.config.launcher.spell_prefixes = default_config.launcher.spell_prefixes;
+            settings_state.config.launcher.translate_providers =
+                default_config.launcher.translate_providers;
+            settings_state.config.launcher.translate_prefixes =
+                default_config.launcher.translate_prefixes;
+            settings_state.config.launcher.keymap = default_config.launcher.keymap;
             settings_state.config.general = default_config.general;
             settings_state.config.keybindings = default_config.keybindings;
             settings_state.dirty = true;
@@ -624,6 +648,24 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
 
     // Web query
     if result.item.kind == ItemKind::WebSearch {
+        if let Some(urls) = web::extract_translate_urls(&result.item) {
+            for url in urls {
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+        if let Some(urls) = web::extract_spell_urls(&result.item) {
+            for url in urls {
+                let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
         if let Some(urls) = web::extract_multi_web_urls(&result.item) {
             for url in urls {
                 let _ = action::open_url(&url);
@@ -687,6 +729,48 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
             for service in services {
                 let url = web::build_search_url(service, &web_query);
                 let _ = action::open_url(&url);
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+    }
+
+    // Spelling query from raw input
+    if let Some(spell_query) =
+        web::parse_spell_query_with_prefixes(&state.query, &state.spell_prefixes)
+    {
+        if !spell_query.is_empty() {
+            let items =
+                web::spell_result_items(&spell_query, &state.spell_providers, state.use_emoji);
+            if let Some(urls) = web::extract_spell_urls(&items[0]) {
+                for url in urls {
+                    let _ = action::open_url(&url);
+                }
+            }
+            if state.quit_on_launch {
+                state.should_quit = true;
+            }
+            return;
+        }
+    }
+
+    // Translate query from raw input
+    if let Some((direction, tr_query)) =
+        web::parse_translate_query_with_prefixes(&state.query, &state.translate_prefixes)
+    {
+        if !tr_query.is_empty() {
+            let items = web::translate_result_items(
+                &tr_query,
+                direction,
+                &state.translate_providers,
+                state.use_emoji,
+            );
+            if let Some(urls) = web::extract_translate_urls(&items[0]) {
+                for url in urls {
+                    let _ = action::open_url(&url);
+                }
             }
             if state.quit_on_launch {
                 state.should_quit = true;
@@ -810,6 +894,26 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
 /// Handle @prefix web service queries
 fn handle_web_query(query: &str, state: &mut AppState) {
     let emoji = state.use_emoji;
+    if let Some(spell_query) = web::parse_spell_query_with_prefixes(query, &state.spell_prefixes) {
+        state.results = items_to_results(
+            web::spell_result_items(&spell_query, &state.spell_providers, emoji),
+            SCORE_WEB_SEARCH,
+        );
+        state.search_mode = SearchMode::Contains;
+        state.selected_index = 0;
+        return;
+    }
+    if let Some((direction, tr_query)) =
+        web::parse_translate_query_with_prefixes(query, &state.translate_prefixes)
+    {
+        state.results = items_to_results(
+            web::translate_result_items(&tr_query, direction, &state.translate_providers, emoji),
+            SCORE_WEB_SEARCH,
+        );
+        state.search_mode = SearchMode::Contains;
+        state.selected_index = 0;
+        return;
+    }
     if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
         query,
         &state.selected_llm_providers,
