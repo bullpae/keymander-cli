@@ -607,6 +607,19 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     // Web query
     if result.item.kind == ItemKind::WebSearch {
         if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
+            if let Some((_services, prompt)) =
+                web::parse_multi_llm_query(&state.query, &state.selected_llm_providers)
+            {
+                if !prompt.is_empty() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(&prompt);
+                    }
+                    state.status_message = Some(
+                        "✅ @llm 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
+                            .to_string(),
+                    );
+                }
+            }
             for url in urls {
                 let _ = action::open_url(&url);
             }

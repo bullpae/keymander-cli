@@ -19,6 +19,7 @@ tokio = { version = "1", features = ["rt", "sync"] }
 
 # OS integration
 open = "5"
+arboard = "3.6.1"
 
 # Serialization (window state persistence)
 serde = { version = "1", features = ["derive"] }

@@ -245,7 +245,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
     if multi_match {
         items.push(IndexItem {
             name: "@llm        Compare multiple LLMs with one prompt".to_string(),
-            path: "Open selected LLM providers in parallel tabs".to_string(),
+            path: "Open selected LLM providers (some may require paste/Enter)".to_string(),
             kind: ItemKind::WebSearch,
             source: Source::Plugin,
             icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
@@ -306,7 +306,10 @@ pub fn multi_llm_result_items(
     // First item: open every selected LLM at once.
     items.push(IndexItem {
         name: format!("Multi LLM compare ({})", services.len()),
-        path: format!("Open all selected LLMs for: \"{}\"", query),
+        path: format!(
+            "Open all selected LLMs for: \"{}\" (some providers need paste/Enter)",
+            query
+        ),
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),

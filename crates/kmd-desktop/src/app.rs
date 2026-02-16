@@ -305,6 +305,18 @@ impl App {
 /// | `!`       | Shell command     | `!ip`, `!echo hello`           |
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
 impl App {
+    fn copy_multi_llm_prompt_to_clipboard(&self) {
+        if let Some((_services, prompt)) =
+            web::parse_multi_llm_query(&self.query, &self.selected_llm_providers)
+        {
+            if !prompt.is_empty() {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(prompt);
+                }
+            }
+        }
+    }
+
     fn perform_search(&mut self) -> Task<Message> {
         let query = self.query.clone();
         let trimmed = query.trim();
@@ -850,6 +862,7 @@ impl App {
 
         if result.item.kind == ItemKind::WebSearch {
             if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
+                self.copy_multi_llm_prompt_to_clipboard();
                 for url in urls {
                     let _ = kmd_core::action::open_url(&url);
                 }
