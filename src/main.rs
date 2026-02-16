@@ -93,6 +93,8 @@ enum Commands {
         #[arg(short, long)]
         copy: Option<usize>,
     },
+    /// Show version information
+    Version,
 }
 
 #[derive(Subcommand)]
@@ -256,6 +258,9 @@ fn main() -> color_eyre::Result<()> {
             copy,
         }) => {
             cmd::emoji::run(query.as_deref().unwrap_or(""), list, json, copy)?;
+        }
+        Some(Commands::Version) => {
+            cmd::version::run();
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)
         None => {

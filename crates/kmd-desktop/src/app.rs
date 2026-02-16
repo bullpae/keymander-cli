@@ -408,81 +408,108 @@ impl App {
             }
         };
 
-        let settings_entries: Vec<(String, &'static str, &'static str, &'static str)> = vec![
+        let mut settings_entries: Vec<(String, String, String, String)> = vec![
             (
                 "Edit Config File".to_string(),
-                "kmd:settings:config",
-                if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" },
-                "Open config.toml",
+                "kmd:settings:config".to_string(),
+                if emoji { "\u{2699}\u{FE0F}" } else { "[CFG]" }.to_string(),
+                "Open config.toml".to_string(),
             ),
             (
                 "Open Config Directory".to_string(),
-                "kmd:settings:dir",
-                if emoji { "\u{1F4C2}" } else { "[DIR]" },
-                "Open configuration folder",
+                "kmd:settings:dir".to_string(),
+                if emoji { "\u{1F4C2}" } else { "[DIR]" }.to_string(),
+                "Open configuration folder".to_string(),
             ),
             (
                 "Reset Window Position".to_string(),
-                "kmd:settings:reset_position",
-                if emoji { "\u{1F4CD}" } else { "[POS]" },
-                "Move window to default position",
+                "kmd:settings:reset_position".to_string(),
+                if emoji { "\u{1F4CD}" } else { "[POS]" }.to_string(),
+                "Move window to default position".to_string(),
             ),
             (
                 ime_label.to_string(),
-                "kmd:settings:toggle_ime_reset",
-                if emoji { "\u{1F310}" } else { "[IME]" },
-                "Toggle English input on launch",
+                "kmd:settings:toggle_ime_reset".to_string(),
+                if emoji { "\u{1F310}" } else { "[IME]" }.to_string(),
+                "Toggle English input on launch".to_string(),
             ),
             (
                 label("Theme: Midnight (default)", "Midnight"),
-                "kmd:settings:theme:midnight",
-                if emoji { "\u{1F319}" } else { "[THM]" },
-                "Switch desktop theme",
+                "kmd:settings:theme:midnight".to_string(),
+                if emoji { "\u{1F319}" } else { "[THM]" }.to_string(),
+                "Switch desktop theme".to_string(),
             ),
             (
                 label("Theme: Obsidian", "Obsidian"),
-                "kmd:settings:theme:obsidian",
-                if emoji { "\u{2B1B}" } else { "[THM]" },
-                "Switch desktop theme",
+                "kmd:settings:theme:obsidian".to_string(),
+                if emoji { "\u{2B1B}" } else { "[THM]" }.to_string(),
+                "Switch desktop theme".to_string(),
             ),
             (
                 label("Theme: Snow", "Snow"),
-                "kmd:settings:theme:snow",
-                if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" },
-                "Switch desktop theme",
+                "kmd:settings:theme:snow".to_string(),
+                if emoji { "\u{2600}\u{FE0F}" } else { "[THM]" }.to_string(),
+                "Switch desktop theme".to_string(),
             ),
             (
                 label("Theme: Rose Pine", "Rose Pine"),
-                "kmd:settings:theme:rose_pine",
-                if emoji { "\u{1F339}" } else { "[THM]" },
-                "Switch desktop theme",
+                "kmd:settings:theme:rose_pine".to_string(),
+                if emoji { "\u{1F339}" } else { "[THM]" }.to_string(),
+                "Switch desktop theme".to_string(),
             ),
             (
                 label("Theme: Nord", "Nord"),
-                "kmd:settings:theme:nord",
-                if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" },
-                "Switch desktop theme",
+                "kmd:settings:theme:nord".to_string(),
+                if emoji { "\u{2744}\u{FE0F}" } else { "[THM]" }.to_string(),
+                "Switch desktop theme".to_string(),
             ),
+        ];
+
+        let llm_rows = [
+            ("chatgpt", "ChatGPT"),
+            ("gemini", "Gemini"),
+            ("claude", "Claude"),
+            ("grok", "Grok"),
+            ("perplexity", "Perplexity"),
+        ];
+        for (id, provider_name) in llm_rows {
+            let enabled = self
+                .selected_llm_providers
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(id));
+            settings_entries.push((
+                format!(
+                    "Multi LLM: {} [{}]",
+                    provider_name,
+                    if enabled { "ON" } else { "OFF" }
+                ),
+                format!("kmd:settings:llm:toggle:{id}"),
+                if emoji { "\u{1F9E0}" } else { "[LLM]" }.to_string(),
+                "Toggle provider for @llm compare".to_string(),
+            ));
+        }
+
+        settings_entries.extend_from_slice(&[
             (
                 "Rebuild Index".to_string(),
-                "kmd:settings:rebuild",
-                if emoji { "\u{1F504}" } else { "[IDX]" },
-                "Rebuild and reload index data",
+                "kmd:settings:rebuild".to_string(),
+                if emoji { "\u{1F504}" } else { "[IDX]" }.to_string(),
+                "Rebuild and reload index data".to_string(),
             ),
             // Non-actionable info entries are intentionally at the bottom.
             (
                 "Info: Move Window (drag top strip)".to_string(),
-                "kmd:settings:noop",
-                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" },
-                "Info only - not executable",
+                "kmd:settings:noop".to_string(),
+                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" }.to_string(),
+                "Info only - not executable".to_string(),
             ),
             (
                 "Info: Resize Window (drag left/right edges)".to_string(),
-                "kmd:settings:noop",
-                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" },
-                "Info only - not executable",
+                "kmd:settings:noop".to_string(),
+                if emoji { "\u{2139}\u{FE0F}" } else { "[TIP]" }.to_string(),
+                "Info only - not executable".to_string(),
             ),
-        ];
+        ]);
 
         let items: Vec<IndexItem> = settings_entries
             .iter()
@@ -493,7 +520,7 @@ impl App {
                 icon: icon.to_string(),
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
-                keywords: action.to_string(),
+                keywords: action.clone(),
             })
             .collect();
 
@@ -656,6 +683,39 @@ impl App {
                 save_config(|cfg| cfg.general.reset_ime_on_launch = new_val);
 
                 // Re-open settings so the user sees the updated [ON/OFF] label.
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.resize_window();
+            }
+            llm_toggle if llm_toggle.starts_with("llm:toggle:") => {
+                let target = llm_toggle.strip_prefix("llm:toggle:").unwrap_or("");
+                if !target.is_empty() {
+                    if self
+                        .selected_llm_providers
+                        .iter()
+                        .any(|v| v.eq_ignore_ascii_case(target))
+                    {
+                        self.selected_llm_providers
+                            .retain(|v| !v.eq_ignore_ascii_case(target));
+                    } else {
+                        self.selected_llm_providers.push(target.to_string());
+                    }
+
+                    // Keep @llm usable even when users turn everything off.
+                    if self.selected_llm_providers.is_empty() {
+                        self.selected_llm_providers = vec![
+                            "chatgpt".to_string(),
+                            "gemini".to_string(),
+                            "claude".to_string(),
+                            "grok".to_string(),
+                            "perplexity".to_string(),
+                        ];
+                    }
+
+                    let selected = self.selected_llm_providers.clone();
+                    save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
+                }
+
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
                 return self.resize_window();

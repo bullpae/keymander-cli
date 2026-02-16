@@ -7,6 +7,7 @@ pub mod launch;
 pub mod plugin;
 pub mod portable;
 pub mod search;
+pub mod version;
 
 use std::path::PathBuf;
 

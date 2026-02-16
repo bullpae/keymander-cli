@@ -215,7 +215,7 @@ pub fn build_search_url(service: &WebService, query: &str) -> String {
 pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
     let filter_lower = filter.to_lowercase();
 
-    WEB_SERVICES
+    let mut items: Vec<IndexItem> = WEB_SERVICES
         .iter()
         .filter(|s| {
             filter_lower.is_empty()
@@ -234,7 +234,26 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
                 keywords: format!("{} {}", s.prefixes.join(" "), s.description),
             }
         })
-        .collect()
+        .collect();
+
+    // Virtual entry for multi-LLM compare so users discover `@llm` from `@` list.
+    let multi_match = filter_lower.is_empty()
+        || "@llm".contains(&filter_lower)
+        || "multi llm compare".contains(&filter_lower)
+        || "@multi".contains(&filter_lower)
+        || "@cmp".contains(&filter_lower);
+    if multi_match {
+        items.push(IndexItem {
+            name: "@llm        Compare multiple LLMs with one prompt".to_string(),
+            path: "Open selected LLM providers in parallel tabs".to_string(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
+            keywords: "@llm @multi @cmp multi llm compare".to_string(),
+        });
+    }
+
+    items
 }
 
 /// Create a search result item for a specific web query
@@ -423,5 +442,11 @@ mod tests {
         assert_eq!(urls.len(), 2);
         assert!(urls[0].contains("rust+lifetimes"));
         assert!(urls[1].contains("rust+lifetimes"));
+    }
+
+    #[test]
+    fn test_list_services_contains_llm_hint() {
+        let items = list_services_as_items("", false);
+        assert!(items.iter().any(|item| item.name.starts_with("@llm")));
     }
 }
