@@ -162,14 +162,28 @@ impl App {
             }
             Message::KeyEvent(key, _modifiers) => self.handle_key(key),
             Message::BrandClicked => {
-                // Left click logo: open quick command/help modes.
-                self.query = ":help".to_string();
-                self.perform_search()
+                // Toggle quick help.
+                if self.query.starts_with(":help") {
+                    self.query.clear();
+                    self.results.clear();
+                    self.selected = 0;
+                    self.resize_window()
+                } else {
+                    self.query = ":help".to_string();
+                    self.perform_search()
+                }
             }
             Message::BrandRightClicked => {
-                // Right click logo: jump to settings.
-                self.query = ":set".to_string();
-                self.perform_search()
+                // Toggle settings.
+                if self.query.starts_with(":set") {
+                    self.query.clear();
+                    self.results.clear();
+                    self.selected = 0;
+                    self.resize_window()
+                } else {
+                    self.query = ":set".to_string();
+                    self.perform_search()
+                }
             }
             Message::StartWindowDrag => match self.window_id {
                 Some(id) => window::drag(id),
@@ -609,8 +623,13 @@ impl App {
             return Task::none();
         };
 
-        // Help items are informational only.
-        if result.item.path.starts_with("Type ") {
+        // Help entries now act like quick templates.
+        if self.query.starts_with(":help") && result.item.path.starts_with("Type ") {
+            if let Some(seed) = help_query_seed(&result.item.name) {
+                self.query = seed.to_string();
+                self.selected = 0;
+                return self.perform_search();
+            }
             return Task::none();
         }
 
@@ -1040,6 +1059,28 @@ fn items_to_results(
             score: SCORE_PLUGIN,
         })
         .collect()
+}
+
+fn help_query_seed(name: &str) -> Option<&'static str> {
+    if name.starts_with("@") {
+        Some("@")
+    } else if name.starts_with(":calc") {
+        Some(":calc ")
+    } else if name.starts_with(":emoji") {
+        Some(":emoji ")
+    } else if name.starts_with(":set") {
+        Some(":set")
+    } else if name.starts_with("!") {
+        Some("!")
+    } else if name.starts_with("Fuzzy Search") {
+        Some("")
+    } else if name.starts_with("*.ext") {
+        Some("*")
+    } else if name.starts_with("/regex/") {
+        Some("/")
+    } else {
+        None
+    }
 }
 
 /// Load → mutate → save the user config file. Logs on failure.
