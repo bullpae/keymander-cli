@@ -430,7 +430,11 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-**v0.3.0** (current)
+**v0.3.1** (current)
+- Brand icons: Google, ChatGPT, Naver, etc. — actual PNG logos instead of emojis (kmd-desktop)
+- Icon flickering fix: LazyLock cache for stable texture rendering
+
+**v0.3.0**
 - Smart Directory Jump — multi-word path matching with frecency learning
 - Frecency history scoring (time-decay + frequency, capped boost)
 - History auto-pruning (zoxide-style aging algorithm)

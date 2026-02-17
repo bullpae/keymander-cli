@@ -1,10 +1,22 @@
-# Keymander v0.3.0 변경 내역
-
-> Phase 0 (구조 리팩토링) + Phase 1 (프롬프트 템플릿) + Phase 2 (Quick Transform) + Phase 3 (Smart Directory Jump) 작업 요약
+# Keymander v0.3.x 변경 내역
 
 ---
 
-## Phase 0: 구조 리팩토링
+## v0.3.1 (2026-02-17)
+
+### kmd-desktop: 브랜드 아이콘 적용
+
+- **이모지 → PNG 로고**: Google, YouTube, GitHub, ChatGPT, Naver, Daum 등 20개 서비스의 실제 브랜드 아이콘 표시
+- **아이콘 깜빡임 수정**: `Handle::from_bytes()` 매 프레임 호출로 인한 재디코딩 제거 → `LazyLock<HashMap>` 캐시로 1회 생성 후 clone 재사용
+- **영향**: `crates/kmd-desktop/src/brand_icons.rs` 신규, `app.rs` `view_result_row()` image 위젯 적용
+
+---
+
+## v0.3.0
+
+> Phase 0 (구조 리팩토링) + Phase 1 (프롬프트 템플릿) + Phase 2 (Quick Transform) + Phase 3 (Smart Directory Jump) 작업 요약
+
+### Phase 0: 구조 리팩토링
 
 ### 0-1. web.rs → web/ 모듈 디렉토리 분리
 

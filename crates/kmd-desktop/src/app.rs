@@ -16,7 +16,7 @@ use iced::keyboard;
 use iced::widget::operation::scroll_to;
 use iced::widget::scrollable as scrollable_mod;
 use iced::widget::{
-    column, container, mouse_area, row, scrollable, text, text_input, Column, Space,
+    column, container, image, mouse_area, row, scrollable, text, text_input, Column, Space,
 };
 use iced::{
     window, Background, Border, Color, Element, Fill, Padding, Point, Shadow, Size, Subscription,
@@ -1697,7 +1697,13 @@ impl App {
                 ..Default::default()
             });
 
-        let icon = text(&item.icon).size(22);
+        let icon_element: Element<'_, Message> = if let Some(handle) =
+            crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
+        {
+            image(handle).width(22).height(22).into()
+        } else {
+            text(&item.icon).size(22).into()
+        };
         let title = text(&item.name).size(14).color(t.text);
         let subtitle = text(&item.path).size(11).color(t.subtext);
         let info = column![title, subtitle].spacing(2);
@@ -1730,10 +1736,16 @@ impl App {
             Color::TRANSPARENT
         };
 
-        let row_content = row![left_bar, icon, info, Space::new().width(Fill), badge]
-            .spacing(10)
-            .align_y(iced::Alignment::Center)
-            .padding(Padding::from([4, 12]));
+        let row_content = row![
+            left_bar,
+            icon_element,
+            info,
+            Space::new().width(Fill),
+            badge
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center)
+        .padding(Padding::from([4, 12]));
 
         mouse_area(
             container(row_content)
