@@ -46,22 +46,21 @@ const QUIT_POLL_MS: u64 = 300;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
-type EngineSlot = Arc<
-    Mutex<
-        Option<(
-            kmd_core::SearchEngine,
-            bool,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-            Vec<String>,
-        )>,
-    >,
->;
+/// 비동기 엔진 로드 결과 — 10-tuple 대신 명확한 필드로 관리
+struct EngineLoadResult {
+    engine: kmd_core::SearchEngine,
+    use_emoji: bool,
+    llm_providers: Vec<String>,
+    multi_web_providers: Vec<String>,
+    llm_prefixes: Vec<String>,
+    multi_web_prefixes: Vec<String>,
+    spell_providers: Vec<String>,
+    spell_prefixes: Vec<String>,
+    translate_providers: Vec<String>,
+    translate_prefixes: Vec<String>,
+}
+
+type EngineSlot = Arc<Mutex<Option<EngineLoadResult>>>;
 
 // ─── App State ────────────────────────────────────────────────────────────────
 
@@ -146,27 +145,19 @@ impl App {
         let load_task = Task::future(async move {
             let _ = tokio::task::spawn_blocking(move || {
                 let eng = crate::engine::create_search_engine(&config);
-                let emoji = config.general.emoji_icons;
-                let llm = config.launcher.multi_llm_providers.clone();
-                let llm_prefix = config.launcher.multi_llm_prefixes.clone();
-                let mweb = config.launcher.multi_web_providers.clone();
-                let mweb_prefix = config.launcher.multi_web_prefixes.clone();
-                let spell = config.launcher.spell_providers.clone();
-                let spell_prefix = config.launcher.spell_prefixes.clone();
-                let translate = config.launcher.translate_providers.clone();
-                let translate_prefix = config.launcher.translate_prefixes.clone();
-                *slot_for_task.lock().expect("engine_slot poisoned") = Some((
-                    eng,
-                    emoji,
-                    llm,
-                    mweb,
-                    llm_prefix,
-                    mweb_prefix,
-                    spell,
-                    spell_prefix,
-                    translate,
-                    translate_prefix,
-                ));
+                *slot_for_task.lock().expect("engine_slot poisoned") =
+                    Some(EngineLoadResult {
+                        engine: eng,
+                        use_emoji: config.general.emoji_icons,
+                        llm_providers: config.launcher.multi_llm_providers.clone(),
+                        multi_web_providers: config.launcher.multi_web_providers.clone(),
+                        llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+                        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+                        spell_providers: config.launcher.spell_providers.clone(),
+                        spell_prefixes: config.launcher.spell_prefixes.clone(),
+                        translate_providers: config.launcher.translate_providers.clone(),
+                        translate_prefixes: config.launcher.translate_prefixes.clone(),
+                    });
             })
             .await;
             Message::EngineReady
@@ -276,29 +267,17 @@ impl App {
                     .expect("engine_slot poisoned")
                     .take();
 
-                if let Some((
-                    engine,
-                    emoji,
-                    llm,
-                    mweb,
-                    llm_prefix,
-                    mweb_prefix,
-                    spell,
-                    spell_prefix,
-                    translate,
-                    translate_prefix,
-                )) = loaded
-                {
-                    self.engine = engine;
-                    self.use_emoji = emoji;
-                    self.selected_llm_providers = llm;
-                    self.selected_multi_web_providers = mweb;
-                    self.multi_llm_prefixes = llm_prefix;
-                    self.multi_web_prefixes = mweb_prefix;
-                    self.spell_providers = spell;
-                    self.spell_prefixes = spell_prefix;
-                    self.translate_providers = translate;
-                    self.translate_prefixes = translate_prefix;
+                if let Some(res) = loaded {
+                    self.engine = res.engine;
+                    self.use_emoji = res.use_emoji;
+                    self.selected_llm_providers = res.llm_providers;
+                    self.selected_multi_web_providers = res.multi_web_providers;
+                    self.multi_llm_prefixes = res.llm_prefixes;
+                    self.multi_web_prefixes = res.multi_web_prefixes;
+                    self.spell_providers = res.spell_providers;
+                    self.spell_prefixes = res.spell_prefixes;
+                    self.translate_providers = res.translate_providers;
+                    self.translate_prefixes = res.translate_prefixes;
                     self.loading = false;
                     tracing::info!("Search engine ready");
                     if !self.query.trim().is_empty() {
@@ -378,6 +357,7 @@ impl App {
 /// | `!`       | Shell command     | `!ip`, `!echo hello`           |
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
 impl App {
+    /// LLM 멀티 프롬프트를 클립보드에 복사 (템플릿 적용 포함)
     fn copy_multi_llm_prompt_to_clipboard(&self) {
         if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
             &self.query,
@@ -385,8 +365,13 @@ impl App {
             &self.multi_llm_prefixes,
         ) {
             if !prompt.is_empty() {
+                let config = crate::engine::load_config();
+                let final_prompt = kmd_core::prompt::apply_template(
+                    &config.launcher.prompt_templates,
+                    &prompt,
+                );
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(prompt);
+                    let _ = clipboard.set_text(final_prompt);
                 }
             }
         }
@@ -402,6 +387,8 @@ impl App {
         } else {
             match prefix_of(trimmed) {
                 Prefix::Web => self.handle_web_query(trimmed),
+                Prefix::Transform => self.handle_transform_query(trimmed),
+                Prefix::Prompt => self.handle_prompt_query(trimmed),
                 Prefix::Calc => self.handle_calc_query(trimmed),
                 Prefix::Emoji => self.handle_emoji_query(trimmed),
                 Prefix::Settings => self.handle_settings_query(trimmed),
@@ -415,77 +402,65 @@ impl App {
         self.resize_window()
     }
 
+    /// classify_web_query 통합 분류기 사용
     fn handle_web_query(&mut self, query: &str) {
         let emoji = self.use_emoji;
-        if let Some(spell_query) = web::parse_spell_query_with_prefixes(query, &self.spell_prefixes)
-        {
-            self.results = items_to_results(web::spell_result_items(
-                &spell_query,
-                &self.spell_providers,
-                emoji,
-            ));
-            self.search_mode = kmd_core::SearchMode::Contains;
-            self.selected = 0;
-            return;
-        }
-        if let Some((direction, tr_query)) =
-            web::parse_translate_query_with_prefixes(query, &self.translate_prefixes)
-        {
-            self.results = items_to_results(web::translate_result_items(
-                &tr_query,
-                direction,
-                &self.translate_providers,
-                emoji,
-            ));
-            self.search_mode = kmd_core::SearchMode::Contains;
-            self.selected = 0;
-            return;
-        }
-        if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
-            query,
-            &self.selected_llm_providers,
-            &self.multi_llm_prefixes,
-        ) {
-            self.results = items_to_results(web::multi_llm_result_items(
-                &q,
-                &self.selected_llm_providers,
-                emoji,
-            ));
-            self.search_mode = kmd_core::SearchMode::Contains;
-            self.selected = 0;
-            return;
-        }
-        if let Some((_services, q)) = web::parse_multi_web_query_with_prefixes(
-            query,
-            &self.selected_multi_web_providers,
-            &self.multi_web_prefixes,
-        ) {
-            self.results = items_to_results(web::multi_web_result_items(
-                &q,
-                &self.selected_multi_web_providers,
-                emoji,
-            ));
-            self.search_mode = kmd_core::SearchMode::Contains;
-            self.selected = 0;
-            return;
-        }
+        let cfg = web::WebQueryConfig {
+            spell_prefixes: &self.spell_prefixes,
+            translate_prefixes: &self.translate_prefixes,
+            multi_llm_prefixes: &self.multi_llm_prefixes,
+            multi_llm_ids: &self.selected_llm_providers,
+            multi_web_prefixes: &self.multi_web_prefixes,
+            multi_web_ids: &self.selected_multi_web_providers,
+        };
 
-        if let Some((service, q)) = web::parse_web_query(query) {
-            if q.is_empty() {
-                let mut items = web::list_services_as_items("", emoji);
+        match web::classify_web_query(query, &cfg) {
+            web::WebQueryResult::Spell(q) => {
+                self.results = items_to_results(web::spell_result_items(
+                    &q,
+                    &self.spell_providers,
+                    emoji,
+                ));
+            }
+            web::WebQueryResult::Translate(dir, q) => {
+                self.results = items_to_results(web::translate_result_items(
+                    &q,
+                    dir,
+                    &self.translate_providers,
+                    emoji,
+                ));
+            }
+            web::WebQueryResult::MultiLlm(_svcs, q) => {
+                self.results = items_to_results(web::multi_llm_result_items(
+                    &q,
+                    &self.selected_llm_providers,
+                    emoji,
+                ));
+            }
+            web::WebQueryResult::MultiWeb(_svcs, q) => {
+                self.results = items_to_results(web::multi_web_result_items(
+                    &q,
+                    &self.selected_multi_web_providers,
+                    emoji,
+                ));
+            }
+            web::WebQueryResult::Single(service, q) => {
+                if q.is_empty() {
+                    let mut items = web::list_services_as_items("", emoji);
+                    ensure_multi_llm_hint(&mut items, emoji);
+                    ensure_multi_web_hint(&mut items, emoji);
+                    self.results = items_to_results(items);
+                } else {
+                    let item = web::search_result_item(service, &q, emoji);
+                    self.results = items_to_results(std::iter::once(item));
+                }
+            }
+            web::WebQueryResult::Browse(filter) => {
+                let mut items = web::list_services_as_items(&filter, emoji);
                 ensure_multi_llm_hint(&mut items, emoji);
                 ensure_multi_web_hint(&mut items, emoji);
                 self.results = items_to_results(items);
-            } else {
-                let item = web::search_result_item(service, &q, emoji);
-                self.results = items_to_results(std::iter::once(item));
             }
-        } else {
-            let filter = query.trim_start_matches('@');
-            let mut items = web::list_services_as_items(filter, emoji);
-            ensure_multi_llm_hint(&mut items, emoji);
-            ensure_multi_web_hint(&mut items, emoji);
-            self.results = items_to_results(items);
         }
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
@@ -520,6 +495,179 @@ impl App {
             },
         ];
         self.results = items_to_results(version_items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    /// :t / :transform 쿼리 처리 (클립보드 변환)
+    fn handle_transform_query(&mut self, query: &str) {
+        use kmd_core::transform;
+
+        match transform::parse_transform_query(query) {
+            Some(mut tq) => {
+                // 텍스트가 비어있으면 클립보드에서 가져오기
+                if tq.text.is_empty() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Ok(text) = clipboard.get_text() {
+                            tq.text = text;
+                        }
+                    }
+                }
+                if tq.text.is_empty() {
+                    self.results = items_to_results(std::iter::once(IndexItem {
+                        name: "❌ 클립보드가 비어 있습니다".to_string(),
+                        path: "텍스트를 복사한 후 다시 시도하세요".to_string(),
+                        kind: ItemKind::SystemCommand,
+                        source: Source::Plugin,
+                        icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[!]" }
+                            .to_string(),
+                        keywords: "kmd:settings:noop".to_string(),
+                    }));
+                    self.selected = 0;
+                    return;
+                }
+
+                let urls = transform::build_transform_urls(
+                    &tq,
+                    &self.spell_providers,
+                    &self.translate_providers,
+                );
+                for url in &urls {
+                    let _ = kmd_core::action::open_url(url);
+                }
+                self.results.clear();
+                self.selected = 0;
+            }
+            None => {
+                let items = transform::help_items(self.use_emoji);
+                self.results = items_to_results(items);
+                self.search_mode = kmd_core::SearchMode::Contains;
+                self.selected = 0;
+            }
+        }
+    }
+
+    /// :prompt / :pt 쿼리 처리
+    fn handle_prompt_query(&mut self, query: &str) {
+        let sub = query
+            .strip_prefix(":prompt")
+            .or_else(|| query.strip_prefix(":pt"))
+            .unwrap_or("")
+            .trim();
+
+        let config = crate::engine::load_config();
+        let templates = &config.launcher.prompt_templates;
+
+        // :prompt add <name> <body>
+        if sub.starts_with("add ") {
+            let rest = sub.strip_prefix("add ").unwrap_or("").trim();
+            if let Some(pos) = rest.find(char::is_whitespace) {
+                let name = &rest[..pos];
+                let body = rest[pos..].trim();
+                if !kmd_core::prompt::validate_template_name(name) {
+                    self.results = items_to_results(std::iter::once(IndexItem {
+                        name: format!("❌ 잘못된 이름: '{name}'"),
+                        path: "영문/숫자/하이픈/언더스코어만, 최대 32자".to_string(),
+                        kind: ItemKind::SystemCommand,
+                        source: Source::Plugin,
+                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
+                        keywords: "kmd:settings:noop".to_string(),
+                    }));
+                } else if body.is_empty() {
+                    self.results = items_to_results(std::iter::once(IndexItem {
+                        name: "❌ 본문이 비어 있습니다".to_string(),
+                        path: ":prompt add <name> <body> 형태로 입력하세요".to_string(),
+                        kind: ItemKind::SystemCommand,
+                        source: Source::Plugin,
+                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
+                        keywords: "kmd:settings:noop".to_string(),
+                    }));
+                } else {
+                    let mut cfg = config;
+                    cfg.launcher
+                        .prompt_templates
+                        .retain(|t| !t.name.eq_ignore_ascii_case(name));
+                    cfg.launcher
+                        .prompt_templates
+                        .push(kmd_core::config::PromptTemplate {
+                            name: name.to_string(),
+                            body: body.to_string(),
+                        });
+                    save_config(move |c| c.launcher.prompt_templates = cfg.launcher.prompt_templates);
+                    self.results = items_to_results(std::iter::once(IndexItem {
+                        name: format!("✅ 템플릿 '{name}' 저장됨"),
+                        path: format!("@ll :{name} <query> 형태로 사용"),
+                        kind: ItemKind::SystemCommand,
+                        source: Source::Plugin,
+                        icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
+                        keywords: "kmd:settings:noop".to_string(),
+                    }));
+                }
+            } else {
+                self.results = items_to_results(std::iter::once(IndexItem {
+                    name: "사용법: :prompt add <name> <body>".to_string(),
+                    path: "예: :prompt add review 코드를 리뷰해주세요".to_string(),
+                    kind: ItemKind::SystemCommand,
+                    source: Source::Plugin,
+                    icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[?]" }.to_string(),
+                    keywords: "kmd:settings:noop".to_string(),
+                }));
+            }
+            self.selected = 0;
+            return;
+        }
+
+        // :prompt remove/rm/del <name>
+        if sub.starts_with("remove ") || sub.starts_with("rm ") || sub.starts_with("del ") {
+            let name = sub
+                .strip_prefix("remove ")
+                .or_else(|| sub.strip_prefix("rm "))
+                .or_else(|| sub.strip_prefix("del "))
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() {
+                self.results = items_to_results(std::iter::once(IndexItem {
+                    name: "사용법: :prompt remove <name>".to_string(),
+                    path: "삭제할 템플릿 이름을 입력하세요".to_string(),
+                    kind: ItemKind::SystemCommand,
+                    source: Source::Plugin,
+                    icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[?]" }.to_string(),
+                    keywords: "kmd:settings:noop".to_string(),
+                }));
+            } else if templates.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
+                let name_owned = name.to_string();
+                let display_name = name.to_string();
+                save_config(move |cfg| {
+                    cfg.launcher
+                        .prompt_templates
+                        .retain(|t| !t.name.eq_ignore_ascii_case(&name_owned));
+                });
+                self.results = items_to_results(std::iter::once(IndexItem {
+                    name: format!("✅ 템플릿 '{display_name}' 삭제됨"),
+                    path: String::new(),
+                    kind: ItemKind::SystemCommand,
+                    source: Source::Plugin,
+                    icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
+                    keywords: "kmd:settings:noop".to_string(),
+                }));
+            } else {
+                self.results = items_to_results(std::iter::once(IndexItem {
+                    name: format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"),
+                    path: String::new(),
+                    kind: ItemKind::SystemCommand,
+                    source: Source::Plugin,
+                    icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
+                    keywords: "kmd:settings:noop".to_string(),
+                }));
+            }
+            self.selected = 0;
+            return;
+        }
+
+        let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
+        let items =
+            kmd_core::prompt::list_templates_as_items(templates, filter, self.use_emoji);
+        self.results = items_to_results(items);
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
     }
@@ -795,6 +943,16 @@ impl App {
                 if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" },
             ),
             (
+                ":t  Quick Transform",
+                "Type :t spell/tr/trko/tren  (clipboard text → spell/translate)",
+                if emoji { "\u{26A1}" } else { "[QT]" },
+            ),
+            (
+                ":prompt  Prompt Templates",
+                "Type :prompt  (manage reusable prompt templates for @ll)",
+                if emoji { "\u{1F4DD}" } else { "[PT]" },
+            ),
+            (
                 ":version  Version Info",
                 "Type :version  (show desktop/core/target/os versions)",
                 if emoji { "\u{1F4E6}" } else { "[VER]" },
@@ -936,27 +1094,19 @@ impl App {
                     let _ = tokio::task::spawn_blocking(move || {
                         let config = crate::engine::load_config();
                         let eng = crate::engine::create_search_engine(&config);
-                        let emoji = config.general.emoji_icons;
-                        let llm = config.launcher.multi_llm_providers.clone();
-                        let llm_prefix = config.launcher.multi_llm_prefixes.clone();
-                        let mweb = config.launcher.multi_web_providers.clone();
-                        let mweb_prefix = config.launcher.multi_web_prefixes.clone();
-                        let spell = config.launcher.spell_providers.clone();
-                        let spell_prefix = config.launcher.spell_prefixes.clone();
-                        let translate = config.launcher.translate_providers.clone();
-                        let translate_prefix = config.launcher.translate_prefixes.clone();
-                        *slot.lock().expect("engine_slot poisoned") = Some((
-                            eng,
-                            emoji,
-                            llm,
-                            mweb,
-                            llm_prefix,
-                            mweb_prefix,
-                            spell,
-                            spell_prefix,
-                            translate,
-                            translate_prefix,
-                        ));
+                        *slot.lock().expect("engine_slot poisoned") =
+                            Some(EngineLoadResult {
+                                engine: eng,
+                                use_emoji: config.general.emoji_icons,
+                                llm_providers: config.launcher.multi_llm_providers.clone(),
+                                multi_web_providers: config.launcher.multi_web_providers.clone(),
+                                llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+                                multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+                                spell_providers: config.launcher.spell_providers.clone(),
+                                spell_prefixes: config.launcher.spell_prefixes.clone(),
+                                translate_providers: config.launcher.translate_providers.clone(),
+                                translate_prefixes: config.launcher.translate_prefixes.clone(),
+                            });
                     })
                     .await;
                     Message::EngineReady
@@ -1158,27 +1308,13 @@ impl App {
             self.window_state.save();
         }
 
+        // 웹 검색 결과 — extract_batch_urls 통합 추출
         if result.item.kind == ItemKind::WebSearch {
-            if let Some(urls) = web::extract_translate_urls(&result.item) {
-                for url in urls {
-                    let _ = kmd_core::action::open_url(&url);
+            if let Some(urls) = web::extract_batch_urls(&result.item) {
+                // LLM 멀티 프롬프트인 경우 클립보드에 프롬프트 복사
+                if web::extract_multi_llm_urls(&result.item).is_some() {
+                    self.copy_multi_llm_prompt_to_clipboard();
                 }
-                return iced::exit();
-            }
-            if let Some(urls) = web::extract_spell_urls(&result.item) {
-                for url in urls {
-                    let _ = kmd_core::action::open_url(&url);
-                }
-                return iced::exit();
-            }
-            if let Some(urls) = web::extract_multi_web_urls(&result.item) {
-                for url in urls {
-                    let _ = kmd_core::action::open_url(&url);
-                }
-                return iced::exit();
-            }
-            if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
-                self.copy_multi_llm_prompt_to_clipboard();
                 for url in urls {
                     let _ = kmd_core::action::open_url(&url);
                 }
@@ -1280,6 +1416,8 @@ impl App {
 
 enum Prefix {
     Web,
+    Transform,
+    Prompt,
     Calc,
     Emoji,
     Settings,
@@ -1292,6 +1430,10 @@ enum Prefix {
 fn prefix_of(query: &str) -> Prefix {
     if query.starts_with('@') {
         Prefix::Web
+    } else if query.starts_with(":transform") || query.starts_with(":t ") || query == ":t" {
+        Prefix::Transform
+    } else if query.starts_with(":prompt") || query.starts_with(":pt") {
+        Prefix::Prompt
     } else if query.starts_with(":calc") {
         Prefix::Calc
     } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {

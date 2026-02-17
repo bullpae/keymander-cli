@@ -7,6 +7,7 @@ pub mod keymap;
 pub mod launch;
 pub mod plugin;
 pub mod portable;
+pub mod prompt;
 pub mod search;
 pub mod version;
 

@@ -93,6 +93,11 @@ enum Commands {
         #[arg(short, long)]
         copy: Option<usize>,
     },
+    /// Manage prompt templates for @ll multi-LLM
+    Prompt {
+        #[command(subcommand)]
+        action: Option<PromptAction>,
+    },
     /// Show version information
     Version,
     /// Manage keymap backend (Kanata prototype)
@@ -150,6 +155,24 @@ enum PortableAction {
     Enable,
     /// Disable portable mode (migrate data to system paths, remove kmd-data/)
     Disable,
+}
+
+#[derive(Subcommand)]
+enum PromptAction {
+    /// List saved prompt templates
+    List,
+    /// Add a new prompt template
+    Add {
+        /// Template name (alphanumeric, hyphens, underscores)
+        name: String,
+        /// Template body ({query} placeholder supported)
+        body: String,
+    },
+    /// Remove a prompt template
+    Remove {
+        /// Template name to remove
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -279,6 +302,13 @@ fn main() -> color_eyre::Result<()> {
             copy,
         }) => {
             cmd::emoji::run(query.as_deref().unwrap_or(""), list, json, copy)?;
+        }
+        Some(Commands::Prompt { action }) => {
+            cmd::prompt::run(action.map(|a| match a {
+                PromptAction::List => cmd::prompt::Action::List,
+                PromptAction::Add { name, body } => cmd::prompt::Action::Add { name, body },
+                PromptAction::Remove { name } => cmd::prompt::Action::Remove { name },
+            }))?;
         }
         Some(Commands::Version) => {
             cmd::version::run();

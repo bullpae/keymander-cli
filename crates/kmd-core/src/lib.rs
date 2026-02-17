@@ -12,8 +12,10 @@ pub mod index;
 pub mod keymap;
 pub mod plugin;
 pub mod portable;
+pub mod prompt;
 pub mod search;
 pub mod single_instance;
+pub mod transform;
 pub mod web;
 
 /// Re-export commonly used types

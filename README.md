@@ -23,6 +23,9 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Lightweight**: ~3MB binary, instant startup, <5MB RAM
 - **Portable**: Single binary + SQLite DB + TOML config = done
 - **Smart search**: Fuzzy (Nucleo), glob, regex, substring, URL detection
+- **Smart Directory Jump**: Multi-word path matching with frecency-based learning (zoxide-style)
+  - `2026 출장이력` → matches `c:\2026\work\출장이력` (each token matches a path segment)
+  - Frequently selected directories rank higher in future searches
 - **File & folder indexing**: Indexes both files and directories with configurable scan scope
 - **Folder drill-down** (TUI): Navigate into folders with Tab/→, go back with ←/Esc
 - **Web services**: `@g rust tutorial`, `@gh keymander`, `@yt lofi music`
@@ -32,11 +35,14 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Korean spelling check**: `@sp 문장` opens selected spelling check providers
 - **Translate EN↔KO**: `@tr text`, `@trko text`, `@tren text`
 - **Keymap backend prototype**: `kmd keymap ...` to manage Kanata profile/process
+- **Prompt templates**: `:prompt add review "Review this code: {query}"` → `@ll :review code`
+- **Quick Transform**: `:t spell text`, `:t trko text` — clipboard → spell check / translate instantly
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
 - **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
 - **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
 - **Single-instance toggle**: Hotkey press toggles on/off — no duplicate windows
-- **History-aware** (TUI): Frequently used items bubble to the top
+- **Frecency history**: Recently and frequently used items bubble to the top (time-decay scoring)
+- **History auto-pruning**: Aging algorithm prevents database from growing unboundedly
 - **Plugin system**: Extension trait + script-based plugins (JSON over stdin/stdout)
 - **Settings** (TUI): F2 key opens settings modal; (Desktop): `:set` command
 - **Theming** (Desktop): 5 built-in presets — Midnight, Obsidian, Snow, Rose Pine, Nord
@@ -178,7 +184,8 @@ kmd daemon status
 | `*` or `?` | Glob | `*.pdf`, `test?.rs` |
 | `/pattern/` | Regex | `/test\d+/` |
 | `.ext` | Extension | `.pdf` → `*.pdf` |
-| Non-ASCII | Contains | `한글` (exact substring) |
+| Non-ASCII (single word) | Contains | `한글` (exact substring) |
+| Non-ASCII (multi-word) | Smart Match | `2026 출장이력` (AND match on path segments) |
 | URL-like | URL | `github.com` → opens browser |
 
 ## Special Command Prefixes
@@ -423,7 +430,21 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-**v0.2.0** (current)
+**v0.3.0** (current)
+- Smart Directory Jump — multi-word path matching with frecency learning
+- Frecency history scoring (time-decay + frequency, capped boost)
+- History auto-pruning (zoxide-style aging algorithm)
+- Web module refactoring (`web.rs` → `web/` directory with services, parsers, items)
+- Prompt templates: `:prompt add review "Review this code: {query}"` → `@ll :review code`
+- Quick Transform: `:t spell text`, `:t trko text` — clipboard → spell check / translate
+- Korean spelling check: `@sp 문장` opens selected providers
+- Translate: `@tr text`, `@trko text`, `@tren text`
+- Multi web search: `@m query` opens Google/Naver/Daum together
+- Keymap backend prototype: `kmd keymap` with Kanata integration
+- Custom command aliases: user-configurable prefixes for all multi-service commands
+- DB migration v2: `executed_at` index for frecency query performance
+
+**v0.2.0**
 - Desktop GUI launcher (kmd-desktop) with iced
 - 5 built-in themes (Midnight, Obsidian, Snow, Rose Pine, Nord)
 - Emoji search & copy (English + Korean)

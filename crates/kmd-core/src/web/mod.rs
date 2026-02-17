@@ -1,0 +1,214 @@
+//! Web service integration — @prefix 기반 웹/LLM/맞춤법/번역 쿼리 처리
+//!
+//! 서브모듈 구조:
+//! - `services`: 서비스 정의, 상수, provider 선택
+//! - `parsers`: @ 쿼리 파싱, 통합 분류기 (`classify_web_query`)
+//! - `items`: IndexItem 생성, URL 추출, 목록
+
+pub mod items;
+pub mod parsers;
+pub mod services;
+
+// ── re-export — 기존 `web::*` 임포트를 깨뜨리지 않도록 ──────────────────────
+
+pub use items::{
+    build_search_url, build_translate_url, extract_batch_urls, extract_multi_llm_urls,
+    extract_multi_web_urls, extract_spell_urls, extract_translate_urls, list_services_as_items,
+    multi_llm_result_items, multi_web_result_items, search_result_item, spell_result_items,
+    translate_result_items, url_encode,
+};
+
+pub use parsers::{
+    classify_web_query, parse_multi_llm_query, parse_multi_llm_query_with_prefixes,
+    parse_multi_web_query, parse_multi_web_query_with_prefixes,
+    parse_spell_query_with_prefixes, parse_translate_query_with_prefixes, parse_web_query,
+    WebQueryConfig, WebQueryResult,
+};
+
+pub use services::{
+    is_llm_id, is_multi_web_id, is_spell_id, is_translate_id, selected_llm_services,
+    selected_multi_web_services, selected_spell_services, selected_translate_services,
+    HasId, SpellService, TranslateDirection, TranslateService, WebService,
+    SPELL_SERVICES, TRANSLATE_SERVICES, WEB_SERVICES,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_google() {
+        let result = parse_web_query("@g rust tutorial");
+        assert!(result.is_some());
+        let (service, query) = result.unwrap();
+        assert_eq!(service.name, "Google");
+        assert_eq!(query, "rust tutorial");
+    }
+
+    #[test]
+    fn test_parse_no_query() {
+        let result = parse_web_query("@yt");
+        assert!(result.is_some());
+        let (_, query) = result.unwrap();
+        assert_eq!(query, "");
+    }
+
+    #[test]
+    fn test_unknown_prefix() {
+        assert!(parse_web_query("@unknown test").is_none());
+    }
+
+    #[test]
+    fn test_build_url() {
+        let service = &WEB_SERVICES[0]; // Google
+        let url = build_search_url(service, "rust tutorial");
+        assert_eq!(url, "https://google.com/search?q=rust+tutorial");
+    }
+
+    #[test]
+    fn test_parse_multi_llm_query() {
+        let selected = vec!["chatgpt".to_string(), "claude".to_string()];
+        let parsed = parse_multi_llm_query("@llm compare rust ownership", &selected);
+        assert!(parsed.is_some());
+        let (services, q) = parsed.unwrap();
+        assert_eq!(q, "compare rust ownership");
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].id, "chatgpt");
+        assert_eq!(services[1].id, "claude");
+    }
+
+    #[test]
+    fn test_parse_multi_llm_custom_prefix() {
+        let selected = vec!["chatgpt".to_string()];
+        let prefixes = vec!["@askllm".to_string()];
+        let parsed =
+            parse_multi_llm_query_with_prefixes("@askllm rust async", &selected, &prefixes);
+        assert!(parsed.is_some());
+        let (_, q) = parsed.unwrap();
+        assert_eq!(q, "rust async");
+    }
+
+    #[test]
+    fn test_parse_multi_web_query() {
+        let selected = vec!["google".to_string(), "daum".to_string()];
+        let parsed = parse_multi_web_query("@msearch rust ownership", &selected);
+        assert!(parsed.is_some());
+        let (services, q) = parsed.unwrap();
+        assert_eq!(q, "rust ownership");
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].id, "google");
+        assert_eq!(services[1].id, "daum");
+    }
+
+    #[test]
+    fn test_parse_multi_web_custom_prefix() {
+        let selected = vec!["google".to_string()];
+        let prefixes = vec!["@searchx".to_string()];
+        let parsed = parse_multi_web_query_with_prefixes("@searchx rust", &selected, &prefixes);
+        assert!(parsed.is_some());
+        let (_, q) = parsed.unwrap();
+        assert_eq!(q, "rust");
+    }
+
+    #[test]
+    fn test_parse_spell_query() {
+        let prefixes = vec!["@sp".to_string(), "@spell".to_string()];
+        let parsed = parse_spell_query_with_prefixes("@sp 안녕 하세요", &prefixes);
+        assert_eq!(parsed, Some("안녕 하세요".to_string()));
+    }
+
+    #[test]
+    fn test_parse_translate_query() {
+        let prefixes = vec!["@tr".to_string(), "@trko".to_string(), "@tren".to_string()];
+        let parsed = parse_translate_query_with_prefixes("@trko hello world", &prefixes).unwrap();
+        assert_eq!(parsed.0, TranslateDirection::EnToKo);
+        assert_eq!(parsed.1, "hello world");
+    }
+
+    #[test]
+    fn test_multi_llm_item_urls_roundtrip() {
+        let selected = vec!["chatgpt".to_string(), "gemini".to_string()];
+        let items = multi_llm_result_items("rust lifetimes", &selected, false);
+        assert!(!items.is_empty());
+        let urls = extract_multi_llm_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("rust+lifetimes"));
+        assert!(urls[1].contains("rust+lifetimes"));
+    }
+
+    #[test]
+    fn test_multi_web_item_urls_roundtrip() {
+        let selected = vec!["google".to_string(), "naver_search".to_string()];
+        let items = multi_web_result_items("러스트 소유권", &selected, false);
+        assert!(!items.is_empty());
+        let urls = extract_multi_web_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("%EB%9F%AC%EC%8A%A4%ED%8A%B8"));
+    }
+
+    #[test]
+    fn test_spell_item_urls_roundtrip() {
+        let selected = vec!["naver_spell".to_string(), "pusan_spell".to_string()];
+        let items = spell_result_items("문장 검사", &selected, false);
+        let urls = extract_spell_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+    }
+
+    #[test]
+    fn test_translate_item_urls_roundtrip() {
+        let selected = vec!["google_translate".to_string(), "papago".to_string()];
+        let items = translate_result_items("hello", TranslateDirection::EnToKo, &selected, false);
+        let urls = extract_translate_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("sl=en"));
+    }
+
+    #[test]
+    fn test_list_services_contains_llm_hint() {
+        let items = list_services_as_items("", false);
+        assert!(items
+            .iter()
+            .any(|item| item.name.starts_with("@ll") || item.name.starts_with("@llm")));
+    }
+
+    #[test]
+    fn test_extract_batch_urls_works() {
+        let selected = vec!["chatgpt".to_string(), "gemini".to_string()];
+        let items = multi_llm_result_items("test", &selected, false);
+        let urls = extract_batch_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 2);
+    }
+
+    #[test]
+    fn test_classify_web_query() {
+        let cfg = WebQueryConfig {
+            spell_prefixes: &[],
+            translate_prefixes: &[],
+            multi_llm_prefixes: &[],
+            multi_llm_ids: &["chatgpt".to_string()],
+            multi_web_prefixes: &[],
+            multi_web_ids: &["google".to_string()],
+        };
+
+        match classify_web_query("@sp 테스트", &cfg) {
+            WebQueryResult::Spell(q) => assert_eq!(q, "테스트"),
+            _ => panic!("expected Spell"),
+        }
+
+        match classify_web_query("@g hello", &cfg) {
+            WebQueryResult::Single(svc, q) => {
+                assert_eq!(svc.id, "google");
+                assert_eq!(q, "hello");
+            }
+            _ => panic!("expected Single"),
+        }
+
+        match classify_web_query("@llm test prompt", &cfg) {
+            WebQueryResult::MultiLlm(svcs, q) => {
+                assert!(!svcs.is_empty());
+                assert_eq!(q, "test prompt");
+            }
+            _ => panic!("expected MultiLlm"),
+        }
+    }
+}

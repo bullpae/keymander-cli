@@ -117,6 +117,9 @@ pub struct LauncherConfig {
     /// Keymap integration settings (prototype).
     #[serde(default)]
     pub keymap: KeymapConfig,
+    /// 저장된 프롬프트 템플릿 목록 (`@ll :name query` 형태로 사용).
+    #[serde(default)]
+    pub prompt_templates: Vec<PromptTemplate>,
 }
 
 impl Default for LauncherConfig {
@@ -192,6 +195,7 @@ impl Default for LauncherConfig {
             translate_providers: default_translate_providers(),
             translate_prefixes: default_translate_prefixes(),
             keymap: KeymapConfig::default(),
+            prompt_templates: vec![],
         }
     }
 }
@@ -277,6 +281,16 @@ impl Default for KeymapConfig {
             active_profile: "vim-nav.kbd".to_string(),
         }
     }
+}
+
+/// 재사용 가능한 프롬프트 템플릿. `@ll :name question` 형태로 LLM에 전달.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PromptTemplate {
+    /// 고유 이름 (영문/숫자/하이픈, 예: code-review)
+    pub name: String,
+    /// 본문 — `{query}` 자리표시자가 있으면 실제 질문으로 치환.
+    /// 없으면 `body + "\n\n" + query` 형태로 결합.
+    pub body: String,
 }
 
 /// Platform-specific default search paths (user directories).
@@ -486,6 +500,15 @@ impl Config {
             "launcher.spell_prefixes" => Some(self.launcher.spell_prefixes.join(",")),
             "launcher.translate_providers" => Some(self.launcher.translate_providers.join(",")),
             "launcher.translate_prefixes" => Some(self.launcher.translate_prefixes.join(",")),
+            "launcher.prompt_templates" => {
+                let list: Vec<String> = self
+                    .launcher
+                    .prompt_templates
+                    .iter()
+                    .map(|t| format!("{}:{}", t.name, t.body))
+                    .collect();
+                Some(list.join("|"))
+            }
             "launcher.keymap.backend" => Some(self.launcher.keymap.backend.clone()),
             "launcher.keymap.kanata_path" => Some(
                 self.launcher

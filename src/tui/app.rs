@@ -600,6 +600,16 @@ fn handle_paste(
 
 // ── Execute ──────────────────────────────────────────────────────────────────
 
+/// URL 목록을 브라우저로 열고, quit_on_launch 설정 시 종료 플래그 설정
+fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
+    for url in urls {
+        let _ = action::open_url(url);
+    }
+    if state.quit_on_launch {
+        state.should_quit = true;
+    }
+}
+
 /// Execute the currently selected item
 fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
     let Some(result) = state.results.get(state.selected_index) else {
@@ -646,158 +656,95 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         return;
     }
 
-    // Web query
+    // 웹 검색 결과 — extract_batch_urls 통합 추출
     if result.item.kind == ItemKind::WebSearch {
-        if let Some(urls) = web::extract_translate_urls(&result.item) {
-            for url in urls {
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-        if let Some(urls) = web::extract_spell_urls(&result.item) {
-            for url in urls {
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-        if let Some(urls) = web::extract_multi_web_urls(&result.item) {
-            for url in urls {
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-        if let Some(urls) = web::extract_multi_llm_urls(&result.item) {
-            if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
-                &state.query,
-                &state.selected_llm_providers,
-                &state.multi_llm_prefixes,
-            ) {
-                if !prompt.is_empty() {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(&prompt);
+        if let Some(urls) = web::extract_batch_urls(&result.item) {
+            // LLM 멀티 프롬프트인 경우 클립보드에 프롬프트 복사 (템플릿 적용 포함)
+            if web::extract_multi_llm_urls(&result.item).is_some() {
+                if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
+                    &state.query,
+                    &state.selected_llm_providers,
+                    &state.multi_llm_prefixes,
+                ) {
+                    if !prompt.is_empty() {
+                        // 템플릿 적용: `:name query` → template body + query
+                        let config = crate::cmd::load_config().unwrap_or_default();
+                        let final_prompt = kmd_core::prompt::apply_template(
+                            &config.launcher.prompt_templates,
+                            &prompt,
+                        );
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(&final_prompt);
+                        }
+                        state.status_message = Some(
+                            "✅ @llm 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
+                                .to_string(),
+                        );
                     }
-                    state.status_message = Some(
-                        "✅ @llm 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
-                            .to_string(),
-                    );
                 }
             }
-            for url in urls {
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
+            open_urls_and_quit(state, &urls);
             return;
         }
     }
 
-    // Multi LLM query from raw input
-    if let Some((services, web_query)) = web::parse_multi_llm_query_with_prefixes(
-        &state.query,
-        &state.selected_llm_providers,
-        &state.multi_llm_prefixes,
-    ) {
-        if !web_query.is_empty() {
-            for service in services {
-                let url = web::build_search_url(service, &web_query);
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-    }
-
-    // Multi web query from raw input
-    if let Some((services, web_query)) = web::parse_multi_web_query_with_prefixes(
-        &state.query,
-        &state.selected_multi_web_providers,
-        &state.multi_web_prefixes,
-    ) {
-        if !web_query.is_empty() {
-            for service in services {
-                let url = web::build_search_url(service, &web_query);
-                let _ = action::open_url(&url);
-            }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-    }
-
-    // Spelling query from raw input
-    if let Some(spell_query) =
-        web::parse_spell_query_with_prefixes(&state.query, &state.spell_prefixes)
+    // 원시 입력 웹 쿼리 폴백 — classify_web_query 통합 분류기 사용
     {
-        if !spell_query.is_empty() {
-            let items =
-                web::spell_result_items(&spell_query, &state.spell_providers, state.use_emoji);
-            if let Some(urls) = web::extract_spell_urls(&items[0]) {
-                for url in urls {
-                    let _ = action::open_url(&url);
+        let cfg = web::WebQueryConfig {
+            spell_prefixes: &state.spell_prefixes,
+            translate_prefixes: &state.translate_prefixes,
+            multi_llm_prefixes: &state.multi_llm_prefixes,
+            multi_llm_ids: &state.selected_llm_providers,
+            multi_web_prefixes: &state.multi_web_prefixes,
+            multi_web_ids: &state.selected_multi_web_providers,
+        };
+        match web::classify_web_query(&state.query, &cfg) {
+            web::WebQueryResult::MultiLlm(services, q) if !q.is_empty() => {
+                let urls: Vec<String> =
+                    services.iter().map(|s| web::build_search_url(s, &q)).collect();
+                open_urls_and_quit(state, &urls);
+                return;
+            }
+            web::WebQueryResult::MultiWeb(services, q) if !q.is_empty() => {
+                let urls: Vec<String> =
+                    services.iter().map(|s| web::build_search_url(s, &q)).collect();
+                open_urls_and_quit(state, &urls);
+                return;
+            }
+            web::WebQueryResult::Spell(q) if !q.is_empty() => {
+                let items =
+                    web::spell_result_items(&q, &state.spell_providers, state.use_emoji);
+                if let Some(first) = items.first() {
+                    if let Some(urls) = web::extract_batch_urls(first) {
+                        open_urls_and_quit(state, &urls);
+                    }
                 }
+                return;
             }
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
-        }
-    }
-
-    // Translate query from raw input
-    if let Some((direction, tr_query)) =
-        web::parse_translate_query_with_prefixes(&state.query, &state.translate_prefixes)
-    {
-        if !tr_query.is_empty() {
-            let items = web::translate_result_items(
-                &tr_query,
-                direction,
-                &state.translate_providers,
-                state.use_emoji,
-            );
-            if let Some(urls) = web::extract_translate_urls(&items[0]) {
-                for url in urls {
-                    let _ = action::open_url(&url);
+            web::WebQueryResult::Translate(dir, q) if !q.is_empty() => {
+                let items = web::translate_result_items(
+                    &q, dir, &state.translate_providers, state.use_emoji,
+                );
+                if let Some(first) = items.first() {
+                    if let Some(urls) = web::extract_batch_urls(first) {
+                        open_urls_and_quit(state, &urls);
+                    }
                 }
+                return;
             }
-            if state.quit_on_launch {
-                state.should_quit = true;
+            web::WebQueryResult::Single(service, q) if !q.is_empty() => {
+                let url = web::build_search_url(service, &q);
+                open_urls_and_quit(state, &[url]);
+                return;
             }
-            return;
-        }
-    }
-
-    // Web query (single provider)
-    if let Some((service, web_query)) = web::parse_web_query(&state.query) {
-        if !web_query.is_empty() {
-            let url = web::build_search_url(service, &web_query);
-            let _ = action::open_url(&url);
-            if state.quit_on_launch {
-                state.should_quit = true;
-            }
-            return;
+            _ => {}
         }
     }
 
     // URL mode
     let (mode, normalized) = SearchMode::detect(&state.query);
     if mode == SearchMode::Url {
-        let _ = action::open_url(&normalized);
-        if state.quit_on_launch {
-            state.should_quit = true;
-        }
+        open_urls_and_quit(state, &[normalized]);
         return;
     }
 
@@ -852,6 +799,14 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         return handle_web_query(&query, state);
     }
 
+    if query.starts_with(":transform") || query.starts_with(":t ") || query == ":t" {
+        return handle_transform_query(&query, state);
+    }
+
+    if query.starts_with(":prompt") || query.starts_with(":pt") {
+        return handle_prompt_query(&query, state);
+    }
+
     if query.starts_with(":calc") {
         return handle_calc_query(&query, state);
     }
@@ -891,69 +846,204 @@ fn handle_empty_query(state: &mut AppState, db: Option<&kmd_core::Database>) {
     }
 }
 
-/// Handle @prefix web service queries
+/// Handle @prefix web service queries — classify_web_query 통합 분류기 사용
 fn handle_web_query(query: &str, state: &mut AppState) {
     let emoji = state.use_emoji;
-    if let Some(spell_query) = web::parse_spell_query_with_prefixes(query, &state.spell_prefixes) {
-        state.results = items_to_results(
-            web::spell_result_items(&spell_query, &state.spell_providers, emoji),
-            SCORE_WEB_SEARCH,
-        );
-        state.search_mode = SearchMode::Contains;
-        state.selected_index = 0;
-        return;
+    let cfg = web::WebQueryConfig {
+        spell_prefixes: &state.spell_prefixes,
+        translate_prefixes: &state.translate_prefixes,
+        multi_llm_prefixes: &state.multi_llm_prefixes,
+        multi_llm_ids: &state.selected_llm_providers,
+        multi_web_prefixes: &state.multi_web_prefixes,
+        multi_web_ids: &state.selected_multi_web_providers,
+    };
+
+    match web::classify_web_query(query, &cfg) {
+        web::WebQueryResult::Spell(q) => {
+            state.results = items_to_results(
+                web::spell_result_items(&q, &state.spell_providers, emoji),
+                SCORE_WEB_SEARCH,
+            );
+        }
+        web::WebQueryResult::Translate(dir, q) => {
+            state.results = items_to_results(
+                web::translate_result_items(&q, dir, &state.translate_providers, emoji),
+                SCORE_WEB_SEARCH,
+            );
+        }
+        web::WebQueryResult::MultiLlm(_svcs, q) => {
+            state.results = items_to_results(
+                web::multi_llm_result_items(&q, &state.selected_llm_providers, emoji),
+                SCORE_WEB_SEARCH,
+            );
+        }
+        web::WebQueryResult::MultiWeb(_svcs, q) => {
+            state.results = items_to_results(
+                web::multi_web_result_items(&q, &state.selected_multi_web_providers, emoji),
+                SCORE_WEB_SEARCH,
+            );
+        }
+        web::WebQueryResult::Single(service, q) => {
+            if q.is_empty() {
+                state.results =
+                    items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
+            } else {
+                let item = web::search_result_item(service, &q, emoji);
+                state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
+            }
+        }
+        web::WebQueryResult::Browse(filter) => {
+            state.results =
+                items_to_results(web::list_services_as_items(&filter, emoji), SCORE_WEB_LIST);
+        }
     }
-    if let Some((direction, tr_query)) =
-        web::parse_translate_query_with_prefixes(query, &state.translate_prefixes)
-    {
-        state.results = items_to_results(
-            web::translate_result_items(&tr_query, direction, &state.translate_providers, emoji),
-            SCORE_WEB_SEARCH,
-        );
-        state.search_mode = SearchMode::Contains;
-        state.selected_index = 0;
-        return;
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :t / :transform prefix (클립보드 변환 명령)
+fn handle_transform_query(query: &str, state: &mut AppState) {
+    use kmd_core::transform;
+
+    match transform::parse_transform_query(query) {
+        Some(mut tq) => {
+            // 텍스트가 비어있으면 클립보드에서 가져오기
+            if tq.text.is_empty() {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Ok(text) = clipboard.get_text() {
+                        tq.text = text;
+                    }
+                }
+                if tq.text.is_empty() {
+                    state.status_message =
+                        Some("❌ 클립보드가 비어 있습니다".to_string());
+                    state.results.clear();
+                    state.selected_index = 0;
+                    return;
+                }
+            }
+
+            let urls = transform::build_transform_urls(
+                &tq,
+                &state.spell_providers,
+                &state.translate_providers,
+            );
+            let kind_label = match &tq.kind {
+                transform::TransformKind::Spell => "맞춤법 검사",
+                transform::TransformKind::Translate(_) => "번역",
+            };
+            state.status_message = Some(format!(
+                "✅ {} 실행 ({} 서비스)",
+                kind_label,
+                urls.len()
+            ));
+            open_urls_and_quit(state, &urls);
+            state.results.clear();
+            state.selected_index = 0;
+        }
+        None => {
+            // `:t` 만 입력 → 도움말
+            let items = transform::help_items(state.use_emoji);
+            state.results = items_to_results(items, SCORE_CALC);
+            state.search_mode = SearchMode::Contains;
+            state.selected_index = 0;
+        }
     }
-    if let Some((_services, q)) = web::parse_multi_llm_query_with_prefixes(
-        query,
-        &state.selected_llm_providers,
-        &state.multi_llm_prefixes,
-    ) {
-        state.results = items_to_results(
-            web::multi_llm_result_items(&q, &state.selected_llm_providers, emoji),
-            SCORE_WEB_SEARCH,
-        );
-        state.search_mode = SearchMode::Contains;
-        state.selected_index = 0;
-        return;
-    }
-    if let Some((_services, q)) = web::parse_multi_web_query_with_prefixes(
-        query,
-        &state.selected_multi_web_providers,
-        &state.multi_web_prefixes,
-    ) {
-        state.results = items_to_results(
-            web::multi_web_result_items(&q, &state.selected_multi_web_providers, emoji),
-            SCORE_WEB_SEARCH,
-        );
-        state.search_mode = SearchMode::Contains;
+}
+
+/// Handle :prompt / :pt prefix (프롬프트 템플릿 관리)
+fn handle_prompt_query(query: &str, state: &mut AppState) {
+    let sub = query
+        .strip_prefix(":prompt")
+        .or_else(|| query.strip_prefix(":pt"))
+        .unwrap_or("")
+        .trim();
+
+    let config = match crate::cmd::load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            state.status_message = Some(format!("❌ 설정 로드 실패: {e}"));
+            state.results.clear();
+            state.selected_index = 0;
+            return;
+        }
+    };
+    let templates = &config.launcher.prompt_templates;
+
+    // :prompt add <name> <body>
+    if sub.starts_with("add ") {
+        let rest = sub.strip_prefix("add ").unwrap_or("").trim();
+        if let Some(pos) = rest.find(char::is_whitespace) {
+            let name = &rest[..pos];
+            let body = rest[pos..].trim();
+            if !kmd_core::prompt::validate_template_name(name) {
+                state.status_message =
+                    Some("❌ 이름은 영문/숫자/하이픈만 사용 가능 (최대 32자)".to_string());
+            } else if body.is_empty() {
+                state.status_message = Some("❌ 본문이 비어 있습니다".to_string());
+            } else {
+                let mut cfg = config;
+                cfg.launcher
+                    .prompt_templates
+                    .retain(|t| !t.name.eq_ignore_ascii_case(name));
+                cfg.launcher
+                    .prompt_templates
+                    .push(kmd_core::config::PromptTemplate {
+                        name: name.to_string(),
+                        body: body.to_string(),
+                    });
+                if let Err(e) = cfg.save() {
+                    state.status_message = Some(format!("❌ 저장 실패: {e}"));
+                } else {
+                    state.status_message =
+                        Some(format!("✅ 템플릿 '{name}' 저장됨"));
+                }
+            }
+        } else {
+            state.status_message = Some("사용법: :prompt add <name> <body>".to_string());
+        }
+        state.results.clear();
         state.selected_index = 0;
         return;
     }
 
-    if let Some((service, q)) = web::parse_web_query(query) {
-        if q.is_empty() {
-            state.results =
-                items_to_results(web::list_services_as_items("", emoji), SCORE_WEB_LIST);
+    // :prompt remove <name>
+    if sub.starts_with("remove ") || sub.starts_with("rm ") || sub.starts_with("del ") {
+        let name = sub
+            .strip_prefix("remove ")
+            .or_else(|| sub.strip_prefix("rm "))
+            .or_else(|| sub.strip_prefix("del "))
+            .unwrap_or("")
+            .trim();
+        if name.is_empty() {
+            state.status_message = Some("사용법: :prompt remove <name>".to_string());
         } else {
-            let item = web::search_result_item(service, &q, emoji);
-            state.results = items_to_results(std::iter::once(item), SCORE_WEB_SEARCH);
+            let mut cfg = config;
+            let before = cfg.launcher.prompt_templates.len();
+            cfg.launcher
+                .prompt_templates
+                .retain(|t| !t.name.eq_ignore_ascii_case(name));
+            if cfg.launcher.prompt_templates.len() < before {
+                if let Err(e) = cfg.save() {
+                    state.status_message = Some(format!("❌ 저장 실패: {e}"));
+                } else {
+                    state.status_message =
+                        Some(format!("✅ 템플릿 '{name}' 삭제됨"));
+                }
+            } else {
+                state.status_message =
+                    Some(format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"));
+            }
         }
-    } else {
-        let filter = query.trim_start_matches('@');
-        state.results =
-            items_to_results(web::list_services_as_items(filter, emoji), SCORE_WEB_LIST);
+        state.results.clear();
+        state.selected_index = 0;
+        return;
     }
+
+    // :prompt list 또는 :prompt (필터링)
+    let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
+    let items = kmd_core::prompt::list_templates_as_items(templates, filter, state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }
