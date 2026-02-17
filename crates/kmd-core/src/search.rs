@@ -245,23 +245,95 @@ impl SearchEngine {
     }
 
     /// Substring contains filter (case-insensitive, good for CJK)
+    ///
+    /// 멀티 토큰 지원: 공백으로 구분된 2개 이상의 토큰이 입력되면
+    /// 모든 토큰이 name/path/keywords 중 하나에 포함되어야 매칭 (AND 조건).
+    /// 경로 세그먼트 정확 일치에 높은 점수를 부여하여 디렉토리 점프에 활용.
     fn filter_contains(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        let query_lower = query.to_lowercase();
+        // 토큰 분리 — 입력 내 경로 구분자도 분리하여 플래튼
+        let tokens: Vec<String> = query
+            .split_whitespace()
+            .flat_map(|word| word.split(|c: char| c == '\\' || c == '/'))
+            .filter(|s| !s.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect();
 
-        self.all_items
+        // 단일 토큰: 기존 동작 100% 보존 (score: 0, substring match)
+        if tokens.len() <= 1 {
+            let query_lower = tokens.first().map(|s| s.as_str()).unwrap_or("");
+            return self
+                .all_items
+                .iter()
+                .zip(self.lowercase_cache.entries.iter())
+                .filter(|(_, lc)| {
+                    lc.name.contains(query_lower)
+                        || lc.path.contains(query_lower)
+                        || lc.keywords.contains(query_lower)
+                })
+                .take(limit)
+                .map(|(item, _)| SearchResult {
+                    item: item.clone(),
+                    score: 0,
+                })
+                .collect();
+        }
+
+        // ── 멀티 토큰: AND 매칭 + 가중 스코어링 ──
+        // 점수 상수 — Score Pollution 방어를 위해 search_score 범위를 넓게 설정
+        const SEGMENT_EXACT: u32 = 60; // 경로 세그먼트 정확 일치
+        const PATH_CONTAINS: u32 = 30; // 경로 내 substring
+        const NAME_CONTAINS: u32 = 15; // 이름 매칭
+        const KW_CONTAINS: u32 = 5; // 키워드 매칭
+        const ALL_SEGMENTS_BONUS: u32 = 80; // 전 토큰 세그먼트 정확 일치 보너스
+
+        let token_count = tokens.len() as u32;
+
+        let mut results: Vec<SearchResult> = self
+            .all_items
             .iter()
             .zip(self.lowercase_cache.entries.iter())
-            .filter(|(_, lc)| {
-                lc.name.contains(&query_lower)
-                    || lc.path.contains(&query_lower)
-                    || lc.keywords.contains(&query_lower)
+            .filter_map(|(item, lc)| {
+                let segments: Vec<&str> = lc
+                    .path
+                    .split(|c: char| c == '\\' || c == '/')
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let mut total_score: u32 = 0;
+                let mut exact_segments: u32 = 0;
+
+                for token in &tokens {
+                    let t = token.as_str();
+                    // 우선순위 기반 점수 — 최고 점수만 적용
+                    if segments.iter().any(|seg| *seg == t) {
+                        total_score += SEGMENT_EXACT;
+                        exact_segments += 1;
+                    } else if lc.path.contains(t) {
+                        total_score += PATH_CONTAINS;
+                    } else if lc.name.contains(t) {
+                        total_score += NAME_CONTAINS;
+                    } else if lc.keywords.contains(t) {
+                        total_score += KW_CONTAINS;
+                    } else {
+                        return None; // AND 조건: 하나라도 미매칭이면 제외
+                    }
+                }
+
+                // 모든 토큰이 세그먼트 정확 일치 → 완전한 경로 의도 매칭 보너스
+                if exact_segments == token_count {
+                    total_score += ALL_SEGMENTS_BONUS;
+                }
+
+                Some(SearchResult {
+                    item: item.clone(),
+                    score: total_score,
+                })
             })
-            .take(limit)
-            .map(|(item, _)| SearchResult {
-                item: item.clone(),
-                score: 0,
-            })
-            .collect()
+            .collect();
+
+        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.truncate(limit);
+        results
     }
 
     /// Total loaded items
@@ -500,5 +572,170 @@ mod tests {
         assert_eq!(results.len(), 2);
         // Directory should be first due to higher weight
         assert_eq!(results[0].item.kind, ItemKind::Directory);
+    }
+
+    // ── 멀티 토큰 매칭 테스트 ──────────────────────────────
+
+    /// 테스트용 IndexItem 생성 헬퍼
+    fn make_item(name: &str, path: &str, keywords: &str) -> IndexItem {
+        use crate::index::{ItemKind, Source};
+        IndexItem {
+            name: name.to_string(),
+            path: path.to_string(),
+            kind: ItemKind::Directory,
+            source: Source::FileProvider,
+            icon: ">>".to_string(),
+            keywords: keywords.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_multi_token_korean_path_segments() {
+        // "2026 출장이력" → c:\2026\work\출장이력 매칭, 세그먼트 정확 일치 보너스
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+            make_item("출장이력_old", r"c:\2025\archive\출장이력_old", "출장이력"),
+            make_item("readme", r"c:\2026\docs\readme.txt", "문서"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "2026 출장이력", 10);
+        assert!(!results.is_empty(), "결과가 있어야 함");
+        // 첫 번째 결과: 두 토큰 모두 세그먼트 정확 일치 → 최고 점수
+        assert_eq!(results[0].item.path, r"c:\2026\work\출장이력");
+        // "readme"는 "출장이력" 토큰 미매칭이므로 제외
+        assert!(
+            results.iter().all(|r| r.item.name != "readme"),
+            "readme는 AND 조건 불충족으로 제외"
+        );
+    }
+
+    #[test]
+    fn test_multi_token_order_independent() {
+        // "출장이력 2026" → 토큰 순서 무관, 동일 결과
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+        ]);
+
+        let r1 = engine.search_with_mode(SearchMode::Contains, "2026 출장이력", 10);
+        let r2 = engine.search_with_mode(SearchMode::Contains, "출장이력 2026", 10);
+
+        assert_eq!(r1.len(), r2.len(), "순서와 무관하게 같은 수의 결과");
+        assert_eq!(
+            r1[0].score, r2[0].score,
+            "순서와 무관하게 같은 점수"
+        );
+    }
+
+    #[test]
+    fn test_single_token_preserves_original_behavior() {
+        // 단일 토큰은 기존 동작 보존: score=0, substring match
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "출장이력", 10);
+        assert_eq!(results.len(), 1);
+        // 단일 토큰은 score: 0 (kind_boost 적용 전)
+        // apply_kind_boost는 search_with_mode에서 적용되므로 여기서는 kind_boost만 반영됨
+        // filter_contains 자체는 score 0 반환
+    }
+
+    #[test]
+    fn test_multi_token_segment_exact_vs_substring() {
+        // 세그먼트 정확 일치(+60)와 path substring(+30) 점수 차이 확인
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            // "출장" 토큰이 세그먼트가 아닌 substring으로 매칭
+            make_item("출장이력_보고서", r"c:\2026\work\출장이력_보고서", "출장"),
+            // "출장이력" 토큰이 세그먼트 정확 일치
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "2026 출장이력", 10);
+        assert!(results.len() >= 1);
+        // 세그먼트 정확 일치 항목이 더 높은 점수
+        assert_eq!(
+            results[0].item.path,
+            r"c:\2026\work\출장이력",
+            "세그먼트 정확 일치가 우선"
+        );
+    }
+
+    #[test]
+    fn test_multi_token_windows_backslash() {
+        // Windows 경로 backslash 세그먼트 분리 정상 동작
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("projects", r"D:\dev\projects\rust", "rust dev"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "dev rust", 10);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].score > 0, "멀티 토큰은 0 이상의 점수");
+    }
+
+    #[test]
+    fn test_multi_token_mixed_korean_english() {
+        // 한영 혼합 쿼리: "project 보고서"
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("보고서", r"c:\project\보고서", "보고서 project"),
+            make_item("readme", r"c:\project\readme.md", "project"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "project 보고서", 10);
+        assert_eq!(results.len(), 1, "readme는 '보고서' 토큰 미매칭으로 제외");
+        assert_eq!(results[0].item.name, "보고서");
+    }
+
+    #[test]
+    fn test_multi_token_no_match_returns_empty() {
+        // 매칭되는 항목이 없으면 빈 결과
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "2025 회의록", 10);
+        assert!(results.is_empty(), "매칭 없으면 빈 결과");
+    }
+
+    #[test]
+    fn test_multi_token_input_with_path_separator() {
+        // 입력에 경로 구분자가 포함된 경우 토큰으로 분리
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
+        ]);
+
+        // "work\출장이력" → ["work", "출장이력"] 으로 분리되어 매칭
+        let results = engine.search_with_mode(SearchMode::Contains, r"work\출장이력", 10);
+        assert_eq!(results.len(), 1, "경로 구분자가 토큰 구분자로 처리됨");
+    }
+
+    #[test]
+    fn test_all_segments_exact_bonus() {
+        // 모든 토큰이 세그먼트 정확 일치 → ALL_SEGMENTS_BONUS(+80) 적용
+        let mut engine = SearchEngine::new();
+        engine.load(vec![
+            // "2026"과 "work" 모두 세그먼트 정확 일치
+            make_item("work", r"c:\2026\work", "작업폴더"),
+            // "2026"은 정확, "work"는 path substring (workforce의 일부)
+            make_item("workforce", r"c:\2026\workforce_data", "인력"),
+        ]);
+
+        let results = engine.search_with_mode(SearchMode::Contains, "2026 work", 10);
+        assert!(results.len() >= 1);
+        // 두 토큰 모두 세그먼트 정확 일치한 항목이 보너스로 1등
+        assert_eq!(results[0].item.name, "work");
+        if results.len() >= 2 {
+            assert!(
+                results[0].score > results[1].score,
+                "전 세그먼트 일치 보너스로 점수 차이 발생"
+            );
+        }
     }
 }
