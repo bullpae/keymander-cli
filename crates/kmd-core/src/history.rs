@@ -79,10 +79,7 @@ fn parse_hours_ago(iso_str: &str) -> Option<u64> {
     let days = days_from_civil(year, month, day)?;
     let ts = days as u64 * 86400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
 
     if now >= ts {
         Some((now - ts) / 3600)
@@ -94,7 +91,7 @@ fn parse_hours_ago(iso_str: &str) -> Option<u64> {
 /// 그레고리력 날짜 → Unix epoch 이후 일 수 변환 (civil date to days)
 /// 알고리즘 출처: Howard Hinnant's date algorithms
 fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
-    if month < 1 || month > 12 || day < 1 || day > 31 {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
     let y = if month <= 2 { year - 1 } else { year };
@@ -238,8 +235,14 @@ mod tests {
         let days = days_from_civil(2000, 3, 1).unwrap();
         assert!(days > 0, "2000-03-01은 양수");
 
-        assert!(days_from_civil(2026, 0, 1).is_none(), "월 0은 유효하지 않음");
-        assert!(days_from_civil(2026, 13, 1).is_none(), "월 13은 유효하지 않음");
+        assert!(
+            days_from_civil(2026, 0, 1).is_none(),
+            "월 0은 유효하지 않음"
+        );
+        assert!(
+            days_from_civil(2026, 13, 1).is_none(),
+            "월 13은 유효하지 않음"
+        );
     }
 
     #[test]

@@ -62,7 +62,7 @@ impl Database {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos();
-        if tick % 20 == 0 {
+        if tick.is_multiple_of(20) {
             self.prune_history();
         }
 
@@ -79,9 +79,11 @@ impl Database {
 
         let total: u32 = self
             .conn
-            .query_row("SELECT COALESCE(SUM(frequency), 0) FROM history", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(SUM(frequency), 0) FROM history",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         if total > MAX_TOTAL_FREQ {
@@ -443,10 +445,7 @@ mod tests {
             .conn
             .query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(
-            count_after, 0,
-            "frequency < 1인 모든 행이 삭제되어야 함"
-        );
+        assert_eq!(count_after, 0, "frequency < 1인 모든 행이 삭제되어야 함");
     }
 
     #[test]

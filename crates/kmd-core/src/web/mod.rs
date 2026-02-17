@@ -20,16 +20,15 @@ pub use items::{
 
 pub use parsers::{
     classify_web_query, parse_multi_llm_query, parse_multi_llm_query_with_prefixes,
-    parse_multi_web_query, parse_multi_web_query_with_prefixes,
-    parse_spell_query_with_prefixes, parse_translate_query_with_prefixes, parse_web_query,
-    WebQueryConfig, WebQueryResult,
+    parse_multi_web_query, parse_multi_web_query_with_prefixes, parse_spell_query_with_prefixes,
+    parse_translate_query_with_prefixes, parse_web_query, WebQueryConfig, WebQueryResult,
 };
 
 pub use services::{
     is_llm_id, is_multi_web_id, is_spell_id, is_translate_id, selected_llm_services,
-    selected_multi_web_services, selected_spell_services, selected_translate_services,
-    HasId, SpellService, TranslateDirection, TranslateService, WebService,
-    SPELL_SERVICES, TRANSLATE_SERVICES, WEB_SERVICES,
+    selected_multi_web_services, selected_spell_services, selected_translate_services, HasId,
+    SpellService, TranslateDirection, TranslateService, WebService, SPELL_SERVICES,
+    TRANSLATE_SERVICES, WEB_SERVICES,
 };
 
 #[cfg(test)]

@@ -72,12 +72,20 @@ pub fn help_items(use_emoji: bool) -> Vec<IndexItem> {
         (
             ":t trko <text>",
             "영어 → 한국어 번역",
-            if use_emoji { "\u{1F1F0}\u{1F1F7}" } else { "Ko" },
+            if use_emoji {
+                "\u{1F1F0}\u{1F1F7}"
+            } else {
+                "Ko"
+            },
         ),
         (
             ":t tren <text>",
             "한국어 → 영어 번역",
-            if use_emoji { "\u{1F1FA}\u{1F1F8}" } else { "En" },
+            if use_emoji {
+                "\u{1F1FA}\u{1F1F8}"
+            } else {
+                "En"
+            },
         ),
     ];
 
@@ -135,20 +143,14 @@ mod tests {
     #[test]
     fn test_parse_translate_auto() {
         let q = parse_transform_query(":t tr hello world").unwrap();
-        assert_eq!(
-            q.kind,
-            TransformKind::Translate(TranslateDirection::Auto)
-        );
+        assert_eq!(q.kind, TransformKind::Translate(TranslateDirection::Auto));
         assert_eq!(q.text, "hello world");
     }
 
     #[test]
     fn test_parse_translate_ko() {
         let q = parse_transform_query(":t trko hello").unwrap();
-        assert_eq!(
-            q.kind,
-            TransformKind::Translate(TranslateDirection::EnToKo)
-        );
+        assert_eq!(q.kind, TransformKind::Translate(TranslateDirection::EnToKo));
     }
 
     #[test]

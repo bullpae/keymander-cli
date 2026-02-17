@@ -145,19 +145,18 @@ impl App {
         let load_task = Task::future(async move {
             let _ = tokio::task::spawn_blocking(move || {
                 let eng = crate::engine::create_search_engine(&config);
-                *slot_for_task.lock().expect("engine_slot poisoned") =
-                    Some(EngineLoadResult {
-                        engine: eng,
-                        use_emoji: config.general.emoji_icons,
-                        llm_providers: config.launcher.multi_llm_providers.clone(),
-                        multi_web_providers: config.launcher.multi_web_providers.clone(),
-                        llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-                        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-                        spell_providers: config.launcher.spell_providers.clone(),
-                        spell_prefixes: config.launcher.spell_prefixes.clone(),
-                        translate_providers: config.launcher.translate_providers.clone(),
-                        translate_prefixes: config.launcher.translate_prefixes.clone(),
-                    });
+                *slot_for_task.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
+                    engine: eng,
+                    use_emoji: config.general.emoji_icons,
+                    llm_providers: config.launcher.multi_llm_providers.clone(),
+                    multi_web_providers: config.launcher.multi_web_providers.clone(),
+                    llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+                    multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+                    spell_providers: config.launcher.spell_providers.clone(),
+                    spell_prefixes: config.launcher.spell_prefixes.clone(),
+                    translate_providers: config.launcher.translate_providers.clone(),
+                    translate_prefixes: config.launcher.translate_prefixes.clone(),
+                });
             })
             .await;
             Message::EngineReady
@@ -366,10 +365,8 @@ impl App {
         ) {
             if !prompt.is_empty() {
                 let config = crate::engine::load_config();
-                let final_prompt = kmd_core::prompt::apply_template(
-                    &config.launcher.prompt_templates,
-                    &prompt,
-                );
+                let final_prompt =
+                    kmd_core::prompt::apply_template(&config.launcher.prompt_templates, &prompt);
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     let _ = clipboard.set_text(final_prompt);
                 }
@@ -416,11 +413,8 @@ impl App {
 
         match web::classify_web_query(query, &cfg) {
             web::WebQueryResult::Spell(q) => {
-                self.results = items_to_results(web::spell_result_items(
-                    &q,
-                    &self.spell_providers,
-                    emoji,
-                ));
+                self.results =
+                    items_to_results(web::spell_result_items(&q, &self.spell_providers, emoji));
             }
             web::WebQueryResult::Translate(dir, q) => {
                 self.results = items_to_results(web::translate_result_items(
@@ -519,8 +513,12 @@ impl App {
                         path: "텍스트를 복사한 후 다시 시도하세요".to_string(),
                         kind: ItemKind::SystemCommand,
                         source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[!]" }
-                            .to_string(),
+                        icon: if self.use_emoji {
+                            "\u{2139}\u{FE0F}"
+                        } else {
+                            "[!]"
+                        }
+                        .to_string(),
                         keywords: "kmd:settings:noop".to_string(),
                     }));
                     self.selected = 0;
@@ -593,7 +591,9 @@ impl App {
                             name: name.to_string(),
                             body: body.to_string(),
                         });
-                    save_config(move |c| c.launcher.prompt_templates = cfg.launcher.prompt_templates);
+                    save_config(move |c| {
+                        c.launcher.prompt_templates = cfg.launcher.prompt_templates
+                    });
                     self.results = items_to_results(std::iter::once(IndexItem {
                         name: format!("✅ 템플릿 '{name}' 저장됨"),
                         path: format!("@ll :{name} <query> 형태로 사용"),
@@ -609,7 +609,12 @@ impl App {
                     path: "예: :prompt add review 코드를 리뷰해주세요".to_string(),
                     kind: ItemKind::SystemCommand,
                     source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[?]" }.to_string(),
+                    icon: if self.use_emoji {
+                        "\u{2139}\u{FE0F}"
+                    } else {
+                        "[?]"
+                    }
+                    .to_string(),
                     keywords: "kmd:settings:noop".to_string(),
                 }));
             }
@@ -631,7 +636,12 @@ impl App {
                     path: "삭제할 템플릿 이름을 입력하세요".to_string(),
                     kind: ItemKind::SystemCommand,
                     source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{2139}\u{FE0F}" } else { "[?]" }.to_string(),
+                    icon: if self.use_emoji {
+                        "\u{2139}\u{FE0F}"
+                    } else {
+                        "[?]"
+                    }
+                    .to_string(),
                     keywords: "kmd:settings:noop".to_string(),
                 }));
             } else if templates.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
@@ -665,8 +675,7 @@ impl App {
         }
 
         let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
-        let items =
-            kmd_core::prompt::list_templates_as_items(templates, filter, self.use_emoji);
+        let items = kmd_core::prompt::list_templates_as_items(templates, filter, self.use_emoji);
         self.results = items_to_results(items);
         self.search_mode = kmd_core::SearchMode::Contains;
         self.selected = 0;
@@ -1094,19 +1103,18 @@ impl App {
                     let _ = tokio::task::spawn_blocking(move || {
                         let config = crate::engine::load_config();
                         let eng = crate::engine::create_search_engine(&config);
-                        *slot.lock().expect("engine_slot poisoned") =
-                            Some(EngineLoadResult {
-                                engine: eng,
-                                use_emoji: config.general.emoji_icons,
-                                llm_providers: config.launcher.multi_llm_providers.clone(),
-                                multi_web_providers: config.launcher.multi_web_providers.clone(),
-                                llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-                                multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-                                spell_providers: config.launcher.spell_providers.clone(),
-                                spell_prefixes: config.launcher.spell_prefixes.clone(),
-                                translate_providers: config.launcher.translate_providers.clone(),
-                                translate_prefixes: config.launcher.translate_prefixes.clone(),
-                            });
+                        *slot.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
+                            engine: eng,
+                            use_emoji: config.general.emoji_icons,
+                            llm_providers: config.launcher.multi_llm_providers.clone(),
+                            multi_web_providers: config.launcher.multi_web_providers.clone(),
+                            llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+                            multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+                            spell_providers: config.launcher.spell_providers.clone(),
+                            spell_prefixes: config.launcher.spell_prefixes.clone(),
+                            translate_providers: config.launcher.translate_providers.clone(),
+                            translate_prefixes: config.launcher.translate_prefixes.clone(),
+                        });
                     })
                     .await;
                     Message::EngineReady
@@ -1380,7 +1388,6 @@ impl App {
                 y: y_offset,
             },
         )
-        .into()
     }
 
     fn clear_query_and_refocus(&mut self) -> Task<Message> {

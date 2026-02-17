@@ -100,10 +100,8 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
     ];
 
     for (name, path, icon, keywords, match_terms) in virtual_entries {
-        let matched = filter_lower.is_empty()
-            || match_terms
-                .iter()
-                .any(|t| t.contains(&filter_lower));
+        let matched =
+            filter_lower.is_empty() || match_terms.iter().any(|t| t.contains(&filter_lower));
         if matched {
             items.push(IndexItem {
                 name: name.to_string(),
@@ -152,7 +150,10 @@ pub fn multi_llm_result_items(
         );
     }
     build_batch_items(
-        services.iter().map(|svc| build_search_url(svc, query)).collect(),
+        services
+            .iter()
+            .map(|svc| build_search_url(svc, query))
+            .collect(),
         &services.iter().map(|s| s.name).collect::<Vec<_>>(),
         "kmd:multi_llm_urls",
         &format!("Multi LLM compare ({})", services.len()),
@@ -161,7 +162,10 @@ pub fn multi_llm_result_items(
             query
         ),
         if use_emoji { "\u{1F9E0}" } else { "Ml" },
-        services.iter().map(|s| search_result_item(s, query, use_emoji)).collect(),
+        services
+            .iter()
+            .map(|s| search_result_item(s, query, use_emoji))
+            .collect(),
     )
 }
 
@@ -182,21 +186,23 @@ pub fn multi_web_result_items(
         );
     }
     build_batch_items(
-        services.iter().map(|svc| build_search_url(svc, query)).collect(),
+        services
+            .iter()
+            .map(|svc| build_search_url(svc, query))
+            .collect(),
         &services.iter().map(|s| s.name).collect::<Vec<_>>(),
         "kmd:multi_web_urls",
         &format!("Multi Web search ({})", services.len()),
         &format!("Open selected search engines for: \"{}\"", query),
         if use_emoji { "\u{1F50E}" } else { "Mw" },
-        services.iter().map(|s| search_result_item(s, query, use_emoji)).collect(),
+        services
+            .iter()
+            .map(|s| search_result_item(s, query, use_emoji))
+            .collect(),
     )
 }
 
-pub fn spell_result_items(
-    query: &str,
-    selected_ids: &[String],
-    use_emoji: bool,
-) -> Vec<IndexItem> {
+pub fn spell_result_items(query: &str, selected_ids: &[String], use_emoji: bool) -> Vec<IndexItem> {
     let services = selected_spell_services(selected_ids);
     if query.is_empty() {
         return services_to_browse_items(

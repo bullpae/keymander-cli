@@ -253,7 +253,7 @@ impl SearchEngine {
         // 토큰 분리 — 입력 내 경로 구분자도 분리하여 플래튼
         let tokens: Vec<String> = query
             .split_whitespace()
-            .flat_map(|word| word.split(|c: char| c == '\\' || c == '/'))
+            .flat_map(|word| word.split(['\\', '/']))
             .filter(|s| !s.is_empty())
             .map(|t| t.to_lowercase())
             .collect();
@@ -295,7 +295,7 @@ impl SearchEngine {
             .filter_map(|(item, lc)| {
                 let segments: Vec<&str> = lc
                     .path
-                    .split(|c: char| c == '\\' || c == '/')
+                    .split(['\\', '/'])
                     .filter(|s| !s.is_empty())
                     .collect();
 
@@ -305,7 +305,7 @@ impl SearchEngine {
                 for token in &tokens {
                     let t = token.as_str();
                     // 우선순위 기반 점수 — 최고 점수만 적용
-                    if segments.iter().any(|seg| *seg == t) {
+                    if segments.contains(&t) {
                         total_score += SEGMENT_EXACT;
                         exact_segments += 1;
                     } else if lc.path.contains(t) {
@@ -614,27 +614,28 @@ mod tests {
     fn test_multi_token_order_independent() {
         // "출장이력 2026" → 토큰 순서 무관, 동일 결과
         let mut engine = SearchEngine::new();
-        engine.load(vec![
-            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
-        ]);
+        engine.load(vec![make_item(
+            "출장이력",
+            r"c:\2026\work\출장이력",
+            "출장이력",
+        )]);
 
         let r1 = engine.search_with_mode(SearchMode::Contains, "2026 출장이력", 10);
         let r2 = engine.search_with_mode(SearchMode::Contains, "출장이력 2026", 10);
 
         assert_eq!(r1.len(), r2.len(), "순서와 무관하게 같은 수의 결과");
-        assert_eq!(
-            r1[0].score, r2[0].score,
-            "순서와 무관하게 같은 점수"
-        );
+        assert_eq!(r1[0].score, r2[0].score, "순서와 무관하게 같은 점수");
     }
 
     #[test]
     fn test_single_token_preserves_original_behavior() {
         // 단일 토큰은 기존 동작 보존: score=0, substring match
         let mut engine = SearchEngine::new();
-        engine.load(vec![
-            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
-        ]);
+        engine.load(vec![make_item(
+            "출장이력",
+            r"c:\2026\work\출장이력",
+            "출장이력",
+        )]);
 
         let results = engine.search_with_mode(SearchMode::Contains, "출장이력", 10);
         assert_eq!(results.len(), 1);
@@ -658,8 +659,7 @@ mod tests {
         assert!(results.len() >= 1);
         // 세그먼트 정확 일치 항목이 더 높은 점수
         assert_eq!(
-            results[0].item.path,
-            r"c:\2026\work\출장이력",
+            results[0].item.path, r"c:\2026\work\출장이력",
             "세그먼트 정확 일치가 우선"
         );
     }
@@ -668,9 +668,11 @@ mod tests {
     fn test_multi_token_windows_backslash() {
         // Windows 경로 backslash 세그먼트 분리 정상 동작
         let mut engine = SearchEngine::new();
-        engine.load(vec![
-            make_item("projects", r"D:\dev\projects\rust", "rust dev"),
-        ]);
+        engine.load(vec![make_item(
+            "projects",
+            r"D:\dev\projects\rust",
+            "rust dev",
+        )]);
 
         let results = engine.search_with_mode(SearchMode::Contains, "dev rust", 10);
         assert_eq!(results.len(), 1);
@@ -695,9 +697,11 @@ mod tests {
     fn test_multi_token_no_match_returns_empty() {
         // 매칭되는 항목이 없으면 빈 결과
         let mut engine = SearchEngine::new();
-        engine.load(vec![
-            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
-        ]);
+        engine.load(vec![make_item(
+            "출장이력",
+            r"c:\2026\work\출장이력",
+            "출장이력",
+        )]);
 
         let results = engine.search_with_mode(SearchMode::Contains, "2025 회의록", 10);
         assert!(results.is_empty(), "매칭 없으면 빈 결과");
@@ -707,9 +711,11 @@ mod tests {
     fn test_multi_token_input_with_path_separator() {
         // 입력에 경로 구분자가 포함된 경우 토큰으로 분리
         let mut engine = SearchEngine::new();
-        engine.load(vec![
-            make_item("출장이력", r"c:\2026\work\출장이력", "출장이력"),
-        ]);
+        engine.load(vec![make_item(
+            "출장이력",
+            r"c:\2026\work\출장이력",
+            "출장이력",
+        )]);
 
         // "work\출장이력" → ["work", "출장이력"] 으로 분리되어 매칭
         let results = engine.search_with_mode(SearchMode::Contains, r"work\출장이력", 10);

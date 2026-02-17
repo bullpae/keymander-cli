@@ -193,7 +193,7 @@ pub fn stop() -> Result<String, String> {
         if status.success() {
             return Ok(format!("kanata 중지 완료 (pid={pid})"));
         }
-        return Err(format!("kanata 중지 실패 (pid={pid})"));
+        Err(format!("kanata 중지 실패 (pid={pid})"))
     }
 
     #[cfg(not(target_os = "windows"))]

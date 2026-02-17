@@ -17,15 +17,13 @@ pub fn list_templates_as_items(
                 || t.name.to_lowercase().contains(&filter_lower)
                 || t.body.to_lowercase().contains(&filter_lower)
         })
-        .map(|t| {
-            IndexItem {
-                name: format!(":{:<16} {}", t.name, preview_body(&t.body, 60)),
-                path: format!("@ll :{} <query> 형태로 사용", t.name),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                icon: if use_emoji { "\u{1F4DD}" } else { "Pt" }.to_string(),
-                keywords: format!("prompt template {}", t.name),
-            }
+        .map(|t| IndexItem {
+            name: format!(":{:<16} {}", t.name, preview_body(&t.body, 60)),
+            path: format!("@ll :{} <query> 형태로 사용", t.name),
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: if use_emoji { "\u{1F4DD}" } else { "Pt" }.to_string(),
+            keywords: format!("prompt template {}", t.name),
         })
         .collect();
 
@@ -45,7 +43,8 @@ pub fn list_templates_as_items(
     if filter_lower.is_empty() || "add".contains(&filter_lower) {
         items.push(IndexItem {
             name: ":prompt add <name> <body>".to_string(),
-            path: "새 프롬프트 템플릿 추가 (예: :prompt add review 코드를 리뷰해주세요)".to_string(),
+            path: "새 프롬프트 템플릿 추가 (예: :prompt add review 코드를 리뷰해주세요)"
+                .to_string(),
             kind: ItemKind::SystemCommand,
             source: Source::Plugin,
             icon: if use_emoji { "\u{2795}" } else { "[+]" }.to_string(),
@@ -70,7 +69,10 @@ pub fn apply_template(templates: &[PromptTemplate], query: &str) -> String {
         None => (&trimmed[1..], ""),
     };
 
-    let Some(template) = templates.iter().find(|t| t.name.eq_ignore_ascii_case(name_part)) else {
+    let Some(template) = templates
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case(name_part))
+    else {
         return query.to_string();
     };
 

@@ -700,20 +700,23 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         };
         match web::classify_web_query(&state.query, &cfg) {
             web::WebQueryResult::MultiLlm(services, q) if !q.is_empty() => {
-                let urls: Vec<String> =
-                    services.iter().map(|s| web::build_search_url(s, &q)).collect();
+                let urls: Vec<String> = services
+                    .iter()
+                    .map(|s| web::build_search_url(s, &q))
+                    .collect();
                 open_urls_and_quit(state, &urls);
                 return;
             }
             web::WebQueryResult::MultiWeb(services, q) if !q.is_empty() => {
-                let urls: Vec<String> =
-                    services.iter().map(|s| web::build_search_url(s, &q)).collect();
+                let urls: Vec<String> = services
+                    .iter()
+                    .map(|s| web::build_search_url(s, &q))
+                    .collect();
                 open_urls_and_quit(state, &urls);
                 return;
             }
             web::WebQueryResult::Spell(q) if !q.is_empty() => {
-                let items =
-                    web::spell_result_items(&q, &state.spell_providers, state.use_emoji);
+                let items = web::spell_result_items(&q, &state.spell_providers, state.use_emoji);
                 if let Some(first) = items.first() {
                     if let Some(urls) = web::extract_batch_urls(first) {
                         open_urls_and_quit(state, &urls);
@@ -723,7 +726,10 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
             }
             web::WebQueryResult::Translate(dir, q) if !q.is_empty() => {
                 let items = web::translate_result_items(
-                    &q, dir, &state.translate_providers, state.use_emoji,
+                    &q,
+                    dir,
+                    &state.translate_providers,
+                    state.use_emoji,
                 );
                 if let Some(first) = items.first() {
                     if let Some(urls) = web::extract_batch_urls(first) {
@@ -915,8 +921,7 @@ fn handle_transform_query(query: &str, state: &mut AppState) {
                     }
                 }
                 if tq.text.is_empty() {
-                    state.status_message =
-                        Some("❌ 클립보드가 비어 있습니다".to_string());
+                    state.status_message = Some("❌ 클립보드가 비어 있습니다".to_string());
                     state.results.clear();
                     state.selected_index = 0;
                     return;
@@ -932,11 +937,7 @@ fn handle_transform_query(query: &str, state: &mut AppState) {
                 transform::TransformKind::Spell => "맞춤법 검사",
                 transform::TransformKind::Translate(_) => "번역",
             };
-            state.status_message = Some(format!(
-                "✅ {} 실행 ({} 서비스)",
-                kind_label,
-                urls.len()
-            ));
+            state.status_message = Some(format!("✅ {} 실행 ({} 서비스)", kind_label, urls.len()));
             open_urls_and_quit(state, &urls);
             state.results.clear();
             state.selected_index = 0;
@@ -995,8 +996,7 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
                 if let Err(e) = cfg.save() {
                     state.status_message = Some(format!("❌ 저장 실패: {e}"));
                 } else {
-                    state.status_message =
-                        Some(format!("✅ 템플릿 '{name}' 저장됨"));
+                    state.status_message = Some(format!("✅ 템플릿 '{name}' 저장됨"));
                 }
             }
         } else {
@@ -1027,12 +1027,10 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
                 if let Err(e) = cfg.save() {
                     state.status_message = Some(format!("❌ 저장 실패: {e}"));
                 } else {
-                    state.status_message =
-                        Some(format!("✅ 템플릿 '{name}' 삭제됨"));
+                    state.status_message = Some(format!("✅ 템플릿 '{name}' 삭제됨"));
                 }
             } else {
-                state.status_message =
-                    Some(format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"));
+                state.status_message = Some(format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"));
             }
         }
         state.results.clear();

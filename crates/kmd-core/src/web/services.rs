@@ -291,12 +291,17 @@ fn select_services<T: HasId>(
         if normalized.is_empty() || !is_valid(&normalized) {
             continue;
         }
-        if let Some(service) = all.iter().find(|svc| svc.service_id().eq_ignore_ascii_case(&normalized)) {
+        if let Some(service) = all
+            .iter()
+            .find(|svc| svc.service_id().eq_ignore_ascii_case(&normalized))
+        {
             matched.push(service);
         }
     }
     if matched.is_empty() {
-        all.iter().filter(|svc| is_valid(svc.service_id())).collect()
+        all.iter()
+            .filter(|svc| is_valid(svc.service_id()))
+            .collect()
     } else {
         matched
     }
