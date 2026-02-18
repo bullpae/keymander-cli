@@ -187,8 +187,10 @@ enum KeymapAction {
     List,
     /// Set active profile
     Use { profile: String },
-    /// Create profile template and set active
+    /// Create profile from built-in preset and set active (default: vim-nav)
     Init { profile: Option<String> },
+    /// Show available built-in presets
+    ListPresets,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -321,6 +323,7 @@ fn main() -> color_eyre::Result<()> {
                 KeymapAction::List => cmd::keymap::Action::List,
                 KeymapAction::Use { profile } => cmd::keymap::Action::Use { profile },
                 KeymapAction::Init { profile } => cmd::keymap::Action::Init { profile },
+                KeymapAction::ListPresets => cmd::keymap::Action::ListPresets,
             })?;
         }
         // No subcommand → launch TUI (pass instance guard so event loop can check it)

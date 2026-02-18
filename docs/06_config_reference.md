@@ -19,6 +19,7 @@ graph TB
     ConfigToml["config.toml"] --> General["[general]\nrender_fps, show_preview\npreview_width_percent, theme\nemoji_icons, reset_ime_on_launch, editor"]
     ConfigToml --> Launcher["[launcher]\nfile_search_provider, max_results\nsearch_depth, search_paths\nignore_patterns, quit_on_launch\nindex_directories, scan_drives\ndrive_scan_depth"]
     ConfigToml --> KindWeights["[launcher.kind_weights]\ndirectory, app, file\nexecutable, system_cmd, web_search"]
+    ConfigToml --> Keymap["[launcher.keymap]\nbackend, kanata_path\nprofile_dir, active_profile"]
     ConfigToml --> Keybindings["[keybindings]\nglobal_hotkey, quit\nnext, prev, select, toggle_preview"]
     Launcher --> WebService1["[[launcher.web_services]]\nname, prefixes\nurl_template, icon"]
 ```
@@ -150,7 +151,31 @@ flowchart TD
 | `mdfind` | Spotlight (mdfind) | macOS |
 | `locate` | plocate / mlocate | Linux |
 
-### 4.5 [keybindings]
+### 4.5 [launcher.keymap]
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| backend | String | "kanata" | 키맵 백엔드 (현재 kanata만 지원) |
+| kanata_path | Path? | None | kanata 바이너리 경로 (None = PATH에서 탐색) |
+| profile_dir | Path? | None | 프로파일 디렉토리 (None = `config_dir/keymap`) |
+| active_profile | String | "vim-nav.kbd" | 활성 프로파일 파일명 |
+
+```toml
+[launcher.keymap]
+backend = "kanata"
+# kanata_path = "C:\\Users\\you\\bin\\kanata.exe"
+# profile_dir = "C:\\Users\\you\\.config\\kmd\\keymap"
+active_profile = "vim-nav.kbd"
+```
+
+**내장 프리셋**:
+- `vim-nav` — Alt 홀드 → HJKL 네비게이션 + Alt+Space → kmd-desktop 실행
+- `minimal` — CapsLock → Esc
+
+프리셋 설치: `kmd keymap init vim-nav` (또는 `kmd keymap init minimal`)
+프리셋 목록: `kmd keymap list-presets`
+
+### 4.6 [keybindings]
 
 | 키 | 기본값 | 설명 |
 |----|--------|------|

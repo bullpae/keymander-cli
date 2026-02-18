@@ -352,6 +352,7 @@ impl App {
 /// | `:calc`   | Calculator        | `:calc (2+3)*4`                |
 /// | `:emoji`  | Emoji search      | `:emoji fire`, `:e 하트`       |
 /// | `:set`    | Settings          | `:set`, `:settings theme`      |
+/// | `:keymap` | Keymap control    | `:keymap`, `:km on`, `:km off` |
 /// | `:help`   | Help / commands   | `:help`, `:h`                  |
 /// | `!`       | Shell command     | `!ip`, `!echo hello`           |
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
@@ -392,6 +393,7 @@ impl App {
                 Prefix::Help => self.handle_help_query(),
                 Prefix::Version => self.handle_version_query(),
                 Prefix::Shell => self.handle_shell_query(trimmed),
+                Prefix::Keymap => self.handle_keymap_query(trimmed),
                 Prefix::General => self.handle_main_search(trimmed),
             }
         }
@@ -709,6 +711,33 @@ impl App {
         self.selected = 0;
     }
 
+    /// :keymap / :km 쿼리 처리
+    fn handle_keymap_query(&mut self, query: &str) {
+        let sub = query
+            .strip_prefix(":keymap")
+            .or_else(|| query.strip_prefix(":km"))
+            .unwrap_or("")
+            .trim();
+        let config = crate::engine::load_config();
+        let items = kmd_core::keymap::keymap_items(&config, sub, self.use_emoji);
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
+    fn handle_keymap_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
+        let keywords = &result.item.keywords;
+        if keywords.ends_with(":noop") || keywords.contains(":noop:") {
+            return Task::none();
+        }
+        let mut config = crate::engine::load_config();
+        if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, keywords) {
+            tracing::info!("keymap action: {msg}");
+        }
+        self.handle_keymap_query(&self.query.clone());
+        Task::none()
+    }
+
     fn handle_settings_query(&mut self, query: &str) {
         let filter = match query.find(' ') {
             Some(pos) => query[pos + 1..].trim().to_lowercase(),
@@ -960,6 +989,11 @@ impl App {
                 ":prompt  Prompt Templates",
                 "Type :prompt  (manage reusable prompt templates for @ll)",
                 if emoji { "\u{1F4DD}" } else { "[PT]" },
+            ),
+            (
+                ":keymap  Keymap Control",
+                "Type :keymap or :km  (kanata status, on/off, profile switch)",
+                if emoji { "\u{2328}\u{FE0F}" } else { "[KEY]" },
             ),
             (
                 ":version  Version Info",
@@ -1312,6 +1346,12 @@ impl App {
             return self.handle_settings_action(&result);
         }
 
+        if result.item.kind == ItemKind::SystemCommand
+            && result.item.keywords.starts_with("kmd:keymap:")
+        {
+            return self.handle_keymap_action(&result);
+        }
+
         if self.state_dirty {
             self.window_state.save();
         }
@@ -1431,6 +1471,7 @@ enum Prefix {
     Help,
     Version,
     Shell,
+    Keymap,
     General,
 }
 
@@ -1455,6 +1496,8 @@ fn prefix_of(query: &str) -> Prefix {
         || query.starts_with(":v ")
     {
         Prefix::Version
+    } else if query.starts_with(":keymap") || query.starts_with(":km ") || query == ":km" {
+        Prefix::Keymap
     } else if query.starts_with('!') {
         Prefix::Shell
     } else {
@@ -1856,6 +1899,8 @@ fn help_query_seed(name: &str) -> Option<&'static str> {
         Some(":emoji ")
     } else if name.starts_with(":set") {
         Some(":set")
+    } else if name.starts_with(":keymap") {
+        Some(":keymap")
     } else if name.starts_with(":version") || name.starts_with("Version Info") {
         Some(":version")
     } else if name.starts_with("!") {

@@ -2,6 +2,24 @@
 
 ---
 
+## v0.3.2 (2026-02-17)
+
+### Kanata 키맵 통합
+
+- **내장 프리셋**: `vim-nav`, `minimal` — `kmd keymap init vim-nav` / `kmd keymap list-presets`
+- **vim-nav**: Alt 홀드 → Vim 스타일 HJKL 네비게이션 + Alt+Space → kmd-desktop 실행 (`cmd kmd-desktop`)
+- **Desktop `:keymap` / `:km`**: 상태 표시, on/off, 프로파일 전환
+- **CLI**: `kmd keymap start/stop/status/list/use/init/list-presets`
+
+### 프로그램 아이콘
+
+- **새 keymander 아이콘**: 픽셀아트 스타일(k>>r) 적용
+- **kmd.exe, kmd-desktop.exe**: ICO 임베드 (탐색기/작업표시줄)
+- **kmd-desktop 윈도우**: PNG 기반 32x32 아이콘
+- **gen-icon**: PNG→ICO 변환기로 전환 (`cargo run --manifest-path tools/gen-icon/Cargo.toml`)
+
+---
+
 ## v0.3.1 (2026-02-17)
 
 ### kmd-desktop: 브랜드 아이콘 적용

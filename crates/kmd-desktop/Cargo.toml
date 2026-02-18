@@ -1,6 +1,6 @@
 [package]
 name = "kmd-desktop"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "keymander Desktop — GPU-accelerated launcher with iced"
 license = "MIT"
@@ -16,6 +16,7 @@ kmd-core = { path = "../kmd-core" }
 # GUI
 iced = { version = "0.14", features = ["tokio", "image"] }
 tokio = { version = "1", features = ["rt", "sync"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # OS integration
 open = "5"

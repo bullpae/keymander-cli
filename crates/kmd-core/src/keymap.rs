@@ -1,11 +1,115 @@
-//! Keymap backend integration (prototype).
+//! Keymap backend integration — Kanata 프로세스 관리 + 내장 프로파일 갤러리.
 //!
-//! Current MVP supports Kanata process management and profile files.
+//! keymander는 kanata 프로파일을 관리하는 도구 역할을 한다.
+//! kanata 프로세스는 독립적으로 실행되며, PID 파일 기반 loose coupling.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::Config;
+
+// ── 내장 프로파일 프리셋 ──────────────────────────────────────────────────────
+
+/// 내장 프리셋 정의: (이름, 설명, .kbd 내용)
+pub struct BuiltinPreset {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub content: &'static str,
+}
+
+pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
+    BuiltinPreset {
+        name: "vim-nav",
+        description: "Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행",
+        content: VIM_NAV_KBD,
+    },
+    BuiltinPreset {
+        name: "minimal",
+        description: "CapsLock → Esc 최소 맵핑",
+        content: MINIMAL_KBD,
+    },
+];
+
+const VIM_NAV_KBD: &str = r#";; ============================================================
+;; keymander vim-nav 프로파일
+;; Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행
+;;
+;; 의존: kanata (https://github.com/jtroo/kanata)
+;; 생성: kmd keymap init vim-nav
+;; ============================================================
+
+;; ── 1. 환경 설정 ──────────────────────────────────────────────
+(defcfg
+  process-unmapped-keys yes
+  danger-enable-cmd yes
+)
+
+;; ── 2. 물리 키 매핑 ──────────────────────────────────────────
+(defsrc
+  alt  spc  h    j    k    l    n    m    i    o    .    /    y    p
+)
+
+;; ── 3. 기본 레이어 ──────────────────────────────────────────
+(deflayer default
+  @nav-mod  spc  h    j    k    l    n    m    i    o    .    /    y    p
+)
+
+;; ── 4. 네비게이션 레이어 ────────────────────────────────────
+;;    Alt 홀드 상태에서 동작하는 Vim 스타일 키셋
+;;
+;;    h/j/k/l  = ←↓↑→          n/m = PageUp/PageDown
+;;    i        = 단어 앞(1탭) / Home(2탭)
+;;    o        = 단어 뒤(1탭) / End(2탭)
+;;    .        = Backspace      / = Del(1탭) / 줄 삭제(2탭)
+;;    y        = 줄 복사        p = 붙여넣기
+;;    Space    = kmd-desktop 실행 (Alt+Space)
+(deflayer navigation
+  _  @launch-kmd  left down up rght pgup pgdn @i-dt @o-dt bspc @sl-dt @y-cp @p-vt
+)
+
+;; ── 5. 기능 정의 ────────────────────────────────────────────
+(defalias
+  ;; --- keymander 실행 (Alt+Space) ---
+  launch-kmd (cmd kmd-desktop)
+
+  ;; --- 기초 매크로 (편집 기능) ---
+  del-line (macro home S-end del)
+  y-cp     (macro home S-end C-c)
+  p-vt     C-v
+
+  ;; --- 복합 기능 (tap-dance) ---
+  ;; 200ms 이내에 연타하면 두 번째 기능이 실행됩니다.
+  i-dt  (tap-dance 200 (C-left home))
+  o-dt  (tap-dance 200 (C-rght end))
+  sl-dt (tap-dance 200 (del @del-line))
+
+  ;; --- Alt 레이어 전환 ---
+  ;; Alt 홀드 → navigation 레이어, Alt 짧게 탭 → ESC
+  nav-mod (tap-hold 200 200 esc (layer-toggle navigation))
+)
+"#;
+
+const MINIMAL_KBD: &str = r#";; ============================================================
+;; keymander minimal 프로파일
+;; CapsLock → Esc 최소 맵핑
+;;
+;; 생성: kmd keymap init minimal
+;; ============================================================
+
+(defcfg
+  process-unmapped-keys yes
+)
+
+(defsrc
+  caps a s d f j k l ;
+)
+
+(deflayer base
+  esc  a s d f j k l ;
+)
+"#;
+
+// ── 디렉토리/경로 헬퍼 ───────────────────────────────────────────────────────
 
 fn state_dir() -> PathBuf {
     Config::default_data_dir().join("keymap")
@@ -41,6 +145,8 @@ fn kanata_command(config: &Config) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "kanata".to_string())
 }
+
+// ── PID 관리 ──────────────────────────────────────────────────────────────────
 
 fn ensure_state_dir() -> std::io::Result<()> {
     std::fs::create_dir_all(state_dir())
@@ -83,6 +189,8 @@ fn is_pid_running(pid: u32) -> bool {
     }
 }
 
+// ── 프로세스 상태/제어 ───────────────────────────────────────────────────────
+
 pub fn status() -> String {
     if let Some(pid) = read_pid() {
         if is_pid_running(pid) {
@@ -95,46 +203,8 @@ pub fn status() -> String {
     }
 }
 
-pub fn list_profiles(config: &Config) -> Vec<String> {
-    let dir = profile_dir(config);
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("kbd") {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                names.push(name.to_string());
-            }
-        }
-    }
-    names.sort();
-    names
-}
-
-pub fn create_profile_template(config: &Config, file_name: &str) -> Result<PathBuf, String> {
-    let dir = profile_dir(config);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let name = if file_name.ends_with(".kbd") {
-        file_name.to_string()
-    } else {
-        format!("{file_name}.kbd")
-    };
-    let path = dir.join(name);
-    if path.exists() {
-        return Ok(path);
-    }
-    let template = r#"(defsrc
-  caps a s d f j k l ;
-)
-
-(deflayer base
-  esc  a s d f j k l ;
-)
-"#;
-    std::fs::write(&path, template).map_err(|e| e.to_string())?;
-    Ok(path)
+pub fn is_running() -> bool {
+    read_pid().is_some_and(is_pid_running)
 }
 
 pub fn start(config: &Config) -> Result<String, String> {
@@ -210,6 +280,58 @@ pub fn stop() -> Result<String, String> {
     }
 }
 
+// ── 프로파일 관리 ────────────────────────────────────────────────────────────
+
+pub fn list_profiles(config: &Config) -> Vec<String> {
+    let dir = profile_dir(config);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("kbd") {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+/// 프리셋 이름으로 내장 프리셋의 내용을 반환.
+pub fn preset_content(preset_name: &str) -> Option<&'static str> {
+    let normalized = preset_name.trim_end_matches(".kbd").to_ascii_lowercase();
+    BUILTIN_PRESETS
+        .iter()
+        .find(|p| p.name == normalized)
+        .map(|p| p.content)
+}
+
+/// 프로파일 생성: 내장 프리셋이 있으면 해당 내용 사용, 없으면 minimal 템플릿 생성.
+pub fn create_profile_template(config: &Config, file_name: &str) -> Result<PathBuf, String> {
+    let dir = profile_dir(config);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let name = with_extension(file_name);
+    let path = dir.join(&name);
+    if path.exists() {
+        return Ok(path);
+    }
+
+    let content = preset_content(file_name).unwrap_or(MINIMAL_KBD);
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// 사용 가능한 내장 프리셋 목록 (이름, 설명).
+pub fn list_presets() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_PRESETS
+        .iter()
+        .map(|p| (p.name, p.description))
+        .collect()
+}
+
 pub fn validate_profile_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("프로파일 이름이 비어 있습니다.".to_string());
@@ -230,4 +352,186 @@ pub fn with_extension(name: &str) -> String {
 
 pub fn exists(path: &Path) -> bool {
     path.exists()
+}
+
+/// keymap 상태 요약 정보 (Desktop UI 표시용)
+pub fn status_summary(config: &Config) -> (String, String, String) {
+    let state = status();
+    let backend = config.launcher.keymap.backend.clone();
+    let profile = config.launcher.keymap.active_profile.clone();
+    (state, backend, profile)
+}
+
+// ── IndexItem 생성 (Desktop/TUI UI용) ────────────────────────────────────────
+
+use crate::index::{IndexItem, ItemKind, Source};
+
+/// `:keymap` 명령 결과 아이템 목록 생성
+pub fn keymap_items(config: &Config, sub_query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let emoji = use_emoji;
+    let sub = sub_query.trim().to_ascii_lowercase();
+
+    if sub == "on" || sub == "start" {
+        return vec![action_item(
+            "keymap start — kanata 시작",
+            &format!("프로파일: {}", config.launcher.keymap.active_profile),
+            if emoji { "\u{25B6}\u{FE0F}" } else { "[>]" },
+            "kmd:keymap:start",
+        )];
+    }
+    if sub == "off" || sub == "stop" {
+        return vec![action_item(
+            "keymap stop — kanata 중지",
+            &status(),
+            if emoji { "\u{23F9}\u{FE0F}" } else { "[S]" },
+            "kmd:keymap:stop",
+        )];
+    }
+    if sub.starts_with("use ") {
+        let profile_name = sub.strip_prefix("use ").unwrap_or("").trim();
+        if profile_name.is_empty() {
+            return profile_list_items(config, emoji);
+        }
+        return vec![action_item(
+            &format!("keymap use {profile_name}"),
+            "프로파일 전환 (kanata 재시작 필요)",
+            if emoji { "\u{1F504}" } else { "[U]" },
+            &format!("kmd:keymap:use:{profile_name}"),
+        )];
+    }
+    if sub == "presets" || sub == "list-presets" {
+        return preset_list_items(emoji);
+    }
+
+    // 기본: 상태 + 프로파일 목록 + 프리셋 안내
+    let mut items = vec![status_item(config, emoji)];
+    items.extend(profile_list_items(config, emoji));
+    items.extend(help_items(emoji));
+    items
+}
+
+fn status_item(config: &Config, emoji: bool) -> IndexItem {
+    let (state, backend, profile) = status_summary(config);
+    IndexItem {
+        name: format!("Keymap: {state}"),
+        path: format!("backend: {backend}, profile: {profile}"),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: if emoji {
+            if is_running() {
+                "\u{2705}"
+            } else {
+                "\u{26AA}"
+            }
+        } else if is_running() {
+            "[ON]"
+        } else {
+            "[--]"
+        }
+        .to_string(),
+        keywords: "kmd:keymap:noop".to_string(),
+    }
+}
+
+fn profile_list_items(config: &Config, emoji: bool) -> Vec<IndexItem> {
+    let profiles = list_profiles(config);
+    let active = &config.launcher.keymap.active_profile;
+    profiles
+        .into_iter()
+        .map(|p| {
+            let is_active = p == *active;
+            IndexItem {
+                name: format!("{}  {}", if is_active { "*" } else { " " }, p),
+                path: if is_active {
+                    "active profile".to_string()
+                } else {
+                    format!(":keymap use {p}")
+                },
+                kind: ItemKind::SystemCommand,
+                source: Source::Plugin,
+                icon: if emoji {
+                    if is_active {
+                        "\u{1F4CC}"
+                    } else {
+                        "\u{1F4C4}"
+                    }
+                } else if is_active {
+                    "[*]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                keywords: format!("kmd:keymap:use:{p}"),
+            }
+        })
+        .collect()
+}
+
+fn preset_list_items(emoji: bool) -> Vec<IndexItem> {
+    list_presets()
+        .into_iter()
+        .map(|(name, desc)| IndexItem {
+            name: format!("preset: {name}"),
+            path: desc.to_string(),
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: if emoji { "\u{1F4E6}" } else { "[P]" }.to_string(),
+            keywords: format!("kmd:keymap:noop:{name}"),
+        })
+        .collect()
+}
+
+fn help_items(emoji: bool) -> Vec<IndexItem> {
+    vec![
+        action_item(
+            ":keymap on / off — kanata 시작/중지",
+            ":keymap use <profile> — 프로파일 전환",
+            if emoji { "\u{2139}\u{FE0F}" } else { "[?]" },
+            "kmd:keymap:noop",
+        ),
+        action_item(
+            ":keymap presets — 내장 프리셋 목록",
+            "kmd keymap init <preset> — 프리셋 설치 (CLI)",
+            if emoji { "\u{1F4E6}" } else { "[P]" },
+            "kmd:keymap:noop",
+        ),
+    ]
+}
+
+fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem {
+    IndexItem {
+        name: name.to_string(),
+        path: path.to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: icon.to_string(),
+        keywords: keywords.to_string(),
+    }
+}
+
+/// keymap 아이템 선택 시 실행할 액션 처리 (Desktop/TUI 공용)
+pub fn execute_keymap_action(config: &mut Config, keywords: &str) -> Option<String> {
+    if keywords == "kmd:keymap:start" {
+        return Some(match start(config) {
+            Ok(msg) => msg,
+            Err(e) => e,
+        });
+    }
+    if keywords == "kmd:keymap:stop" {
+        return Some(match stop() {
+            Ok(msg) => msg,
+            Err(e) => e,
+        });
+    }
+    if let Some(profile) = keywords.strip_prefix("kmd:keymap:use:") {
+        let profile_name = with_extension(profile);
+        let path = profile_dir(config).join(&profile_name);
+        if !path.exists() {
+            return Some(format!("프로파일 파일이 없습니다: {}", path.display()));
+        }
+        config.launcher.keymap.active_profile = profile_name.clone();
+        let _ = config.save();
+        return Some(format!("active profile 변경: {profile_name}"));
+    }
+    None
 }

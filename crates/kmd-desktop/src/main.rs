@@ -42,29 +42,13 @@ fn default_position(win: Size, monitor: Size) -> Point {
     )
 }
 
-/// Create a simple 32x32 RGBA icon (accent-colored square).
+/// 바이너리에 임베드된 아이콘 PNG를 32x32 RGBA로 디코딩하여 윈도우 아이콘 생성.
 fn create_icon() -> Option<window::Icon> {
-    let size = 32u32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    let (r, g, b) = (0x56u8, 0xD2u8, 0xFFu8);
-
-    let center = size as f32 / 2.0;
-    let outer = center - 2.0;
-
-    for y in 0..size {
-        for x in 0..size {
-            let dx = (x as f32 - center).abs();
-            let dy = (y as f32 - center).abs();
-            let inside = dx <= outer && dy <= outer;
-            if inside {
-                rgba.extend_from_slice(&[r, g, b, 255]);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-            }
-        }
-    }
-
-    window::icon::from_rgba(rgba, size, size).ok()
+    const ICON_PNG: &[u8] = include_bytes!("../../../assets/icon.png");
+    let img = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png).ok()?;
+    let resized = img.resize_exact(32, 32, image::imageops::FilterType::Lanczos3);
+    let rgba = resized.to_rgba8();
+    window::icon::from_rgba(rgba.into_raw(), 32, 32).ok()
 }
 
 fn main() -> iced::Result {

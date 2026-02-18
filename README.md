@@ -34,7 +34,9 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Multi web search**: `@m same query` (or `@msearch`) opens Google/Naver/Daum together
 - **Korean spelling check**: `@sp 문장` opens selected spelling check providers
 - **Translate EN↔KO**: `@tr text`, `@trko text`, `@tren text`
-- **Keymap backend prototype**: `kmd keymap ...` to manage Kanata profile/process
+- **Keymap management**: Built-in Kanata profiles (vim-nav, minimal) with `kmd keymap init/use/start/stop`
+  - `vim-nav` preset: Alt hold → Vim-style HJKL navigation + Alt+Space → launch kmd-desktop
+  - Desktop: `:keymap` or `:km` for status, on/off, profile switching
 - **Prompt templates**: `:prompt add review "Review this code: {query}"` → `@ll :review code`
 - **Quick Transform**: `:t spell text`, `:t trko text` — clipboard → spell check / translate instantly
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
@@ -123,6 +125,24 @@ alt + space
     alacritty --class kmd-float -e kmd
 ```
 
+**Recommended: Kanata + keymander (Vim navigation + launcher hotkey)**
+
+Install [Kanata](https://github.com/jtroo/kanata), then:
+
+```bash
+kmd keymap init vim-nav    # install vim-nav preset → Alt hold = Vim nav, Alt+Space = kmd-desktop
+kmd keymap start           # start kanata with the active profile
+```
+
+The `vim-nav` preset provides:
+- Alt hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
+- Alt + Space = launch kmd-desktop (via kanata `cmd`)
+- Alt tap (alone) = Esc
+
+Register kanata as an OS startup program for persistent keymap.
+
+See `kmd keymap list-presets` for all built-in presets.
+
 ### CLI Commands
 
 ```bash
@@ -163,12 +183,14 @@ kmd emoji star -c 3     # copy 3rd result
 # Plugins
 kmd plugin list
 
-# Keymap backend prototype (Kanata)
-kmd keymap status
-kmd keymap init vim-nav
-kmd keymap list
-kmd keymap use vim-nav
-kmd keymap start
+# Keymap management (Kanata)
+kmd keymap status          # show keymap process status
+kmd keymap init vim-nav    # install preset and set active
+kmd keymap list            # list installed profiles
+kmd keymap list-presets    # show available built-in presets
+kmd keymap use vim-nav     # switch active profile
+kmd keymap start           # start kanata with active profile
+kmd keymap stop            # stop kanata process
 kmd keymap stop
 
 # Daemon (future)
@@ -430,7 +452,11 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-**v0.3.1** (current)
+**v0.3.2** (current)
+- Kanata keymap integration: vim-nav preset (Alt+Space → kmd-desktop), `:keymap` / `:km` in Desktop
+- New keymander icon (pixel-art k>>r) for exe and window
+
+**v0.3.1**
 - Brand icons: Google, ChatGPT, Naver, etc. — actual PNG logos instead of emojis (kmd-desktop)
 - Icon flickering fix: LazyLock cache for stable texture rendering
 
