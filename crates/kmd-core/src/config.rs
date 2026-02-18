@@ -65,7 +65,7 @@ pub struct LauncherConfig {
     pub search_paths: Vec<PathBuf>,
     /// Maximum search results from file providers
     pub max_results: usize,
-    /// Maximum recursive directory depth for file scanning (default: 6)
+    /// Maximum recursive directory depth for file scanning (default: 4)
     pub search_depth: usize,
     /// Patterns to ignore during file indexing
     pub ignore_patterns: Vec<String>,
@@ -128,8 +128,9 @@ impl Default for LauncherConfig {
             file_search_provider: "auto".to_string(),
             everything_path: None,
             search_paths: default_search_paths(),
-            max_results: 10000,
-            search_depth: 6,
+            // Conservative defaults to reduce cold-start indexing cost.
+            max_results: 5000,
+            search_depth: 4,
             ignore_patterns: vec![
                 // Version control
                 ".git".to_string(),
@@ -182,8 +183,8 @@ impl Default for LauncherConfig {
             ],
             quit_on_launch: true,
             index_directories: true,
-            scan_drives: true,
-            drive_scan_depth: 3,
+            scan_drives: false,
+            drive_scan_depth: 2,
             kind_weights: KindWeights::default(),
             web_services: vec![],
             multi_llm_providers: default_multi_llm_providers(),
@@ -813,8 +814,8 @@ mod tests {
         assert_eq!(config.keybindings.global_hotkey, "alt+space");
         assert_eq!(config.launcher.kind_weights.directory, 80);
         assert!(config.launcher.index_directories);
-        assert!(config.launcher.scan_drives);
-        assert_eq!(config.launcher.drive_scan_depth, 3);
+        assert!(!config.launcher.scan_drives);
+        assert_eq!(config.launcher.drive_scan_depth, 2);
         assert_eq!(
             config.launcher.multi_llm_providers,
             vec!["chatgpt", "gemini", "claude", "grok", "perplexity"]

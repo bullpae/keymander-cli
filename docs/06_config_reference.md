@@ -44,13 +44,13 @@ reset_ime_on_launch = true   # (Desktop) 실행 시 IME를 영문 모드로 시�
 file_search_provider = "auto"     # 파일 검색 프로바이더
 # everything_path = "C:\\Program Files\\Everything\\es.exe"
 # search_paths = []              # 검색 디렉토리 (기본: 플랫폼별 사용자 폴더)
-max_results = 10000               # 파일 프로바이더 최대 결과 수
-search_depth = 6                  # 최대 재귀 탐색 깊이
+max_results = 5000                # 파일 프로바이더 최대 결과 수
+search_depth = 4                  # 최대 재귀 탐색 깊이
 ignore_patterns = [".git", "node_modules", "target", "__pycache__", "Windows", "Program Files"]
 quit_on_launch = true             # 실행 후 kmd 자동 종료
 index_directories = true          # 폴더도 인덱스에 포함
-scan_drives = true                # 드라이브 루트 자동 스캔 (C:\, D:\ 등)
-drive_scan_depth = 3              # 드라이브 루트 스캔 깊이
+scan_drives = false               # 드라이브 루트 자동 스캔 (C:\, D:\ 등)
+drive_scan_depth = 2              # 드라이브 루트 스캔 깊이
 
 # 검색 결과 우선순위 가중치 (0-100, 높을수록 상위 노출)
 [launcher.kind_weights]
@@ -101,13 +101,13 @@ toggle_preview = "ctrl+p"
 | file_search_provider | String | "auto" | 파일 검색 백엔드 |
 | everything_path | Path? | None | es.exe 경로 (Windows) |
 | search_paths | Vec\<Path\> | 플랫폼별 | 검색 대상 디렉토리 (기본: Desktop, Documents, Downloads 등) |
-| max_results | usize | 10000 | 최대 인덱스 항목 수 |
-| search_depth | usize | 6 | 최대 재귀 디렉토리 탐색 깊이 |
+| max_results | usize | 5000 | 최대 인덱스 항목 수 |
+| search_depth | usize | 4 | 최대 재귀 디렉토리 탐색 깊이 |
 | ignore_patterns | Vec\<String\> | [".git", ...] | 무시 패턴 |
 | quit_on_launch | bool | true | 실행 후 kmd 종료 (런처 모드) |
 | index_directories | bool | true | 폴더를 검색 인덱스에 포함 |
-| scan_drives | bool | true | 드라이브 루트 자동 스캔 |
-| drive_scan_depth | usize | 3 | 드라이브 루트 스캔 깊이 |
+| scan_drives | bool | false | 드라이브 루트 자동 스캔 |
+| drive_scan_depth | usize | 2 | 드라이브 루트 스캔 깊이 |
 | web_services | Vec\<WebService\> | [] | 커스텀 웹 서비스 |
 
 ### 4.3 [launcher.kind_weights]

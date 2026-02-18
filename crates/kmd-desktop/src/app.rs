@@ -123,7 +123,9 @@ impl App {
         config: kmd_core::Config,
         window_state: WindowState,
     ) -> (Self, Task<Message>) {
-        let engine = kmd_core::SearchEngine::new();
+        // Boot with a lightweight engine so users can type/search immediately.
+        // Full file index is loaded in background and hot-swapped on EngineReady.
+        let engine = crate::engine::create_quick_search_engine(&config);
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
         let selected_llm_providers = config.launcher.multi_llm_providers.clone();

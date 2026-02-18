@@ -391,12 +391,12 @@ reset_ime_on_launch = true  # Desktop: reset IME to English mode on open
 
 [launcher]
 file_search_provider = "auto"  # auto | builtin | fd | everything | mdfind | locate | winfs
-max_results = 10000
-search_depth = 6
+max_results = 5000
+search_depth = 4
 quit_on_launch = true
 index_directories = true       # include folders in search index
-scan_drives = true             # auto-discover drive roots (C:\, D:\, etc.)
-drive_scan_depth = 3           # shallow depth for drive root scanning
+scan_drives = false            # auto-discover drive roots (C:\, D:\, etc.)
+drive_scan_depth = 2           # shallow depth for drive root scanning
 multi_llm_providers = ["chatgpt", "gemini", "claude", "grok", "perplexity"]  # providers used by @llm
 multi_llm_prefixes = ["@ll", "@llm", "@multi", "@cmp", "@compare"]            # aliases for multi-LLM command
 multi_web_providers = ["google", "naver_search", "daum"]  # engines used by @msearch
@@ -452,7 +452,12 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-**v0.3.3** (current)
+**v0.3.4** (current)
+- 2-stage startup engine (quick index → full index hot-swap) for faster initial interaction
+- Lighter default scan profile (`max_results=5000`, `search_depth=4`, `scan_drives=false`)
+- Additional startup timing logs for performance troubleshooting
+
+**v0.3.3**
 - Startup/visibility stabilization: off-screen window auto-recenter, safe window-state restore
 - Faster post-update first launch: index cache version decoupled from app SemVer
 
