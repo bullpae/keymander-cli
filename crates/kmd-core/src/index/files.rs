@@ -377,12 +377,19 @@ fn collect_fd(config: &ProviderConfig) -> Vec<IndexItem> {
     let mut all_items = Vec::new();
 
     for dir in &search_dirs {
-        let output = Command::new(cmd_name)
-            .args(&args)
+        let mut cmd = Command::new(cmd_name);
+        cmd.args(&args)
             .arg(dir)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output();
+            .stderr(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = cmd.output();
 
         match output {
             Ok(output) => {
