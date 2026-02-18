@@ -452,7 +452,11 @@ toggle_preview = "ctrl+p"
 
 ## Roadmap
 
-**v0.3.2** (current)
+**v0.3.3** (current)
+- Startup/visibility stabilization: off-screen window auto-recenter, safe window-state restore
+- Faster post-update first launch: index cache version decoupled from app SemVer
+
+**v0.3.2**
 - Kanata keymap integration: vim-nav preset (Alt+Space → kmd-desktop), `:keymap` / `:km` in Desktop
 - New keymander icon (pixel-art k>>r) for exe and window
 

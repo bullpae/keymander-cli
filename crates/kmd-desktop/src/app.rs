@@ -245,10 +245,40 @@ impl App {
             Message::GotWindowId(id) => {
                 self.window_id = id;
                 match id {
-                    Some(id) => Task::batch([
-                        iced::widget::operation::focus::<Message>(self.input_id.clone()),
-                        window::raw_id::<Message>(id).map(Message::GotRawWindowId),
-                    ]),
+                    Some(id) => {
+                        let saved_x = self.window_state.x;
+                        let saved_y = self.window_state.y;
+                        let width = self.window_width;
+                        let ensure_visible = window::monitor_size(id).then(move |maybe_size| {
+                            let (Some(x), Some(y), Some(mon)) = (saved_x, saved_y, maybe_size)
+                            else {
+                                return Task::none();
+                            };
+
+                            // If restored geometry is likely out of visible monitor bounds,
+                            // recenter to keep the launcher discoverable.
+                            let w = width.clamp(420.0, 1200.0);
+                            let h = SEARCH_BAR_HEIGHT;
+                            let outside = x + w < 40.0
+                                || x > mon.width - 40.0
+                                || y + h < 20.0
+                                || y > mon.height - 20.0;
+
+                            if outside {
+                                let recentered =
+                                    Point::new((mon.width - w) / 2.0, (mon.height / 3.0).max(0.0));
+                                window::move_to(id, recentered)
+                            } else {
+                                Task::none()
+                            }
+                        });
+
+                        Task::batch([
+                            iced::widget::operation::focus::<Message>(self.input_id.clone()),
+                            window::raw_id::<Message>(id).map(Message::GotRawWindowId),
+                            ensure_visible,
+                        ])
+                    }
                     None => iced::widget::operation::focus::<Message>(self.input_id.clone()),
                 }
             }

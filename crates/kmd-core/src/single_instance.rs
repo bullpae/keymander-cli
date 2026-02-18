@@ -20,6 +20,8 @@ const QUIT_SIGNAL: &str = "kmd.quit";
 const TOGGLE_WAIT_ITERATIONS: u32 = 40;
 /// Milliseconds to sleep between each poll.
 const TOGGLE_WAIT_MS: u64 = 50;
+/// Ignore ultra-fast repeated launches to avoid accidental immediate toggle-off.
+const RECENT_LOCK_DEBOUNCE_MS: u64 = 700;
 
 /// Result of attempting to acquire the single-instance lock.
 pub enum InstanceAction {
@@ -79,6 +81,11 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
     if let Ok(contents) = fs::read_to_string(&lock_path) {
         if let Ok(pid) = contents.trim().parse::<u32>() {
             if pid != std::process::id() && is_process_alive(pid) {
+                // Hotkey repeat can spawn another process immediately after launch.
+                // In that window, treat it as duplicate launch instead of toggle-off.
+                if is_recent_lock(&lock_path, RECENT_LOCK_DEBOUNCE_MS) {
+                    return InstanceAction::SignalledExisting;
+                }
                 // ── Another instance is alive — signal it to quit ────────
 
                 // Write the quit signal file
@@ -113,6 +120,19 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
         lock_path,
         quit_signal_path,
     })
+}
+
+fn is_recent_lock(lock_path: &Path, threshold_ms: u64) -> bool {
+    let Ok(meta) = fs::metadata(lock_path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(elapsed) = modified.elapsed() else {
+        return false;
+    };
+    elapsed.as_millis() <= threshold_ms as u128
 }
 
 // ── Platform-specific process helpers ────────────────────────────────────────

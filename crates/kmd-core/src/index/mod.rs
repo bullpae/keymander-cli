@@ -157,11 +157,13 @@ impl Index {
         }
     }
 
-    /// Current cache version. Increment this when the indexing logic changes
-    /// to force cache invalidation.
+    /// Current index schema/cache version.
+    ///
+    /// Keep this independent from product SemVer so patch/minor releases
+    /// do not force unnecessary full reindexing on first launch.
+    /// Bump this only when index format/compatibility changes.
     pub fn current_version() -> &'static str {
-        // Format: "crate_version-schema_revision"
-        concat!(env!("CARGO_PKG_VERSION"), "-2")
+        "schema-2"
     }
 
     /// Total number of indexed items

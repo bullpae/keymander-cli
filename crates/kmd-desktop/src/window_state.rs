@@ -17,6 +17,9 @@ pub struct WindowState {
 }
 
 impl WindowState {
+    const MIN_WIDTH: f32 = 420.0;
+    const MAX_WIDTH: f32 = 1200.0;
+
     /// Path to the state file.
     fn state_path() -> PathBuf {
         kmd_core::Config::default_data_dir()
@@ -32,7 +35,7 @@ impl WindowState {
         }
         match std::fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str(&content) {
-                Ok(state) => state,
+                Ok(state) => Self::sanitize(state),
                 Err(e) => {
                     tracing::warn!("Failed to parse window state ({}): {e}", path.display());
                     Self::default()
@@ -72,5 +75,15 @@ impl WindowState {
     /// Delete the state file, resetting to defaults on next launch.
     pub fn reset() {
         let _ = std::fs::remove_file(Self::state_path());
+    }
+
+    fn sanitize(mut state: Self) -> Self {
+        state.x = state.x.filter(|v| v.is_finite());
+        state.y = state.y.filter(|v| v.is_finite());
+        state.width = state
+            .width
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(Self::MIN_WIDTH, Self::MAX_WIDTH));
+        state
     }
 }

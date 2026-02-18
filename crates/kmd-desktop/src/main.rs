@@ -82,7 +82,10 @@ fn main() -> iced::Result {
     let config = engine::load_config();
     let window_state = WindowState::load();
 
-    let width = window_state.width.unwrap_or(DEFAULT_WIDTH);
+    let width = window_state
+        .width
+        .unwrap_or(DEFAULT_WIDTH)
+        .clamp(420.0, 1200.0);
     let initial_size = Size::new(width, SEARCH_BAR_HEIGHT);
 
     let position = match (window_state.x, window_state.y) {
