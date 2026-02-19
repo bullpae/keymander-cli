@@ -45,19 +45,16 @@ pub fn create_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine
 pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine {
     let started = Instant::now();
 
-    let mut quick_launcher = config.launcher.clone();
-    quick_launcher.max_results = 0;
-    quick_launcher.search_paths.clear();
-    quick_launcher.scan_drives = false;
-
-    let index = kmd_core::Index::build(&quick_launcher, config.general.emoji_icons);
+    let index = kmd_core::Index::build_quick(config.general.emoji_icons);
+    let count = index.items.len();
 
     let mut engine = kmd_core::SearchEngine::new();
     engine.set_kind_weights(config.launcher.kind_weights.clone());
     engine.load(index.items);
     tracing::info!(
-        "Quick search engine ready in {} ms",
-        started.elapsed().as_millis()
+        "Quick search engine ready in {} ms ({} items)",
+        started.elapsed().as_millis(),
+        count
     );
     engine
 }

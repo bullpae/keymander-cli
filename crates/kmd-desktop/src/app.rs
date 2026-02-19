@@ -286,6 +286,7 @@ impl App {
             }
             Message::GotRawWindowId(raw_id) => {
                 crate::platform::force_square_corners(raw_id);
+                crate::platform::force_foreground(raw_id);
                 if self.reset_ime_on_launch {
                     crate::platform::force_english_ime(raw_id);
                 }

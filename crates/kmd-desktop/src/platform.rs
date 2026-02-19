@@ -80,3 +80,29 @@ pub fn force_english_ime(raw_id: u64) {
 pub fn force_english_ime(_raw_id: u64) {
     // No-op on non-Windows platforms.
 }
+
+/// Bring the window to the foreground and give it keyboard focus.
+///
+/// Without this, `AlwaysOnTop` makes the window visible but keyboard
+/// input goes to the previously focused window. Essential for hotkey-
+/// triggered launchers.
+#[cfg(target_os = "windows")]
+pub fn force_foreground(raw_id: u64) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+
+    unsafe {
+        let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
+        if hwnd.0.is_null() {
+            return;
+        }
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(hwnd);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn force_foreground(_raw_id: u64) {
+    // No-op on non-Windows platforms.
+}

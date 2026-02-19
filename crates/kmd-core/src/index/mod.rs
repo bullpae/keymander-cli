@@ -95,6 +95,36 @@ impl Index {
     /// 3. General file provider scan — fills remaining quota
     /// 4. Deduplicate by path
     pub fn build(config: &crate::config::LauncherConfig, use_emoji: bool) -> Self {
+        Self::build_inner(config, use_emoji, true)
+    }
+
+    /// Lightweight build: PATH + system commands only (no apps, no files).
+    /// Used for instant boot — the full index replaces this shortly after.
+    pub fn build_quick(use_emoji: bool) -> Self {
+        let mut items = Vec::new();
+
+        let executables = path::collect_executables(use_emoji);
+        tracing::info!("PATH executables: {} items", executables.len());
+        items.extend(executables);
+
+        let sys_cmds = system_commands::collect_system_commands(use_emoji);
+        tracing::info!("System commands: {} items", sys_cmds.len());
+        items.extend(sys_cmds);
+
+        tracing::info!("Quick index: {} items total", items.len());
+
+        Self {
+            items,
+            last_updated: Some(chrono_now()),
+            version: Self::current_version().to_string(),
+        }
+    }
+
+    fn build_inner(
+        config: &crate::config::LauncherConfig,
+        use_emoji: bool,
+        include_apps: bool,
+    ) -> Self {
         use std::collections::HashSet;
 
         let mut items = Vec::new();
@@ -109,10 +139,12 @@ impl Index {
         tracing::info!("System commands: {} items", sys_cmds.len());
         items.extend(sys_cmds);
 
-        // 3. OS applications
-        let apps = apps::collect_apps(use_emoji);
-        tracing::info!("OS applications: {} items", apps.len());
-        items.extend(apps);
+        // 3. OS applications (skipped for quick boot)
+        if include_apps {
+            let apps = apps::collect_apps(use_emoji);
+            tracing::info!("OS applications: {} items", apps.len());
+            items.extend(apps);
+        }
 
         // 4. File search: priority directories FIRST
         let provider_config = files::ProviderConfig {
