@@ -250,4 +250,42 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_is_recent_lock_fresh_file_returns_true() {
+        let dir = std::env::temp_dir().join("kmd_test_recent_lock_fresh");
+        let _ = fs::create_dir_all(&dir);
+        let lock = dir.join("fresh.lock");
+        fs::write(&lock, "test").unwrap();
+
+        assert!(
+            is_recent_lock(&lock, 5000),
+            "방금 생성한 파일은 recent로 판정되어야 함"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_is_recent_lock_old_file_returns_false() {
+        let dir = std::env::temp_dir().join("kmd_test_recent_lock_old");
+        let _ = fs::create_dir_all(&dir);
+        let lock = dir.join("old.lock");
+        fs::write(&lock, "test").unwrap();
+
+        // mtime을 2초 전으로 설정
+        let two_sec_ago = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(2);
+        let _ = filetime::set_file_mtime(
+            &lock,
+            filetime::FileTime::from_system_time(two_sec_ago),
+        );
+
+        assert!(
+            !is_recent_lock(&lock, RECENT_LOCK_DEBOUNCE_MS),
+            "2초 전 파일은 700ms debounce를 초과하여 recent가 아님"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

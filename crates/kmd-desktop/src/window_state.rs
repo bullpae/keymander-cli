@@ -87,3 +87,68 @@ impl WindowState {
         state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_nan_resets_to_none() {
+        let state = WindowState {
+            x: Some(f32::NAN),
+            y: Some(f32::NAN),
+            width: Some(f32::NAN),
+        };
+        let s = WindowState::sanitize(state);
+        assert!(s.x.is_none(), "NaN x → None");
+        assert!(s.y.is_none(), "NaN y → None");
+        assert!(s.width.is_none(), "NaN width → None");
+    }
+
+    #[test]
+    fn test_sanitize_infinity_resets_to_none() {
+        let pos_inf = WindowState {
+            x: Some(f32::INFINITY),
+            y: Some(f32::INFINITY),
+            width: Some(f32::INFINITY),
+        };
+        let s = WindowState::sanitize(pos_inf);
+        assert!(s.x.is_none());
+        assert!(s.y.is_none());
+        assert!(s.width.is_none());
+
+        let neg_inf = WindowState {
+            x: Some(f32::NEG_INFINITY),
+            y: Some(f32::NEG_INFINITY),
+            width: Some(f32::NEG_INFINITY),
+        };
+        let s = WindowState::sanitize(neg_inf);
+        assert!(s.x.is_none());
+        assert!(s.y.is_none());
+        assert!(s.width.is_none());
+    }
+
+    #[test]
+    fn test_sanitize_width_clamps_to_range() {
+        let too_small = WindowState { x: None, y: None, width: Some(100.0) };
+        let s = WindowState::sanitize(too_small);
+        assert_eq!(s.width, Some(WindowState::MIN_WIDTH));
+
+        let too_large = WindowState { x: None, y: None, width: Some(9999.0) };
+        let s = WindowState::sanitize(too_large);
+        assert_eq!(s.width, Some(WindowState::MAX_WIDTH));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_valid_values() {
+        let state = WindowState {
+            x: Some(500.0),
+            y: Some(300.0),
+            width: Some(680.0),
+        };
+        let s = WindowState::sanitize(state);
+        assert_eq!(s.x, Some(500.0));
+        assert_eq!(s.y, Some(300.0));
+        assert_eq!(s.width, Some(680.0));
+    }
+}

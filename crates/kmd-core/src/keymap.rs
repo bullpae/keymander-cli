@@ -170,10 +170,17 @@ fn clear_pid() {
 fn is_pid_running(pid: u32) -> bool {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(out) = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
+        let mut cmd = Command::new("tasklist");
+        cmd.args(["/FI", &format!("PID eq {pid}")]);
+
+        #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        if let Ok(out) = cmd.output() {
             let text = String::from_utf8_lossy(&out.stdout).to_string();
             return text.contains(&pid.to_string());
         }
@@ -255,10 +262,16 @@ pub fn stop() -> Result<String, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let status = cmd.status().map_err(|e| e.to_string())?;
         clear_pid();
         if status.success() {
             return Ok(format!("kanata 중지 완료 (pid={pid})"));

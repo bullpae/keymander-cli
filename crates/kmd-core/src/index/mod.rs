@@ -238,4 +238,38 @@ mod tests {
         assert_eq!(format!("{}", ItemKind::File), "File");
         assert_eq!(format!("{}", ItemKind::SystemCommand), "System");
     }
+
+    #[test]
+    fn test_build_quick_excludes_apps() {
+        let idx = Index::build_quick(false);
+        let has_apps = idx.items.iter().any(|i| i.source == Source::Apps);
+        assert!(
+            !has_apps,
+            "quick 인덱스에 Apps 소스가 포함되면 부팅이 느려짐 (PowerShell 호출)"
+        );
+    }
+
+    #[test]
+    fn test_build_quick_excludes_file_provider() {
+        let idx = Index::build_quick(false);
+        let has_files = idx.items.iter().any(|i| i.source == Source::FileProvider);
+        assert!(
+            !has_files,
+            "quick 인덱스에 FileProvider 소스가 포함되면 부팅이 느려짐"
+        );
+    }
+
+    #[test]
+    fn test_build_quick_contains_only_fast_sources() {
+        let idx = Index::build_quick(false);
+        assert!(!idx.is_empty(), "quick 인덱스가 비어 있으면 안됨");
+        for item in &idx.items {
+            assert!(
+                item.source == Source::Path || item.source == Source::SystemCommand,
+                "quick 인덱스에 허용되지 않는 소스: {:?} (item: {})",
+                item.source,
+                item.name
+            );
+        }
+    }
 }

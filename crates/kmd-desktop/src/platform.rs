@@ -106,3 +106,18 @@ pub fn force_foreground(raw_id: u64) {
 pub fn force_foreground(_raw_id: u64) {
     // No-op on non-Windows platforms.
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 플랫폼 함수 시그니처 존재 검증 (컴파일 가드).
+    /// 이 함수 중 하나라도 삭제/이름 변경되면 컴파일 에러로 즉시 감지.
+    /// v0.3.6 회귀 방지: force_foreground 누락 시 키보드 포커스 미동작.
+    #[test]
+    fn test_platform_functions_compile() {
+        let _: fn(u64) = force_square_corners;
+        let _: fn(u64) = force_english_ime;
+        let _: fn(u64) = force_foreground;
+    }
+}
