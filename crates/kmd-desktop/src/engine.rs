@@ -4,6 +4,8 @@
 //! and this module handles all kmd-core integration concerns.
 use std::time::Instant;
 
+const QUICK_INDEX_CACHE_FILENAME: &str = "quick-index.json";
+
 /// Load the user configuration, falling back to defaults on failure.
 pub fn load_config() -> kmd_core::Config {
     let config_dir = kmd_core::Config::default_config_dir();
@@ -45,7 +47,7 @@ pub fn create_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine
 pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::SearchEngine {
     let started = Instant::now();
 
-    let index = kmd_core::Index::build_quick(config.general.emoji_icons);
+    let index = load_or_build_quick_index(config.general.emoji_icons);
     let count = index.items.len();
 
     let mut engine = kmd_core::SearchEngine::new();
@@ -57,6 +59,48 @@ pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::Search
         count
     );
     engine
+}
+
+fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
+    let started = Instant::now();
+    let data_dir = kmd_core::Config::default_data_dir();
+    let cache_path = data_dir.join("desktop").join(QUICK_INDEX_CACHE_FILENAME);
+    let expected_version = kmd_core::Index::current_version();
+
+    if cache_path.exists() {
+        match kmd_core::index::store::load_index(&cache_path) {
+            Ok(cached) if cached.version == expected_version => {
+                tracing::info!(
+                    "Quick index cache hit in {} ms",
+                    started.elapsed().as_millis()
+                );
+                return cached;
+            }
+            Ok(cached) => {
+                tracing::info!(
+                    "Quick index cache version mismatch (cache={:?}, expected={:?}), rebuilding",
+                    cached.version,
+                    expected_version
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read quick index cache: {e}, rebuilding");
+            }
+        }
+    }
+
+    let index = kmd_core::Index::build_quick(use_emoji);
+
+    if let Err(e) = kmd_core::index::store::save_index(&index, &cache_path) {
+        tracing::warn!("Failed to save quick index cache: {e}");
+    }
+
+    tracing::info!(
+        "Quick index rebuilt from source in {} ms",
+        started.elapsed().as_millis()
+    );
+
+    index
 }
 
 /// Load a cached index or build a fresh one.

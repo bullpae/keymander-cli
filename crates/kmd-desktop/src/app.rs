@@ -43,6 +43,9 @@ const SCORE_PLUGIN: u32 = u32::MAX;
 
 /// Interval between quit-signal polls (ms). Also used to flush state to disk.
 const QUIT_POLL_MS: u64 = 300;
+const WARMUP_IDLE_MS: u64 = 400;
+const FOCUS_RETRY_MS: u64 = 50;
+const MAX_FOCUS_RETRIES: u8 = 8;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
@@ -74,6 +77,7 @@ pub struct App {
     input_id: iced::widget::Id,
     scrollable_id: iced::widget::Id,
     window_id: Option<window::Id>,
+    raw_window_id: Option<u64>,
     use_emoji: bool,
     selected_llm_providers: Vec<String>,
     multi_llm_prefixes: Vec<String>,
@@ -94,6 +98,10 @@ pub struct App {
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
+
+    // ── Startup warmup ────────────────────────────────────────────────
+    full_warmup_started: bool,
+    warmup_token: u64,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -110,6 +118,8 @@ pub enum Message {
     StartWindowResize(window::Direction),
     GotWindowId(Option<window::Id>),
     GotRawWindowId(u64),
+    WarmupTick(u64),
+    EnsureFocus(u8),
     EngineReady,
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
@@ -143,11 +153,64 @@ impl App {
         let scrollable_id = iced::widget::Id::unique();
         let engine_slot: EngineSlot = Arc::new(Mutex::new(None));
 
-        let slot_for_task = engine_slot.clone();
-        let load_task = Task::future(async move {
+        let app = Self {
+            query: String::new(),
+            results: Vec::new(),
+            search_mode: kmd_core::SearchMode::Fuzzy,
+            selected: 0,
+            engine,
+            theme,
+            input_id: input_id.clone(),
+            scrollable_id,
+            window_id: None,
+            raw_window_id: None,
+            use_emoji,
+            selected_llm_providers,
+            multi_llm_prefixes,
+            selected_multi_web_providers,
+            multi_web_prefixes,
+            spell_providers,
+            spell_prefixes,
+            translate_providers,
+            translate_prefixes,
+            loading: false,
+            engine_slot,
+            _guard: guard,
+            window_width,
+            window_state,
+            state_dirty: false,
+            reset_ime_on_launch: reset_ime,
+            full_warmup_started: false,
+            warmup_token: 0,
+        };
+
+        let focus_task = iced::widget::operation::focus::<Message>(input_id);
+        let id_task = window::oldest().map(Message::GotWindowId);
+        let warmup_task = Self::schedule_warmup_tick(0);
+        (app, Task::batch([focus_task, id_task, warmup_task]))
+    }
+
+    fn schedule_warmup_tick(token: u64) -> Task<Message> {
+        Task::future(async move {
+            tokio::time::sleep(Duration::from_millis(WARMUP_IDLE_MS)).await;
+            Message::WarmupTick(token)
+        })
+    }
+
+    fn schedule_focus_retry(attempt: u8) -> Task<Message> {
+        Task::future(async move {
+            tokio::time::sleep(Duration::from_millis(FOCUS_RETRY_MS)).await;
+            Message::EnsureFocus(attempt)
+        })
+    }
+
+    fn spawn_full_engine_load_task(&self) -> Task<Message> {
+        let slot = self.engine_slot.clone();
+        Task::future(async move {
             let _ = tokio::task::spawn_blocking(move || {
+                let config = crate::engine::load_config();
                 let eng = crate::engine::create_search_engine(&config);
-                *slot_for_task.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
+                *slot.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
                     engine: eng,
                     use_emoji: config.general.emoji_icons,
                     llm_providers: config.launcher.multi_llm_providers.clone(),
@@ -162,39 +225,7 @@ impl App {
             })
             .await;
             Message::EngineReady
-        });
-
-        let app = Self {
-            query: String::new(),
-            results: Vec::new(),
-            search_mode: kmd_core::SearchMode::Fuzzy,
-            selected: 0,
-            engine,
-            theme,
-            input_id: input_id.clone(),
-            scrollable_id,
-            window_id: None,
-            use_emoji,
-            selected_llm_providers,
-            multi_llm_prefixes,
-            selected_multi_web_providers,
-            multi_web_prefixes,
-            spell_providers,
-            spell_prefixes,
-            translate_providers,
-            translate_prefixes,
-            loading: true,
-            engine_slot,
-            _guard: guard,
-            window_width,
-            window_state,
-            state_dirty: false,
-            reset_ime_on_launch: reset_ime,
-        };
-
-        let focus_task = iced::widget::operation::focus::<Message>(input_id);
-        let id_task = window::oldest().map(Message::GotWindowId);
-        (app, Task::batch([focus_task, id_task, load_task]))
+        })
     }
 
     // ─── Update ───────────────────────────────────────────────────────────
@@ -204,14 +235,30 @@ impl App {
             Message::QueryChanged(query) => {
                 self.query = query;
                 self.selected = 0;
-                self.perform_search()
+                let search_task = self.perform_search();
+                if self.full_warmup_started {
+                    search_task
+                } else {
+                    self.warmup_token = self.warmup_token.wrapping_add(1);
+                    let warmup_task = Self::schedule_warmup_tick(self.warmup_token);
+                    Task::batch([search_task, warmup_task])
+                }
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
                 self.selected = index;
                 self.launch_selected()
             }
-            Message::KeyEvent(key, _modifiers) => self.handle_key(key),
+            Message::KeyEvent(key, _modifiers) => {
+                let key_task = self.handle_key(key);
+                if self.full_warmup_started {
+                    key_task
+                } else {
+                    self.warmup_token = self.warmup_token.wrapping_add(1);
+                    let warmup_task = Self::schedule_warmup_tick(self.warmup_token);
+                    Task::batch([key_task, warmup_task])
+                }
+            }
             Message::BrandClicked => {
                 // Toggle quick help.
                 if self.query.starts_with(":help") {
@@ -285,12 +332,46 @@ impl App {
                 }
             }
             Message::GotRawWindowId(raw_id) => {
+                self.raw_window_id = Some(raw_id);
                 crate::platform::force_square_corners(raw_id);
                 crate::platform::force_foreground(raw_id);
                 if self.reset_ime_on_launch {
                     crate::platform::force_english_ime(raw_id);
                 }
-                Task::none()
+                Task::batch([
+                    iced::widget::operation::focus::<Message>(self.input_id.clone()),
+                    Self::schedule_focus_retry(1),
+                ])
+            }
+            Message::WarmupTick(token) => {
+                if self.full_warmup_started || token != self.warmup_token {
+                    return Task::none();
+                }
+
+                self.full_warmup_started = true;
+                self.loading = true;
+                tracing::info!(
+                    "Starting full engine warmup after {}ms idle",
+                    WARMUP_IDLE_MS
+                );
+                self.spawn_full_engine_load_task()
+            }
+            Message::EnsureFocus(attempt) => {
+                if attempt > MAX_FOCUS_RETRIES {
+                    tracing::warn!("focus retry exhausted after {} attempts", MAX_FOCUS_RETRIES);
+                    return Task::none();
+                }
+
+                if let Some(raw_id) = self.raw_window_id {
+                    crate::platform::force_foreground(raw_id);
+                }
+
+                let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
+                if attempt == MAX_FOCUS_RETRIES {
+                    focus_task
+                } else {
+                    Task::batch([focus_task, Self::schedule_focus_retry(attempt + 1)])
+                }
             }
             Message::EngineReady => {
                 let loaded = self
@@ -315,6 +396,8 @@ impl App {
                     if !self.query.trim().is_empty() {
                         return self.perform_search();
                     }
+                } else {
+                    self.loading = false;
                 }
                 Task::none()
             }
@@ -1164,28 +1247,9 @@ impl App {
                 };
             }
             "rebuild" => {
+                self.full_warmup_started = true;
                 self.loading = true;
-                let slot = self.engine_slot.clone();
-                let task = Task::future(async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let config = crate::engine::load_config();
-                        let eng = crate::engine::create_search_engine(&config);
-                        *slot.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
-                            engine: eng,
-                            use_emoji: config.general.emoji_icons,
-                            llm_providers: config.launcher.multi_llm_providers.clone(),
-                            multi_web_providers: config.launcher.multi_web_providers.clone(),
-                            llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-                            multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-                            spell_providers: config.launcher.spell_providers.clone(),
-                            spell_prefixes: config.launcher.spell_prefixes.clone(),
-                            translate_providers: config.launcher.translate_providers.clone(),
-                            translate_prefixes: config.launcher.translate_prefixes.clone(),
-                        });
-                    })
-                    .await;
-                    Message::EngineReady
-                });
+                let task = self.spawn_full_engine_load_task();
                 self.query.clear();
                 self.results.clear();
                 self.selected = 0;

@@ -15,7 +15,7 @@ kmd-core = { path = "../kmd-core" }
 
 # GUI
 iced = { version = "0.14", features = ["tokio", "image"] }
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # OS integration
