@@ -130,11 +130,19 @@ mod tests {
 
     #[test]
     fn test_sanitize_width_clamps_to_range() {
-        let too_small = WindowState { x: None, y: None, width: Some(100.0) };
+        let too_small = WindowState {
+            x: None,
+            y: None,
+            width: Some(100.0),
+        };
         let s = WindowState::sanitize(too_small);
         assert_eq!(s.width, Some(WindowState::MIN_WIDTH));
 
-        let too_large = WindowState { x: None, y: None, width: Some(9999.0) };
+        let too_large = WindowState {
+            x: None,
+            y: None,
+            width: Some(9999.0),
+        };
         let s = WindowState::sanitize(too_large);
         assert_eq!(s.width, Some(WindowState::MAX_WIDTH));
     }

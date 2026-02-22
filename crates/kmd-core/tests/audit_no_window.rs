@@ -25,10 +25,7 @@ fn test_all_windows_commands_have_create_no_window() {
     let mut violations = Vec::new();
 
     visit_rs_files(&src_dir, &mut |path| {
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if EXEMPT_FILES.contains(&file_name) {
             return;

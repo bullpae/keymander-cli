@@ -274,12 +274,8 @@ mod tests {
         fs::write(&lock, "test").unwrap();
 
         // mtime을 2초 전으로 설정
-        let two_sec_ago = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(2);
-        let _ = filetime::set_file_mtime(
-            &lock,
-            filetime::FileTime::from_system_time(two_sec_ago),
-        );
+        let two_sec_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
+        let _ = filetime::set_file_mtime(&lock, filetime::FileTime::from_system_time(two_sec_ago));
 
         assert!(
             !is_recent_lock(&lock, RECENT_LOCK_DEBOUNCE_MS),

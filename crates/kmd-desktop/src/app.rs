@@ -1839,6 +1839,7 @@ impl App {
 
         let icon_element: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
+                .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
         {
             image(handle).width(22).height(22).into()
         } else {
