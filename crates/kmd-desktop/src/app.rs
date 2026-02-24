@@ -44,8 +44,8 @@ const SCORE_PLUGIN: u32 = u32::MAX;
 /// Interval between quit-signal polls (ms). Also used to flush state to disk.
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
-const FOCUS_RETRY_MS: u64 = 50;
-const MAX_FOCUS_RETRIES: u8 = 8;
+const FOCUS_RETRY_MS: u64 = 150;
+const MAX_FOCUS_RETRIES: u8 = 3;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
@@ -358,12 +358,7 @@ impl App {
             }
             Message::EnsureFocus(attempt) => {
                 if attempt > MAX_FOCUS_RETRIES {
-                    tracing::warn!("focus retry exhausted after {} attempts", MAX_FOCUS_RETRIES);
                     return Task::none();
-                }
-
-                if let Some(raw_id) = self.raw_window_id {
-                    crate::platform::force_foreground(raw_id);
                 }
 
                 let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
@@ -416,6 +411,11 @@ impl App {
             }
             Message::WindowEvent(_id, event) => {
                 match event {
+                    window::Event::Focused => {
+                        return iced::widget::operation::focus::<Message>(
+                            self.input_id.clone(),
+                        );
+                    }
                     window::Event::Moved(point) => {
                         self.window_state.x = Some(point.x);
                         self.window_state.y = Some(point.y);
@@ -438,11 +438,16 @@ impl App {
     // ─── Subscription ─────────────────────────────────────────────────────
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keyboard_sub = iced::event::listen_with(|event, _status, _window| match event {
-            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                Some(Message::KeyEvent(key, modifiers))
+        let keyboard_sub = keyboard::listen().map(|event| match event {
+            keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                Message::KeyEvent(key, modifiers)
             }
-            _ => None,
+            keyboard::Event::KeyReleased { .. } | keyboard::Event::ModifiersChanged(_) => {
+                Message::KeyEvent(
+                    keyboard::Key::Unidentified,
+                    keyboard::Modifiers::default(),
+                )
+            }
         });
 
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
