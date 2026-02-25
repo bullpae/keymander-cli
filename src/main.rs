@@ -457,6 +457,20 @@ mod win_console {
         }
     }
 
+    /// Windows Terminal / VS Code 등 이모지를 지원하는 모던 터미널인지 감지.
+    /// conhost(레거시 콘솔)에서는 이모지 렌더링이 불가능하므로 ASCII 폴백 필요.
+    pub fn is_modern_terminal() -> bool {
+        // Windows Terminal은 WT_SESSION 환경변수를 설정
+        if std::env::var("WT_SESSION").is_ok() {
+            return true;
+        }
+        // VS Code, JetBrains 등 내장 터미널
+        if std::env::var("TERM_PROGRAM").is_ok() {
+            return true;
+        }
+        false
+    }
+
     // ── FFI declarations ─────────────────────────────────────────────────
     #[link(name = "kernel32")]
     unsafe extern "system" {

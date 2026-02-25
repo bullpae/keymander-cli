@@ -110,6 +110,7 @@ fn collect_shell_apps_folder(
     // Filters out framework/runtime packages by skipping names that contain
     // common noise patterns.
     let ps_script = r#"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $shell = New-Object -ComObject Shell.Application
 $folder = $shell.NameSpace('shell:AppsFolder')
 foreach ($item in $folder.Items()) {

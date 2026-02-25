@@ -178,6 +178,14 @@ pub fn run_app(
 ) -> color_eyre::Result<()> {
     // Load config and build index
     let mut config = crate::cmd::load_config()?;
+
+    // conhost(레거시 콘솔)에서는 이모지 렌더링 불가 → ASCII 폴백 자동 적용
+    #[cfg(windows)]
+    if config.general.emoji_icons && !crate::win_console::is_modern_terminal() {
+        tracing::info!("Legacy console detected — emoji_icons auto-disabled");
+        config.general.emoji_icons = false;
+    }
+
     let index = crate::cmd::load_or_build_index(&config.launcher, config.general.emoji_icons);
     let db = crate::cmd::open_db().ok();
 
