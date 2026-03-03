@@ -2,9 +2,10 @@
 //!
 //! Extracted so that `app.rs` focuses only on Elm state/update/view,
 //! and this module handles all kmd-core integration concerns.
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 const QUICK_INDEX_CACHE_FILENAME: &str = "quick-index.json";
+const INDEX_FRESHNESS_SECS: u64 = 24 * 60 * 60;
 
 /// Load the user configuration, falling back to defaults on failure.
 pub fn load_config() -> kmd_core::Config {
@@ -19,6 +20,27 @@ pub fn load_config() -> kmd_core::Config {
             kmd_core::Config::default()
         }
     }
+}
+
+/// Full index 캐시가 24시간 이내에 빌드되었으면 true.
+/// true이면 캐시에서 직접 로드할 수 있어 2-stage startup이 불필요.
+/// 버전 미스매치는 `load_or_build_index()`에서 자동 리빌드되므로 여기서는 파일 age만 확인.
+pub fn is_full_index_cache_fresh() -> bool {
+    let data_dir = kmd_core::Config::default_data_dir();
+    let cache_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
+
+    let Ok(meta) = std::fs::metadata(&cache_path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::from_secs(u64::MAX));
+
+    age.as_secs() < INDEX_FRESHNESS_SECS
 }
 
 /// Build a search engine loaded with the full index.

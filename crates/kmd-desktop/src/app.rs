@@ -133,9 +133,16 @@ impl App {
         config: kmd_core::Config,
         window_state: WindowState,
     ) -> (Self, Task<Message>) {
-        // Boot with a lightweight engine so users can type/search immediately.
-        // Full file index is loaded in background and hot-swapped on EngineReady.
-        let engine = crate::engine::create_quick_search_engine(&config);
+        // 캐시된 full index가 24시간 이내 → 직접 로드 (2-stage 불필요)
+        // 캐시 없거나 오래됨 → quick index로 즉시 표시 후 full index를 비동기 빌드
+        let cache_fresh = crate::engine::is_full_index_cache_fresh();
+        let engine = if cache_fresh {
+            tracing::info!("Full index cache is fresh — loading directly");
+            crate::engine::create_search_engine(&config)
+        } else {
+            tracing::info!("Full index cache stale/missing — using quick index");
+            crate::engine::create_quick_search_engine(&config)
+        };
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
         let selected_llm_providers = config.launcher.multi_llm_providers.clone();
@@ -180,14 +187,19 @@ impl App {
             window_state,
             state_dirty: false,
             reset_ime_on_launch: reset_ime,
-            full_warmup_started: false,
+            full_warmup_started: cache_fresh,
             warmup_token: 0,
         };
 
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
         let id_task = window::oldest().map(Message::GotWindowId);
-        let warmup_task = Self::schedule_warmup_tick(0);
-        (app, Task::batch([focus_task, id_task, warmup_task]))
+
+        if cache_fresh {
+            (app, Task::batch([focus_task, id_task]))
+        } else {
+            let warmup_task = Self::schedule_warmup_tick(0);
+            (app, Task::batch([focus_task, id_task, warmup_task]))
+        }
     }
 
     fn schedule_warmup_tick(token: u64) -> Task<Message> {
