@@ -45,7 +45,7 @@ const SCORE_PLUGIN: u32 = u32::MAX;
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 150;
-const MAX_FOCUS_RETRIES: u8 = 3;
+const MAX_FOCUS_RETRIES: u8 = 1;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
@@ -335,7 +335,6 @@ impl App {
                         });
 
                         Task::batch([
-                            iced::widget::operation::focus::<Message>(self.input_id.clone()),
                             window::raw_id::<Message>(id).map(Message::GotRawWindowId),
                             ensure_visible,
                         ])
@@ -1721,17 +1720,25 @@ impl App {
             .on_submit(Message::Submit)
             .width(Fill)
             .size(18)
-            .padding(0)
-            .style(move |_theme, _status| text_input::Style {
-                background: Background::Color(bar_surface),
-                border: Border::default(),
-                icon: overlay_color,
-                placeholder: overlay_color,
-                value: text_color,
-                selection: Color {
-                    a: 0.3,
-                    ..accent_color
-                },
+            .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 2.0 })
+            .style(move |_theme, status| {
+                let is_focused = matches!(status, text_input::Status::Focused { .. });
+                let ph_color = if is_focused {
+                    Color { a: overlay_color.a * 0.5, ..overlay_color }
+                } else {
+                    overlay_color
+                };
+                text_input::Style {
+                    background: Background::Color(bar_surface),
+                    border: Border::default(),
+                    icon: overlay_color,
+                    placeholder: ph_color,
+                    value: text_color,
+                    selection: Color {
+                        a: 0.3,
+                        ..accent_color
+                    },
+                }
             });
 
         let mode_text = if self.query.is_empty() {

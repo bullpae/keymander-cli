@@ -84,20 +84,20 @@ pub fn force_english_ime(_raw_id: u64) {
 /// Bring the window to the foreground and give it keyboard focus.
 ///
 /// Windows restricts `SetForegroundWindow` to the current foreground
-/// process. We work around this by:
-/// 1. Simulating an ALT key press/release — this temporarily lifts
-///    the foreground-lock restriction.
-/// 2. Calling `ShowWindow(SW_SHOW)` + `SetForegroundWindow`.
-/// 3. Finishing with `SetFocus` for immediate keyboard input.
+/// process. We work around this by temporarily attaching our thread's
+/// input queue to the foreground thread via `AttachThreadInput`, then
+/// calling `ShowWindow(SW_SHOW)` + `SetForegroundWindow` + `SetFocus`.
+///
+/// This avoids the older `SendInput(ALT)` trick, which generated
+/// spurious keyboard events that could cause UI flickering.
 #[cfg(target_os = "windows")]
 pub fn force_foreground(raw_id: u64) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        VK_MENU,
-    };
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetForegroundWindow, ShowWindow, SW_SHOW,
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+        ShowWindow, SW_SHOW,
     };
 
     unsafe {
@@ -106,27 +106,21 @@ pub fn force_foreground(raw_id: u64) {
             return;
         }
 
-        let make_key = |flags| INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VK_MENU,
-                    wScan: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        };
-        let mut inputs = [
-            make_key(Default::default()),
-            make_key(KEYEVENTF_KEYUP),
-        ];
-        let _ = SendInput(&mut inputs, std::mem::size_of::<INPUT>() as i32);
+        let fg_hwnd = GetForegroundWindow();
+        let fg_thread = GetWindowThreadProcessId(fg_hwnd, None);
+        let my_thread = GetCurrentThreadId();
 
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
-        let _ = SetFocus(hwnd);
+        if fg_thread != 0 && fg_thread != my_thread {
+            let _ = AttachThreadInput(my_thread, fg_thread, true);
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(hwnd);
+            let _ = AttachThreadInput(my_thread, fg_thread, false);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(hwnd);
+        }
     }
 }
 
