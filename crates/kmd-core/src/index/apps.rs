@@ -106,18 +106,22 @@ fn collect_shell_apps_folder(
 ) -> Vec<IndexItem> {
     use std::process::Command;
 
-    // PowerShell script: enumerate shell:AppsFolder, output Name<TAB>Path
-    // Filters out framework/runtime packages by skipping names that contain
-    // common noise patterns.
+    // PowerShell script: enumerate shell:AppsFolder, output Name<TAB>Path.
+    // Uses StreamWriter with explicit UTF-8 (no BOM) to bypass console
+    // encoding issues when CREATE_NO_WINDOW suppresses the console.
     let ps_script = r#"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$sw = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8)
+$sw.AutoFlush = $true
 $shell = New-Object -ComObject Shell.Application
 $folder = $shell.NameSpace('shell:AppsFolder')
 foreach ($item in $folder.Items()) {
     $n = $item.Name
     $p = $item.Path
-    if ($n -and $p) { "$n`t$p" }
+    if ($n -and $p) { $sw.WriteLine("$n`t$p") }
 }
+$sw.Flush()
+$sw.Close()
 "#;
 
     let mut cmd = Command::new("powershell");

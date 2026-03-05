@@ -571,12 +571,15 @@ fn collect_windows_fs(config: &ProviderConfig) -> Vec<IndexItem> {
         let root_s = root.to_string_lossy().replace('\'', "''");
         // Use Where-Object to filter out ignored directories from the path
         let script = format!(
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+            "$utf8 = New-Object System.Text.UTF8Encoding($false); \
+             $sw = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8); \
              $excludeDirs = @({}); \
              Get-ChildItem -LiteralPath '{}' -File -Recurse -Depth {} \
              -ErrorAction SilentlyContinue | \
              Where-Object {{ $p = $_.FullName; -not ($excludeDirs | Where-Object {{ $p -like \"*\\$_\\*\" }}) }} | \
-             Select-Object -First {} -ExpandProperty FullName",
+             Select-Object -First {} -ExpandProperty FullName | \
+             ForEach-Object {{ $sw.WriteLine($_) }}; \
+             $sw.Flush(); $sw.Close()",
             exclude_dirs,
             root_s,
             config.search_depth,
