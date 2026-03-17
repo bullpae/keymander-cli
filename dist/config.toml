@@ -75,6 +75,15 @@
 # select = "enter"
 # toggle_preview = "ctrl+p"
 
+# ── 데몬 자동 시작 ───────────────────────────────────────────
+# kmd-daemon install   → 부팅 시 자동 시작 등록
+# kmd-daemon uninstall → 자동 시작 해제
+# kmd-daemon status    → 현재 상태 및 자동 시작 등록 여부 확인
+#
+# Windows: Startup 폴더에 VBS 스크립트 생성 (콘솔 창 없이 실행)
+# macOS:   ~/Library/LaunchAgents/com.keymander.daemon.plist
+# Linux:   ~/.config/systemd/user/kmd-daemon.service
+
 # ── 키맵 설정 (데몬 연동) ────────────────────────────────────
 [launcher.keymap]
 # backend = "kanata"

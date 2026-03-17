@@ -29,9 +29,11 @@
    검색창이 화면 중앙에 나타남 → 검색 → Enter 실행 → 자동 닫힘
 
 3. 데몬 모드 (백그라운드 서비스)
-   > kmd daemon start     데몬 시작 (키 바인딩 + IPC 서버)
-   > kmd daemon status    상태 확인
-   > kmd daemon stop      데몬 종료
+   > kmd-daemon start       데몬 시작 (키 바인딩 + IPC 서버)
+   > kmd-daemon status      상태 확인
+   > kmd-daemon stop        데몬 종료
+   > kmd-daemon install     부팅 시 자동 시작 등록
+   > kmd-daemon uninstall   자동 시작 해제
 
 ------------------------------------------------------------
   글로벌 핫키 설정 (권장)
@@ -44,7 +46,11 @@
   Keyboard Manager → Remap Shortcut → Alt+Space → kmd-desktop
 
   ** 데몬 사용 시 (별도 설정 불필요) **
-  kmd daemon start 만 실행하면 Alt+Space 로 자동 등록됨
+  kmd-daemon start 만 실행하면 Alt+Space 로 자동 등록됨
+
+  ** 부팅 시 자동 시작 **
+  kmd-daemon install 한 번만 실행하면 다음 로그인부터 자동 시작
+  (Windows: Startup 폴더, macOS: LaunchAgent, Linux: systemd)
 
 ------------------------------------------------------------
   주요 명령어

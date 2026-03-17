@@ -3,6 +3,7 @@
 //! TCP localhost IPC 서버로 검색 엔진을 메모리에 상주시키고,
 //! 글로벌 핫키와 키 바인딩을 관리한다.
 
+mod autostart;
 mod keybind;
 mod server;
 
@@ -25,9 +26,11 @@ fn main() -> Result<()> {
         "start" => server::run()?,
         "stop" => send_shutdown()?,
         "status" => send_status()?,
+        "install" => cmd_install()?,
+        "uninstall" => cmd_uninstall()?,
         other => {
             eprintln!("알 수 없는 명령: {other}");
-            eprintln!("사용법: kmd-daemon [start|stop|status]");
+            eprintln!("사용법: kmd-daemon [start|stop|status|install|uninstall]");
             std::process::exit(1);
         }
     }
@@ -68,7 +71,9 @@ fn send_status() -> Result<()> {
     let port = match read_port_file() {
         Ok(p) => p,
         Err(_) => {
+            let auto = if autostart::is_installed() { "등록됨" } else { "미등록" };
             println!("데몬이 실행 중이지 않습니다.");
+            println!("  자동 시작:  {auto}");
             return Ok(());
         }
     };
@@ -89,19 +94,45 @@ fn send_status() -> Result<()> {
                     index_items,
                     pid,
                 } => {
+                    let auto = if autostart::is_installed() { "등록됨" } else { "미등록" };
                     println!("데몬 상태: 실행 중");
                     println!("  PID:        {pid}");
                     println!("  가동 시간:  {uptime_secs}초");
                     println!("  인덱스:     {index_items}개 항목");
+                    println!("  자동 시작:  {auto}");
                 }
                 _ => println!("응답: {line}"),
             }
         }
         Err(_) => {
+            let auto = if autostart::is_installed() { "등록됨" } else { "미등록" };
             println!("데몬이 실행 중이지 않습니다. (포트 파일은 존재하나 연결 실패)");
+            println!("  자동 시작:  {auto}");
             let _ = std::fs::remove_file(ipc::port_file_path());
             let _ = std::fs::remove_file(ipc::pid_file_path());
         }
+    }
+    Ok(())
+}
+
+/// 부팅 시 자동 시작 등록
+fn cmd_install() -> Result<()> {
+    match autostart::install() {
+        Ok(detail) => {
+            println!("자동 시작 등록 완료");
+            println!("  {detail}");
+            println!("  다음 로그인부터 자동으로 데몬이 시작됩니다.");
+        }
+        Err(e) => eprintln!("자동 시작 등록 실패: {e}"),
+    }
+    Ok(())
+}
+
+/// 부팅 시 자동 시작 해제
+fn cmd_uninstall() -> Result<()> {
+    match autostart::uninstall() {
+        Ok(()) => println!("자동 시작 해제 완료"),
+        Err(e) => eprintln!("자동 시작 해제 실패: {e}"),
     }
     Ok(())
 }
