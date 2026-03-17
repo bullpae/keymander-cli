@@ -1,8 +1,0 @@
-perf: bincode 직렬화로 인덱스 캐시 로드 고속화
-
-- kmd-core에 bincode 의존성 추가, store.rs에 save/load_index_bin 구현
-- CLI/Desktop/TUI 모두 bincode 우선 로드 → JSON fallback 순서로 변경
-- 기존 JSON 캐시 하위 호환 유지 (JSON만 있으면 bincode 자동 생성)
-- 인덱스 빌드 시 bincode + JSON 둘 다 저장
-- bincode roundtrip/크기 비교 테스트 추가
-- v0.3.9
