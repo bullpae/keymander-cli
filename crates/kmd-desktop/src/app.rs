@@ -1896,14 +1896,30 @@ impl App {
                 ..Default::default()
             });
 
+        let icon_size: f32 = 26.0;
         let icon_element: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
                 .or_else(|| crate::app_icons::app_icon_for_item(item.kind, &item.path))
         {
-            image(handle).width(22).height(22).into()
+            container(
+                image(handle)
+                    .content_fit(iced::ContentFit::Contain)
+                    .width(icon_size)
+                    .height(icon_size),
+            )
+            .width(icon_size)
+            .height(icon_size)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into()
         } else {
-            text(&item.icon).size(22).into()
+            container(text(&item.icon).size(icon_size - 4.0))
+                .width(icon_size)
+                .height(icon_size)
+                .center_x(Fill)
+                .center_y(Fill)
+                .into()
         };
         let title = text(&item.name).size(14).color(t.text);
         let subtitle = text(&item.path).size(11).color(t.subtext);
