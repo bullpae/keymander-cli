@@ -1,9 +1,0 @@
-feat: 데몬 아키텍처 Phase 1 — IPC 서버 + 키 바인딩 엔진
-
-- kmd-core/ipc.rs: Request/Response 프로토콜 타입, JSON Lines 직렬화, 클라이언트 헬퍼
-- crates/kmd-daemon: 새 크레이트 — TCP localhost IPC 서버 + SearchEngine 메모리 상주
-- keybind 엔진: KeyboardBackend trait, VKey 타입, Layer/BindAction/Macro 모델
-- Windows 백엔드: WH_KEYBOARD_LL 글로벌 키보드 훅, SendInput 기반 키 리매핑
-- vim-nav/minimal 프리셋: Alt 홀드→네비게이션 레이어, CapsLock→Escape
-- cmd/daemon.rs: start(백그라운드 프로세스)/stop/status 실제 데몬 연동
-- SearchEngine.len() 메서드 추가
