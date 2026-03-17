@@ -191,6 +191,21 @@ fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
 
 // ── 바인딩 액션 실행 ────────────────────────────────────────────────────────
 
+/// 가드를 해제하고 액션을 실행한 뒤 다시 sending 플래그를 해제.
+/// 훅 콜백 내에서 반복되는 "sending=true → drop → execute → re-lock" 패턴을 통합.
+fn dispatch_action(
+    mut guard: std::sync::MutexGuard<'_, HookState>,
+    state: &Arc<Mutex<HookState>>,
+    action: &BindAction,
+) {
+    guard.sending = true;
+    drop(guard);
+    execute_action(action);
+    if let Ok(mut g) = state.lock() {
+        g.sending = false;
+    }
+}
+
 fn execute_action(action: &BindAction) {
     match action {
         BindAction::SendKey(key) => {
@@ -309,12 +324,10 @@ unsafe extern "system" fn keyboard_hook_proc(
                 guard.active_layer = None;
                 guard.layer_key_used = false;
 
-                if !was_used && elapsed < tap_hold_ms && tap_action.is_some() {
-                    guard.sending = true;
-                    drop(guard);
-                    send_key_press(vkey_to_vk(tap_action.unwrap()));
-                    if let Ok(mut g) = state.lock() {
-                        g.sending = false;
+                if !was_used && elapsed < tap_hold_ms {
+                    if let Some(tap_key) = tap_action {
+                        let action = BindAction::SendKey(tap_key);
+                        dispatch_action(guard, state, &action);
                     }
                 }
                 return 1;
@@ -332,12 +345,7 @@ unsafe extern "system" fn keyboard_hook_proc(
         if let Some(action) = action_opt {
             if is_down {
                 guard.layer_key_used = true;
-                guard.sending = true;
-                drop(guard);
-                execute_action(&action);
-                if let Ok(mut g) = state.lock() {
-                    g.sending = false;
-                }
+                dispatch_action(guard, state, &action);
                 return 1;
             }
             if is_up {
@@ -357,12 +365,7 @@ unsafe extern "system" fn keyboard_hook_proc(
 
         if let Some(action) = combo_action {
             guard.combo_consumed_key = Some(vkey);
-            guard.sending = true;
-            drop(guard);
-            execute_action(&action);
-            if let Ok(mut g) = state.lock() {
-                g.sending = false;
-            }
+            dispatch_action(guard, state, &action);
             return 1;
         }
     }
@@ -382,12 +385,7 @@ unsafe extern "system" fn keyboard_hook_proc(
                     if is_modifier_key(&vkey) {
                         guard.modifiers_held.remove(&vkey);
                     }
-                    guard.sending = true;
-                    drop(guard);
-                    execute_action(&dt.action);
-                    if let Ok(mut g) = state.lock() {
-                        g.sending = false;
-                    }
+                    dispatch_action(guard, state, &dt.action);
                     return 1;
                 }
             }
@@ -397,15 +395,9 @@ unsafe extern "system" fn keyboard_hook_proc(
     }
 
     // ── 7. 단순 리매핑 확인 ──
-    if let Some(action) = guard.config.remaps.get(&vkey) {
+    if let Some(action) = guard.config.remaps.get(&vkey).cloned() {
         if is_down {
-            let action = action.clone();
-            guard.sending = true;
-            drop(guard);
-            execute_action(&action);
-            if let Ok(mut g) = state.lock() {
-                g.sending = false;
-            }
+            dispatch_action(guard, state, &action);
             return 1;
         }
         if is_up {

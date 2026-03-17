@@ -30,8 +30,9 @@ pub enum VKey {
     Hangul, Hanja,
 }
 
-/// 키 이름 문자열 → VKey 파싱
+/// 키 이름 문자열 → VKey 파싱 (config 파일 파싱 시 사용)
 impl VKey {
+    #[allow(dead_code)]
     pub fn from_name(name: &str) -> Option<Self> {
         let n = name.trim().to_ascii_lowercase();
         match n.as_str() {
@@ -118,6 +119,7 @@ pub enum MacroStep {
 
 /// 수정자 키 종류 (좌/우 구분 없이 매칭)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum Modifier {
     Shift,
     Ctrl,
@@ -145,6 +147,7 @@ pub struct DoubleTapBinding {
 /// 키 레이어: 특정 키를 홀드하면 활성화되는 리매핑 세트
 #[derive(Debug, Clone)]
 pub struct Layer {
+    #[allow(dead_code)]
     pub name: String,
     /// 이 레이어를 활성화하는 트리거 키
     pub trigger: VKey,
@@ -172,7 +175,7 @@ pub struct KeybindConfig {
 }
 
 impl KeybindConfig {
-    /// 빈 설정
+    #[allow(dead_code)]
     pub fn empty() -> Self {
         Self {
             remaps: HashMap::new(),
@@ -261,6 +264,7 @@ impl KeybindConfig {
 pub trait KeyboardBackend: Send {
     fn start(&mut self, config: KeybindConfig) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
+    #[allow(dead_code)]
     fn is_running(&self) -> bool;
 }
 

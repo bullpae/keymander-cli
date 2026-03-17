@@ -46,10 +46,6 @@ pub fn run() -> color_eyre::Result<()> {
     // 포트/PID 파일 기록
     write_runtime_files(port)?;
 
-    // 종료 시 정리를 위한 핸들러
-    let shutdown_clone = shutdown.clone();
-    ctrlc_handler(shutdown_clone);
-
     // accept 타임아웃 설정 (주기적으로 shutdown 플래그 확인)
     listener.set_nonblocking(false)?;
 
@@ -196,6 +192,8 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
         KeybindConfig::vim_nav_preset()
     } else if profile.contains("minimal") {
         KeybindConfig::minimal_preset()
+    } else if profile.contains("none") {
+        KeybindConfig::empty()
     } else {
         KeybindConfig::vim_nav_preset()
     }
@@ -211,22 +209,5 @@ fn write_runtime_files(port: u16) -> color_eyre::Result<()> {
 }
 
 fn cleanup_runtime_files() {
-    let _ = std::fs::remove_file(ipc::port_file_path());
-    let _ = std::fs::remove_file(ipc::pid_file_path());
-}
-
-fn ctrlc_handler(shutdown: Arc<AtomicBool>) {
-    std::thread::spawn(move || {
-        // Ctrl+C를 위한 간단한 시그널 처리
-        // Windows에서는 SetConsoleCtrlHandler가 필요하지만,
-        // 여기서는 Shutdown IPC 요청으로 종료하는 것이 주요 경로.
-        // 추가 시그널 핸들링은 향후 구현.
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if shutdown.load(Ordering::Relaxed) {
-                // 메인 루프가 종료되면 이 스레드도 함께 종료됨
-                break;
-            }
-        }
-    });
+    ipc::cleanup_stale_files();
 }

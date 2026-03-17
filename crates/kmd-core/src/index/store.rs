@@ -42,6 +42,45 @@ pub fn load_index_bin(path: &Path) -> Result<Index, StoreError> {
     Ok(index)
 }
 
+// ── 공용 캐시 헬퍼 ──────────────────────────────────────────────────────────
+
+/// bincode + JSON 캐시 동시 저장 (개별 실패는 경고 로그)
+pub fn save_both(index: &Index, bin_path: &Path, json_path: &Path) {
+    if let Err(e) = save_index_bin(index, bin_path) {
+        tracing::warn!("Failed to save bincode cache: {e}");
+    }
+    if let Err(e) = save_index(index, json_path) {
+        tracing::warn!("Failed to save JSON cache: {e}");
+    }
+}
+
+/// 캐시에서 인덱스 로드 시도 (bincode → JSON fallback).
+/// `expected_version`과 일치해야 반환. JSON 히트 시 bincode 캐시를 자동 생성.
+pub fn try_load_cached(
+    bin_path: &Path,
+    json_path: &Path,
+    expected_version: &str,
+) -> Option<Index> {
+    if bin_path.exists() {
+        match load_index_bin(bin_path) {
+            Ok(idx) if idx.version == expected_version => return Some(idx),
+            Ok(_) => tracing::info!("Bincode cache version mismatch, skipping"),
+            Err(e) => tracing::warn!("Failed to read bincode cache: {e}"),
+        }
+    }
+    if json_path.exists() {
+        match load_index(json_path) {
+            Ok(idx) if idx.version == expected_version => {
+                let _ = save_index_bin(&idx, bin_path);
+                return Some(idx);
+            }
+            Ok(_) => tracing::info!("JSON cache version mismatch, skipping"),
+            Err(e) => tracing::warn!("Failed to read JSON cache: {e}"),
+        }
+    }
+    None
+}
+
 // ── 에러 타입 ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]

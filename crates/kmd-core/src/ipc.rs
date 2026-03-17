@@ -74,9 +74,6 @@ pub fn pid_file_path() -> PathBuf {
     crate::Config::default_data_dir().join("daemon.pid")
 }
 
-/// 데몬 기본 포트 (port 파일이 없을 때)
-pub const DEFAULT_PORT: u16 = 0; // OS가 빈 포트를 자동 할당
-
 // ── 직렬화 헬퍼 ──────────────────────────────────────────────────────────────
 
 /// 요청을 JSON Line 형식으로 직렬화
@@ -103,32 +100,73 @@ pub fn decode_response(line: &str) -> Result<Response, serde_json::Error> {
     serde_json::from_str(line.trim())
 }
 
+// ── 에러 타입 ────────────────────────────────────────────────────────────────
+
+/// IPC 통신 오류
+#[derive(Debug)]
+pub enum IpcError {
+    /// 데몬이 실행 중이지 않음 (포트 파일 없음 / 파싱 실패)
+    NoDaemon,
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
+
+impl std::fmt::Display for IpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoDaemon => write!(f, "데몬이 실행 중이지 않습니다"),
+            Self::Io(e) => write!(f, "IO 오류: {e}"),
+            Self::Json(e) => write!(f, "JSON 오류: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for IpcError {}
+
 // ── 클라이언트 헬퍼 ─────────────────────────────────────────────────────────
+
+/// 포트 파일에서 데몬 포트 읽기 (실패 시 에러 반환)
+pub fn read_port() -> Result<u16, IpcError> {
+    let content = std::fs::read_to_string(port_file_path()).map_err(|_| IpcError::NoDaemon)?;
+    content.trim().parse().map_err(|_| IpcError::NoDaemon)
+}
 
 /// 데몬이 실행 중이면 포트를 반환
 pub fn daemon_port() -> Option<u16> {
-    let content = std::fs::read_to_string(port_file_path()).ok()?;
-    content.trim().parse().ok()
+    read_port().ok()
+}
+
+/// 오래된 런타임 파일(port/pid) 정리
+pub fn cleanup_stale_files() {
+    let _ = std::fs::remove_file(port_file_path());
+    let _ = std::fs::remove_file(pid_file_path());
+}
+
+/// 데몬에 요청 전송 후 응답 반환 (실패 시 에러 반환)
+pub fn send_request_result(request: &Request) -> Result<Response, IpcError> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+
+    let port = read_port()?;
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).map_err(IpcError::Io)?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .map_err(IpcError::Io)?;
+
+    let encoded = encode_request(request).map_err(IpcError::Json)?;
+    stream.write_all(encoded.as_bytes()).map_err(IpcError::Io)?;
+    stream.flush().map_err(IpcError::Io)?;
+
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(IpcError::Io)?;
+
+    decode_response(&line).map_err(IpcError::Json)
 }
 
 /// 데몬에 요청 전송 후 응답 반환. 연결 실패 시 None.
 pub fn send_request(request: &Request) -> Option<Response> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpStream;
-
-    let port = daemon_port()?;
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
-
-    let encoded = encode_request(request).ok()?;
-    stream.write_all(encoded.as_bytes()).ok()?;
-    stream.flush().ok()?;
-
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).ok()?;
-
-    decode_response(&line).ok()
+    send_request_result(request).ok()
 }
 
 /// 데몬이 실행 중인지 확인 (Ping 시도)

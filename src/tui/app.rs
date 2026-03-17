@@ -377,13 +377,11 @@ fn handle_settings_key_event(
             if needs_rebuild {
                 let use_emoji = config.general.emoji_icons;
                 state.use_emoji = use_emoji;
-                let json_path = crate::cmd::index_cache_path();
-                let bin_path = crate::cmd::index_cache_bin_path();
+                let (bin_path, json_path) = crate::cmd::index_cache_paths();
                 let _ = std::fs::remove_file(&json_path);
                 let _ = std::fs::remove_file(&bin_path);
                 let index = kmd_core::Index::build(&config.launcher, use_emoji);
-                let _ = kmd_core::index::store::save_index_bin(&index, &bin_path);
-                let _ = kmd_core::index::store::save_index(&index, &json_path);
+                kmd_core::index::store::save_both(&index, &bin_path, &json_path);
                 state.total_items = index.items.len();
                 engine.load(index.items);
 

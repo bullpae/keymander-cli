@@ -96,101 +96,42 @@ pub fn create_quick_search_engine(config: &kmd_core::Config) -> kmd_core::Search
 }
 
 fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
+    use kmd_core::index::store;
+
     let started = Instant::now();
-    let data_dir = kmd_core::Config::default_data_dir();
-    let desktop_dir = data_dir.join("desktop");
+    let desktop_dir = kmd_core::Config::default_data_dir().join("desktop");
     let bin_path = desktop_dir.join(QUICK_INDEX_CACHE_BIN_FILENAME);
     let json_path = desktop_dir.join(QUICK_INDEX_CACHE_FILENAME);
     let expected_version = kmd_core::Index::current_version();
 
-    // 1) bincode 캐시 시도
-    if bin_path.exists() {
-        match kmd_core::index::store::load_index_bin(&bin_path) {
-            Ok(cached) if cached.version == expected_version => {
-                tracing::info!("Quick index bincode cache hit in {} ms", started.elapsed().as_millis());
-                return cached;
-            }
-            Ok(_) => tracing::info!("Quick index bincode version mismatch, rebuilding"),
-            Err(e) => tracing::warn!("Failed to read quick index bincode cache: {e}"),
-        }
+    if let Some(cached) = store::try_load_cached(&bin_path, &json_path, expected_version) {
+        tracing::info!("Quick index cache hit in {} ms", started.elapsed().as_millis());
+        return cached;
     }
 
-    // 2) JSON fallback
-    if json_path.exists() {
-        match kmd_core::index::store::load_index(&json_path) {
-            Ok(cached) if cached.version == expected_version => {
-                tracing::info!("Quick index JSON cache hit in {} ms", started.elapsed().as_millis());
-                let _ = kmd_core::index::store::save_index_bin(&cached, &bin_path);
-                return cached;
-            }
-            Ok(_) => tracing::info!("Quick index JSON version mismatch, rebuilding"),
-            Err(e) => tracing::warn!("Failed to read quick index JSON cache: {e}"),
-        }
-    }
-
-    // 3) 새로 빌드
     let index = kmd_core::Index::build_quick(use_emoji);
-
-    if let Err(e) = kmd_core::index::store::save_index_bin(&index, &bin_path) {
-        tracing::warn!("Failed to save quick index bincode cache: {e}");
-    }
-    if let Err(e) = kmd_core::index::store::save_index(&index, &json_path) {
-        tracing::warn!("Failed to save quick index JSON cache: {e}");
-    }
-
+    store::save_both(&index, &bin_path, &json_path);
     tracing::info!("Quick index rebuilt from source in {} ms", started.elapsed().as_millis());
     index
 }
 
 /// 인덱스 로드: bincode → JSON fallback → 새로 빌드
 fn load_or_build_index(config: &kmd_core::Config) -> kmd_core::Index {
+    use kmd_core::index::store;
+
     let started = Instant::now();
     let data_dir = kmd_core::Config::default_data_dir();
     let bin_path = data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME);
     let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
     let expected_version = kmd_core::Index::current_version();
 
-    // 1) bincode 캐시 시도
-    if bin_path.exists() {
-        match kmd_core::index::store::load_index_bin(&bin_path) {
-            Ok(cached) if cached.version == expected_version => {
-                tracing::info!("Index bincode cache hit in {} ms", started.elapsed().as_millis());
-                return cached;
-            }
-            Ok(cached) => tracing::info!(
-                "Bincode cache version mismatch (cache={:?}, expected={:?}), rebuilding",
-                cached.version, expected_version
-            ),
-            Err(e) => tracing::warn!("Failed to read bincode cache: {e}"),
-        }
+    if let Some(cached) = store::try_load_cached(&bin_path, &json_path, expected_version) {
+        tracing::info!("Index cache hit in {} ms", started.elapsed().as_millis());
+        return cached;
     }
 
-    // 2) JSON fallback
-    if json_path.exists() {
-        match kmd_core::index::store::load_index(&json_path) {
-            Ok(cached) if cached.version == expected_version => {
-                tracing::info!("Index JSON cache hit in {} ms", started.elapsed().as_millis());
-                let _ = kmd_core::index::store::save_index_bin(&cached, &bin_path);
-                return cached;
-            }
-            Ok(cached) => tracing::info!(
-                "JSON cache version mismatch (cache={:?}, expected={:?}), rebuilding",
-                cached.version, expected_version
-            ),
-            Err(e) => tracing::warn!("Failed to read JSON cache: {e}"),
-        }
-    }
-
-    // 3) 새로 빌드
-    let idx = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
-
-    if let Err(e) = kmd_core::index::store::save_index_bin(&idx, &bin_path) {
-        tracing::warn!("Failed to save bincode cache: {e}");
-    }
-    if let Err(e) = kmd_core::index::store::save_index(&idx, &json_path) {
-        tracing::warn!("Failed to save JSON cache: {e}");
-    }
-
+    let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
+    store::save_both(&index, &bin_path, &json_path);
     tracing::info!("Index built from source in {} ms", started.elapsed().as_millis());
-    idx
+    index
 }

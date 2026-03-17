@@ -4,11 +4,13 @@ use color_eyre::Result;
 
 pub fn run(rebuild: bool, stats: bool) -> Result<()> {
     let config = super::load_config()?;
-    let bin_path = super::index_cache_bin_path();
-    let json_path = super::index_cache_path();
+    let (bin_path, json_path) = super::index_cache_paths();
+    let expected_version = kmd_core::Index::current_version();
 
     if stats && !rebuild {
-        if let Some(index) = try_load_cached(&bin_path, &json_path) {
+        if let Some(index) =
+            kmd_core::index::store::try_load_cached(&bin_path, &json_path, expected_version)
+        {
             print_stats(&index);
         } else {
             println!("No index found. Run `kmd index --rebuild` to create one.");
@@ -41,7 +43,7 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
         let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
         let elapsed = start.elapsed();
 
-        save_caches(&index, &bin_path, &json_path);
+        kmd_core::index::store::save_both(&index, &bin_path, &json_path);
 
         println!("Index built in {:.1}ms", elapsed.as_secs_f64() * 1000.0);
         print_stats(&index);
@@ -53,36 +55,6 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn try_load_cached(
-    bin_path: &std::path::Path,
-    json_path: &std::path::Path,
-) -> Option<kmd_core::Index> {
-    if bin_path.exists() {
-        if let Ok(idx) = kmd_core::index::store::load_index_bin(bin_path) {
-            return Some(idx);
-        }
-    }
-    if json_path.exists() {
-        if let Ok(idx) = kmd_core::index::store::load_index(json_path) {
-            return Some(idx);
-        }
-    }
-    None
-}
-
-fn save_caches(
-    index: &kmd_core::Index,
-    bin_path: &std::path::Path,
-    json_path: &std::path::Path,
-) {
-    if let Err(e) = kmd_core::index::store::save_index_bin(index, bin_path) {
-        tracing::warn!("Failed to save bincode cache: {e}");
-    }
-    if let Err(e) = kmd_core::index::store::save_index(index, json_path) {
-        tracing::warn!("Failed to save JSON cache: {e}");
-    }
 }
 
 fn print_stats(index: &kmd_core::Index) {

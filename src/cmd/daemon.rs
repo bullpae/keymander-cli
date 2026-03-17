@@ -2,7 +2,6 @@
 
 use color_eyre::Result;
 use kmd_core::ipc;
-use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 
 pub enum Action {
@@ -23,17 +22,13 @@ pub fn run(action: Action) -> Result<()> {
     }
 }
 
-/// 데몬 프로세스를 백그라운드로 시작
 fn start_daemon() -> Result<()> {
-    // 이미 실행 중인지 확인
-    if let Ok(port) = read_port() {
+    if let Ok(port) = ipc::read_port() {
         if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
             println!("데몬이 이미 실행 중입니다 (port={port}).");
             return Ok(());
         }
-        // 연결 실패 → 오래된 파일 정리
-        let _ = std::fs::remove_file(ipc::port_file_path());
-        let _ = std::fs::remove_file(ipc::pid_file_path());
+        ipc::cleanup_stale_files();
     }
 
     let daemon_exe = find_sibling_exe("kmd-daemon");
@@ -63,10 +58,9 @@ fn start_daemon() -> Result<()> {
             .spawn()?;
     }
 
-    // 데몬이 시작될 때까지 대기 (최대 5초)
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        if let Ok(port) = read_port() {
+        if let Ok(port) = ipc::read_port() {
             if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
                 println!("데몬 시작 완료 (port={port})");
                 return Ok(());
@@ -78,85 +72,42 @@ fn start_daemon() -> Result<()> {
     Ok(())
 }
 
-/// 데몬 상태 확인
 fn check_status() -> Result<()> {
-    let port = match read_port() {
-        Ok(p) => p,
-        Err(_) => {
-            println!("데몬이 실행 중이지 않습니다.");
-            return Ok(());
+    match ipc::send_request_result(&ipc::Request::Status) {
+        Ok(ipc::Response::Status {
+            uptime_secs,
+            index_items,
+            pid,
+        }) => {
+            println!("데몬 상태: 실행 중");
+            println!("  PID:        {pid}");
+            println!("  가동 시간:  {uptime_secs}초");
+            println!("  인덱스:     {index_items}개 항목");
         }
-    };
-
-    match connect_and_send(port, &ipc::Request::Status) {
-        Ok(resp) => match resp {
-            ipc::Response::Status {
-                uptime_secs,
-                index_items,
-                pid,
-            } => {
-                println!("데몬 상태: 실행 중");
-                println!("  PID:        {pid}");
-                println!("  가동 시간:  {uptime_secs}초");
-                println!("  인덱스:     {index_items}개 항목");
-            }
-            _ => println!("예기치 않은 응답"),
-        },
-        Err(_) => {
+        Ok(_) => println!("예기치 않은 응답"),
+        Err(ipc::IpcError::Io(_)) => {
             println!("데몬이 실행 중이지 않습니다. (포트 파일은 존재하나 연결 실패)");
-            let _ = std::fs::remove_file(ipc::port_file_path());
-            let _ = std::fs::remove_file(ipc::pid_file_path());
+            ipc::cleanup_stale_files();
         }
-    }
-    Ok(())
-}
-
-/// 데몬에 명령 전송
-fn send_command(request: ipc::Request, action_name: &str) -> Result<()> {
-    let port = match read_port() {
-        Ok(p) => p,
         Err(_) => {
             println!("데몬이 실행 중이지 않습니다.");
-            return Ok(());
-        }
-    };
-
-    match connect_and_send(port, &request) {
-        Ok(resp) => match resp {
-            ipc::Response::Ok { message } => println!("{message}"),
-            ipc::Response::Error { message } => eprintln!("에러: {message}"),
-            _ => println!("{action_name} 완료"),
-        },
-        Err(e) => {
-            eprintln!("데몬 연결 실패: {e}");
-            let _ = std::fs::remove_file(ipc::port_file_path());
-            let _ = std::fs::remove_file(ipc::pid_file_path());
         }
     }
     Ok(())
 }
 
-fn connect_and_send(port: u16, request: &ipc::Request) -> Result<ipc::Response> {
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-
-    let encoded = ipc::encode_request(request)?;
-    stream.write_all(encoded.as_bytes())?;
-    stream.flush()?;
-
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-
-    let resp = ipc::decode_response(&line)?;
-    Ok(resp)
-}
-
-fn read_port() -> Result<u16> {
-    let path = ipc::port_file_path();
-    let content = std::fs::read_to_string(&path)?;
-    let port: u16 = content.trim().parse()?;
-    Ok(port)
+fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
+    match ipc::send_request_result(&request) {
+        Ok(ipc::Response::Ok { message }) => println!("{message}"),
+        Ok(ipc::Response::Error { message }) => eprintln!("에러: {message}"),
+        Ok(_) => println!("완료"),
+        Err(ipc::IpcError::Io(_)) => {
+            eprintln!("데몬 연결 실패");
+            ipc::cleanup_stale_files();
+        }
+        Err(e) => eprintln!("{e}"),
+    }
+    Ok(())
 }
 
 /// kmd-desktop 바이너리를 실행
@@ -188,7 +139,6 @@ pub fn launch_desktop() -> Result<()> {
     Ok(())
 }
 
-/// 같은 디렉토리 또는 PATH에서 형제 바이너리 찾기
 fn find_sibling_exe(name: &str) -> std::path::PathBuf {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -208,7 +158,6 @@ fn find_sibling_exe(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(bin_name)
 }
 
-/// kmd-daemon 바이너리에 명령 위임 (install/uninstall 등)
 fn run_daemon_cmd(cmd: &str) -> Result<()> {
     let daemon_exe = find_sibling_exe("kmd-daemon");
     let output = std::process::Command::new(&daemon_exe)
@@ -229,4 +178,3 @@ fn run_daemon_cmd(cmd: &str) -> Result<()> {
         }
     }
 }
-
