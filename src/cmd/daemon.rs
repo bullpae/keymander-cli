@@ -36,8 +36,7 @@ fn start_daemon() -> Result<()> {
         let _ = std::fs::remove_file(ipc::pid_file_path());
     }
 
-    // kmd-daemon 바이너리 찾기
-    let daemon_exe = find_daemon_exe();
+    let daemon_exe = find_sibling_exe("kmd-daemon");
 
     #[cfg(windows)]
     {
@@ -160,9 +159,58 @@ fn read_port() -> Result<u16> {
     Ok(port)
 }
 
+/// kmd-desktop 바이너리를 실행
+pub fn launch_desktop() -> Result<()> {
+    let desktop_exe = find_sibling_exe("kmd-desktop");
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+
+        std::process::Command::new(&desktop_exe)
+            .creation_flags(DETACHED_PROCESS)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(&desktop_exe)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+
+    Ok(())
+}
+
+/// 같은 디렉토리 또는 PATH에서 형제 바이너리 찾기
+fn find_sibling_exe(name: &str) -> std::path::PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+
+    #[cfg(windows)]
+    let bin_name = format!("{name}.exe");
+    #[cfg(not(windows))]
+    let bin_name = name.to_string();
+
+    let same_dir = exe_dir.join(&bin_name);
+    if same_dir.exists() {
+        return same_dir;
+    }
+
+    std::path::PathBuf::from(bin_name)
+}
+
 /// kmd-daemon 바이너리에 명령 위임 (install/uninstall 등)
 fn run_daemon_cmd(cmd: &str) -> Result<()> {
-    let daemon_exe = find_daemon_exe();
+    let daemon_exe = find_sibling_exe("kmd-daemon");
     let output = std::process::Command::new(&daemon_exe)
         .arg(cmd)
         .stdout(std::process::Stdio::inherit())
@@ -182,24 +230,3 @@ fn run_daemon_cmd(cmd: &str) -> Result<()> {
     }
 }
 
-/// kmd-daemon 바이너리 경로 찾기
-fn find_daemon_exe() -> std::path::PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_default();
-
-    #[cfg(windows)]
-    let daemon_name = "kmd-daemon.exe";
-    #[cfg(not(windows))]
-    let daemon_name = "kmd-daemon";
-
-    // 같은 디렉토리에서 먼저 찾기
-    let same_dir = exe_dir.join(daemon_name);
-    if same_dir.exists() {
-        return same_dir;
-    }
-
-    // PATH에서 찾기
-    std::path::PathBuf::from(daemon_name)
-}

@@ -69,6 +69,8 @@ enum Commands {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// Launch desktop GUI overlay (Spotlight-style)
+    Desktop,
     /// Global hotkey daemon (start/stop/status)
     Daemon {
         #[command(subcommand)]
@@ -287,6 +289,9 @@ fn main() -> color_eyre::Result<()> {
             cmd::plugin::run(match action {
                 PluginAction::List => cmd::plugin::Action::List,
             })?;
+        }
+        Some(Commands::Desktop) => {
+            cmd::daemon::launch_desktop()?;
         }
         Some(Commands::Daemon { action }) => {
             cmd::daemon::run(match action {
