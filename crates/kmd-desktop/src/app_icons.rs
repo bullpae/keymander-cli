@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 const FALLBACK_ICON_SIZE: u32 = 32;
+const TARGET_ICON_SIZE: u32 = 32;
 
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
     LazyLock::new(|| Mutex::new(HashMap::with_capacity(64)));
@@ -67,18 +68,28 @@ mod platform {
             let result = hicon_to_rgba(info.hIcon);
             let _ = DestroyIcon(info.hIcon);
 
-            result.and_then(|(pixels, w, h)| encode_png(w, h, &pixels))
+            result.and_then(|(pixels, w, h)| normalize_and_encode(w, h, &pixels))
         }
     }
 
-    fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Handle> {
+    /// 원본 RGBA를 TARGET_ICON_SIZE 정사각형으로 리사이즈 후 PNG 인코딩
+    fn normalize_and_encode(width: u32, height: u32, rgba: &[u8]) -> Option<Handle> {
         use image::codecs::png::PngEncoder;
-        use image::ImageEncoder;
+        use image::imageops::FilterType;
+        use image::{ImageEncoder, RgbaImage};
+
+        let target = super::TARGET_ICON_SIZE;
+        let img = RgbaImage::from_raw(width, height, rgba.to_vec())?;
+
+        let resized = if width == target && height == target {
+            img
+        } else {
+            image::imageops::resize(&img, target, target, FilterType::Lanczos3)
+        };
 
         let mut buf = Vec::new();
-        let encoder = PngEncoder::new(&mut buf);
-        encoder
-            .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        PngEncoder::new(&mut buf)
+            .write_image(resized.as_raw(), target, target, image::ExtendedColorType::Rgba8)
             .ok()?;
         Some(Handle::from_bytes(buf))
     }
