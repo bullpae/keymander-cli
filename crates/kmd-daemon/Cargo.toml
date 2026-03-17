@@ -1,0 +1,32 @@
+[package]
+name = "kmd-daemon"
+version = "0.3.9"
+edition = "2021"
+description = "keymander Daemon — background service with IPC, global hotkey, key bindings"
+
+[[bin]]
+name = "kmd-daemon"
+path = "src/main.rs"
+
+[dependencies]
+kmd-core = { path = "../kmd-core" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+color-eyre = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }

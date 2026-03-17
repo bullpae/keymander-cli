@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/kmd-core", "crates/kmd-desktop"]
+members = ["crates/kmd-core", "crates/kmd-desktop", "crates/kmd-daemon"]
 exclude = ["tools/gen-icon"]
 resolver = "2"
 

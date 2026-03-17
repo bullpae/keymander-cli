@@ -123,6 +123,11 @@ impl SearchEngine {
         }
     }
 
+    /// 로드된 아이템 수
+    pub fn len(&self) -> usize {
+        self.all_items.len()
+    }
+
     /// Set the kind weights for score boosting
     pub fn set_kind_weights(&mut self, weights: KindWeights) {
         self.kind_weights = weights;

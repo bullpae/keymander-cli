@@ -9,6 +9,7 @@ pub mod db;
 pub mod hangul;
 pub mod history;
 pub mod index;
+pub mod ipc;
 pub mod keymap;
 pub mod plugin;
 pub mod portable;
