@@ -1434,8 +1434,43 @@ impl App {
             results.splice(0..0, calc_results);
         }
 
+        if results.is_empty() && !query.is_empty() {
+            results = self.build_fallback_suggestions(query);
+            self.search_mode = kmd_core::SearchMode::Contains;
+        }
+
         self.results = results;
         self.selected = 0;
+    }
+
+    fn build_fallback_suggestions(&self, query: &str) -> Vec<kmd_core::SearchResult> {
+        use kmd_core::web::{self, WEB_SERVICES};
+
+        const FALLBACK_IDS: &[&str] = &[
+            "google", "perplexity", "chatgpt", "claude", "gemini",
+            "naver_search", "youtube", "github", "stackoverflow", "wikipedia",
+        ];
+
+        let emoji = self.use_emoji;
+        let mut items: Vec<kmd_core::SearchResult> = FALLBACK_IDS
+            .iter()
+            .filter_map(|id| WEB_SERVICES.iter().find(|s| s.id == *id))
+            .map(|service| {
+                let item = web::search_result_item(service, query, emoji);
+                kmd_core::SearchResult { item, score: 0 }
+            })
+            .collect();
+
+        let multi_items = web::multi_llm_result_items(
+            query,
+            &self.selected_llm_providers,
+            emoji,
+        );
+        if let Some(multi_item) = multi_items.into_iter().next() {
+            items.insert(5, kmd_core::SearchResult { item: multi_item, score: 0 });
+        }
+
+        items
     }
 
     fn launch_selected(&mut self) -> Task<Message> {
