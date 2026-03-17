@@ -119,9 +119,67 @@ jobs:
           name: ${{ matrix.prefix }}-${{ matrix.target }}
           path: ${{ matrix.prefix }}-${{ matrix.target }}.*
 
+  build-bundle:
+    name: Portable Bundle ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build all binaries
+        run: |
+          cargo build --release -p keymander --target ${{ matrix.target }}
+          cargo build --release -p kmd-desktop --target ${{ matrix.target }}
+          cargo build --release -p kmd-daemon --target ${{ matrix.target }}
+
+      - name: Stage portable bundle
+        shell: bash
+        run: |
+          STAGE="keymander"
+          mkdir -p "$STAGE/kmd-data"
+          cp "target/${{ matrix.target }}/release/kmd${{ matrix.ext }}" "$STAGE/"
+          cp "target/${{ matrix.target }}/release/kmd-desktop${{ matrix.ext }}" "$STAGE/"
+          cp "target/${{ matrix.target }}/release/kmd-daemon${{ matrix.ext }}" "$STAGE/"
+          cp dist/config.toml "$STAGE/kmd-data/"
+          cp dist/README.txt "$STAGE/"
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar czf keymander-portable-${{ matrix.target }}.tar.gz keymander
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: 7z a keymander-portable-${{ matrix.target }}.zip keymander
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: keymander-portable-${{ matrix.target }}
+          path: keymander-portable-${{ matrix.target }}.*
+
   release:
     name: Create Release
-    needs: [build-cli, build-desktop]
+    needs: [build-cli, build-desktop, build-bundle]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

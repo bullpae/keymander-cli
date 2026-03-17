@@ -1,0 +1,81 @@
+# ============================================================
+# keymander (kmd) — 포터블 기본 설정
+# ============================================================
+#
+# 이 파일은 kmd-data/ 안에 위치하며, 포터블 모드에서 자동으로 읽힙니다.
+# 모든 설정은 선택사항이며, 생략하면 기본값이 적용됩니다.
+#
+# 설정 변경 방법:
+#   - 이 파일을 직접 편집
+#   - kmd-desktop 에서 :set 또는 :settings 입력
+#   - kmd (TUI) 에서 F2 키
+#   - CLI: kmd config set general.theme "nord"
+
+# ── 일반 설정 ────────────────────────────────────────────────
+[general]
+# TUI 렌더링 FPS (기본: 30)
+# render_fps = 30
+
+# 미리보기 패널 표시 여부
+# show_preview = true
+# preview_width_percent = 40
+
+# 테마: default | midnight | obsidian | snow | rose_pine | nord
+# theme = "default"
+
+# 이모지 아이콘 사용 (false = ASCII 2자 아이콘으로 대체)
+# Windows 10 레거시 콘솔에서는 자동으로 false 적용
+# emoji_icons = true
+
+# Desktop 실행 시 IME를 영어 모드로 전환
+# reset_ime_on_launch = true
+
+# ── 런처 설정 ────────────────────────────────────────────────
+[launcher]
+# 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs
+# file_search_provider = "auto"
+
+# 최대 인덱스 항목 수 (기본: 5000)
+# max_results = 5000
+
+# 파일 탐색 최대 깊이 (기본: 4)
+# search_depth = 4
+
+# 실행 후 창 닫기
+# quit_on_launch = true
+
+# 디렉토리도 인덱스에 포함
+# index_directories = true
+
+# 드라이브 자동 스캔 (C:\, D:\ 등)
+# scan_drives = false
+# drive_scan_depth = 2
+
+# 검색할 디렉토리 (기본: Desktop, Documents, Downloads)
+# search_paths = ["C:\\Users\\사용자\\Documents", "D:\\Projects"]
+
+# ── 검색 우선순위 가중치 (0-100, 높을수록 상위) ──────────────
+[launcher.kind_weights]
+# directory = 80
+# app = 70
+# file = 50
+# executable = 40
+# system_cmd = 30
+# web_search = 20
+
+# ── 키 바인딩 ────────────────────────────────────────────────
+[keybindings]
+# 글로벌 핫키 (데몬 모드)
+# global_hotkey = "alt+space"
+
+# TUI 키 바인딩
+# quit = "ctrl+c"
+# next = "down"
+# prev = "up"
+# select = "enter"
+# toggle_preview = "ctrl+p"
+
+# ── 키맵 설정 (데몬 연동) ────────────────────────────────────
+[launcher.keymap]
+# backend = "kanata"
+# active_profile = "vim-nav.kbd"
