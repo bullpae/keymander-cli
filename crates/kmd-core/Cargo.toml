@@ -1,6 +1,6 @@
 [package]
 name = "kmd-core"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 description = "keymander core library — indexing, search, config, database"
 
@@ -16,6 +16,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_json = "1"
+bincode = "1"
 
 # Paths
 dirs = "6"

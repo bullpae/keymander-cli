@@ -29,5 +29,7 @@ pub use search::{SearchEngine, SearchMode, SearchResult};
 pub const CONFIG_FILENAME: &str = "config.toml";
 /// SQLite database file name.
 pub const DB_FILENAME: &str = "kmd.db";
-/// Index cache file name.
+/// Index cache file name (JSON, legacy fallback).
 pub const INDEX_CACHE_FILENAME: &str = "index.json";
+/// Index cache file name (bincode, fast binary format).
+pub const INDEX_CACHE_BIN_FILENAME: &str = "index.bin";

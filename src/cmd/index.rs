@@ -4,13 +4,11 @@ use color_eyre::Result;
 
 pub fn run(rebuild: bool, stats: bool) -> Result<()> {
     let config = super::load_config()?;
-    let cache_path = super::index_cache_path();
+    let bin_path = super::index_cache_bin_path();
+    let json_path = super::index_cache_path();
 
     if stats && !rebuild {
-        // Show stats for existing index
-        if cache_path.exists() {
-            let index = kmd_core::index::store::load_index(&cache_path)
-                .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        if let Some(index) = try_load_cached(&bin_path, &json_path) {
             print_stats(&index);
         } else {
             println!("No index found. Run `kmd index --rebuild` to create one.");
@@ -18,8 +16,7 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
         return Ok(());
     }
 
-    if rebuild || !cache_path.exists() {
-        // Show detected provider and priority dirs
+    if rebuild || (!bin_path.exists() && !json_path.exists()) {
         let provider = kmd_core::index::files::detect_provider(
             &config.launcher.file_search_provider,
             config.launcher.everything_path.as_ref(),
@@ -44,22 +41,48 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
         let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
         let elapsed = start.elapsed();
 
-        // Save to cache
-        kmd_core::index::store::save_index(&index, &cache_path)
-            .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        save_caches(&index, &bin_path, &json_path);
 
         println!("Index built in {:.1}ms", elapsed.as_secs_f64() * 1000.0);
         print_stats(&index);
     } else {
-        let index = kmd_core::index::store::load_index(&cache_path)
-            .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
-
+        let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
         println!("Index loaded from cache.");
         print_stats(&index);
         println!("\nUse `kmd index --rebuild` to refresh.");
     }
 
     Ok(())
+}
+
+fn try_load_cached(
+    bin_path: &std::path::Path,
+    json_path: &std::path::Path,
+) -> Option<kmd_core::Index> {
+    if bin_path.exists() {
+        if let Ok(idx) = kmd_core::index::store::load_index_bin(bin_path) {
+            return Some(idx);
+        }
+    }
+    if json_path.exists() {
+        if let Ok(idx) = kmd_core::index::store::load_index(json_path) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+fn save_caches(
+    index: &kmd_core::Index,
+    bin_path: &std::path::Path,
+    json_path: &std::path::Path,
+) {
+    if let Err(e) = kmd_core::index::store::save_index_bin(index, bin_path) {
+        tracing::warn!("Failed to save bincode cache: {e}");
+    }
+    if let Err(e) = kmd_core::index::store::save_index(index, json_path) {
+        tracing::warn!("Failed to save JSON cache: {e}");
+    }
 }
 
 fn print_stats(index: &kmd_core::Index) {

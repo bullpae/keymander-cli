@@ -375,13 +375,15 @@ fn handle_settings_key_event(
             engine.set_kind_weights(config.launcher.kind_weights.clone());
 
             if needs_rebuild {
-                // Rebuild index from scratch with new config
                 let use_emoji = config.general.emoji_icons;
                 state.use_emoji = use_emoji;
-                let cache_path = crate::cmd::index_cache_path();
-                let _ = std::fs::remove_file(&cache_path);
+                let json_path = crate::cmd::index_cache_path();
+                let bin_path = crate::cmd::index_cache_bin_path();
+                let _ = std::fs::remove_file(&json_path);
+                let _ = std::fs::remove_file(&bin_path);
                 let index = kmd_core::Index::build(&config.launcher, use_emoji);
-                let _ = kmd_core::index::store::save_index(&index, &cache_path);
+                let _ = kmd_core::index::store::save_index_bin(&index, &bin_path);
+                let _ = kmd_core::index::store::save_index(&index, &json_path);
                 state.total_items = index.items.len();
                 engine.load(index.items);
 

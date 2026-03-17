@@ -1,35 +1,57 @@
-//! Index persistence — save/load index to/from disk as JSON
+//! Index persistence — save/load index to/from disk (JSON + bincode)
 
 use std::path::Path;
 
 use super::Index;
 
-/// Save index to a JSON file
+// ── JSON (레거시 호환) ──────────────────────────────────────────────────────
+
+/// JSON 형식으로 인덱스 저장
 pub fn save_index(index: &Index, path: &Path) -> Result<(), StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(StoreError::Io)?;
     }
-
-    let json = serde_json::to_string(index).map_err(StoreError::Serialize)?;
+    let json = serde_json::to_string(index).map_err(StoreError::Json)?;
     std::fs::write(path, json).map_err(StoreError::Io)?;
     Ok(())
 }
 
-/// Load index from a JSON file
+/// JSON 형식에서 인덱스 로드
 pub fn load_index(path: &Path) -> Result<Index, StoreError> {
     let content = std::fs::read_to_string(path).map_err(StoreError::Io)?;
-    let index: Index = serde_json::from_str(&content).map_err(StoreError::Deserialize)?;
+    let index: Index = serde_json::from_str(&content).map_err(StoreError::Json)?;
     Ok(index)
 }
+
+// ── Bincode (고속 바이너리) ──────────────────────────────────────────────────
+
+/// bincode 형식으로 인덱스 저장
+pub fn save_index_bin(index: &Index, path: &Path) -> Result<(), StoreError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(StoreError::Io)?;
+    }
+    let bytes = bincode::serialize(index).map_err(StoreError::Bincode)?;
+    std::fs::write(path, bytes).map_err(StoreError::Io)?;
+    Ok(())
+}
+
+/// bincode 형식에서 인덱스 로드
+pub fn load_index_bin(path: &Path) -> Result<Index, StoreError> {
+    let bytes = std::fs::read(path).map_err(StoreError::Io)?;
+    let index: Index = bincode::deserialize(&bytes).map_err(StoreError::Bincode)?;
+    Ok(index)
+}
+
+// ── 에러 타입 ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("I/O error: {0}")]
     Io(std::io::Error),
-    #[error("Serialize error: {0}")]
-    Serialize(serde_json::Error),
-    #[error("Deserialize error: {0}")]
-    Deserialize(serde_json::Error),
+    #[error("JSON error: {0}")]
+    Json(serde_json::Error),
+    #[error("Bincode error: {0}")]
+    Bincode(bincode::Error),
 }
 
 #[cfg(test)]
@@ -37,11 +59,7 @@ mod tests {
     use super::*;
     use crate::index::{IndexItem, ItemKind, Source};
 
-    #[test]
-    fn test_save_load_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("index.json");
-
+    fn sample_index() -> Index {
         let mut index = Index::new();
         index.items.push(IndexItem {
             name: "test.rs".to_string(),
@@ -59,6 +77,14 @@ mod tests {
             icon: ">>".to_string(),
             keywords: "/home/user/docs".to_string(),
         });
+        index
+    }
+
+    #[test]
+    fn test_json_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.json");
+        let index = sample_index();
 
         save_index(&index, &path).unwrap();
         let loaded = load_index(&path).unwrap();
@@ -70,8 +96,40 @@ mod tests {
     }
 
     #[test]
+    fn test_bincode_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.bin");
+        let index = sample_index();
+
+        save_index_bin(&index, &path).unwrap();
+        let loaded = load_index_bin(&path).unwrap();
+
+        assert_eq!(loaded.items.len(), 2);
+        assert_eq!(loaded.items[0].name, "test.rs");
+        assert_eq!(loaded.items[1].kind, ItemKind::Directory);
+        assert_eq!(loaded.version, index.version);
+    }
+
+    #[test]
+    fn test_bincode_smaller_than_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("index.json");
+        let bin_path = dir.path().join("index.bin");
+        let index = sample_index();
+
+        save_index(&index, &json_path).unwrap();
+        save_index_bin(&index, &bin_path).unwrap();
+
+        let json_size = std::fs::metadata(&json_path).unwrap().len();
+        let bin_size = std::fs::metadata(&bin_path).unwrap().len();
+        assert!(bin_size < json_size, "bincode({bin_size}) >= json({json_size})");
+    }
+
+    #[test]
     fn test_load_nonexistent_file_returns_error() {
         let result = load_index(std::path::Path::new("/nonexistent/path/index.json"));
+        assert!(result.is_err());
+        let result = load_index_bin(std::path::Path::new("/nonexistent/path/index.bin"));
         assert!(result.is_err());
     }
 }
