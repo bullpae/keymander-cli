@@ -3,7 +3,8 @@
 //! 저수준 키보드 훅으로 키 이벤트를 가로채고,
 //! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
 
-use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
+use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, Modifier, VKey};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -24,6 +25,16 @@ struct HookState {
     layer_key_used: bool,
     /// 훅에서 SendInput 호출 시 재진입 방지
     sending: bool,
+    /// 현재 물리적으로 눌린 수정자 키 추적
+    modifiers_held: HashSet<VKey>,
+    /// 더블탭: 마지막으로 탭 완료(keyup)된 키
+    last_tap_key: Option<VKey>,
+    /// 더블탭: 마지막 탭 시각 (tick count)
+    last_tap_tick: u32,
+    /// 콤보로 소비된 키 (해당 키의 keyup도 억제)
+    combo_consumed_key: Option<VKey>,
+    /// 더블탭으로 소비된 키 (해당 키의 keyup도 억제)
+    dt_consumed_key: Option<VKey>,
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -65,6 +76,8 @@ fn vkey_to_vk(key: VKey) -> u16 {
         VKey::LBracket => VK_OEM_4, VKey::RBracket => VK_OEM_6,
         VKey::Minus => VK_OEM_MINUS, VKey::Equal => VK_OEM_PLUS,
         VKey::Grave => VK_OEM_3,
+        VKey::Hangul => 0x15,
+        VKey::Hanja => 0x19,
     }
 }
 
@@ -110,6 +123,8 @@ fn vk_to_vkey(vk: u16) -> Option<VKey> {
         v if v == VK_OEM_4 => Some(VKey::LBracket), v if v == VK_OEM_6 => Some(VKey::RBracket),
         v if v == VK_OEM_MINUS => Some(VKey::Minus), v if v == VK_OEM_PLUS => Some(VKey::Equal),
         v if v == VK_OEM_3 => Some(VKey::Grave),
+        0x15 => Some(VKey::Hangul),
+        0x19 => Some(VKey::Hanja),
         _ => None,
     }
 }
@@ -151,6 +166,26 @@ fn send_combo(modifier_vks: &[u16], key_vk: u16) {
     send_key_press(key_vk);
     for &m in modifier_vks.iter().rev() {
         send_key_up(m);
+    }
+}
+
+// ── 수정자 키 판별 / 콤보 매칭 헬퍼 ─────────────────────────────────────────
+
+fn is_modifier_key(vkey: &VKey) -> bool {
+    matches!(vkey,
+        VKey::LShift | VKey::RShift |
+        VKey::LCtrl | VKey::RCtrl |
+        VKey::LAlt | VKey::RAlt |
+        VKey::LWin | VKey::RWin
+    )
+}
+
+fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
+    match m {
+        Modifier::Shift => held.contains(&VKey::LShift) || held.contains(&VKey::RShift),
+        Modifier::Ctrl => held.contains(&VKey::LCtrl) || held.contains(&VKey::RCtrl),
+        Modifier::Alt => held.contains(&VKey::LAlt) || held.contains(&VKey::RAlt),
+        Modifier::Win => held.contains(&VKey::LWin) || held.contains(&VKey::RWin),
     }
 }
 
@@ -203,7 +238,6 @@ unsafe extern "system" fn keyboard_hook_proc(
 
     let kb = &*(l_param as *const KBDLLHOOKSTRUCT);
 
-    // SendInput으로 주입된 이벤트는 무시 (재진입 방지)
     if kb.flags & LLKHF_INJECTED != 0 {
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
@@ -234,7 +268,28 @@ unsafe extern "system" fn keyboard_hook_proc(
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
 
-    // 레이어 트리거 키 처리
+    // ── 1. 수정자 키 물리 상태 추적 ──
+    if is_modifier_key(&vkey) {
+        if is_down {
+            guard.modifiers_held.insert(vkey);
+        } else {
+            guard.modifiers_held.remove(&vkey);
+        }
+    }
+
+    // ── 2. 콤보/더블탭으로 소비된 키의 keyup 억제 ──
+    if is_up {
+        if guard.combo_consumed_key == Some(vkey) {
+            guard.combo_consumed_key = None;
+            return 1;
+        }
+        if guard.dt_consumed_key == Some(vkey) {
+            guard.dt_consumed_key = None;
+            return 1;
+        }
+    }
+
+    // ── 3. 레이어 트리거 키 처리 ──
     for (idx, layer) in guard.config.layers.iter().enumerate() {
         if vkey == layer.trigger {
             if is_down {
@@ -243,7 +298,7 @@ unsafe extern "system" fn keyboard_hook_proc(
                     guard.trigger_down_tick = kb.time;
                     guard.layer_key_used = false;
                 }
-                return 1; // 원본 키 억제
+                return 1;
             }
             if is_up && guard.active_layer == Some(idx) {
                 let elapsed = kb.time.wrapping_sub(guard.trigger_down_tick);
@@ -254,7 +309,6 @@ unsafe extern "system" fn keyboard_hook_proc(
                 guard.active_layer = None;
                 guard.layer_key_used = false;
 
-                // tap 판정: 홀드 시간이 짧고 다른 키를 누르지 않았으면 tap_action 전송
                 if !was_used && elapsed < tap_hold_ms && tap_action.is_some() {
                     guard.sending = true;
                     drop(guard);
@@ -263,12 +317,12 @@ unsafe extern "system" fn keyboard_hook_proc(
                         g.sending = false;
                     }
                 }
-                return 1; // 원본 키 억제
+                return 1;
             }
         }
     }
 
-    // 활성 레이어 매핑 확인
+    // ── 4. 활성 레이어 매핑 확인 ──
     if let Some(layer_idx) = guard.active_layer {
         let action_opt = guard.config.layers[layer_idx]
             .mappings
@@ -280,9 +334,7 @@ unsafe extern "system" fn keyboard_hook_proc(
                 guard.layer_key_used = true;
                 guard.sending = true;
                 drop(guard);
-
                 execute_action(&action);
-
                 if let Ok(mut g) = state.lock() {
                     g.sending = false;
                 }
@@ -294,15 +346,63 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
     }
 
-    // 단순 리매핑 확인
+    // ── 5. 콤보 리맵 확인 (수정자+키 조합) ──
+    if is_down && !is_modifier_key(&vkey) {
+        let combo_action = guard.config.combos.iter()
+            .find(|(trigger, _)| {
+                trigger.key == vkey
+                    && trigger.modifiers.iter().all(|m| modifier_satisfied(m, &guard.modifiers_held))
+            })
+            .map(|(_, action)| action.clone());
+
+        if let Some(action) = combo_action {
+            guard.combo_consumed_key = Some(vkey);
+            guard.sending = true;
+            drop(guard);
+            execute_action(&action);
+            if let Ok(mut g) = state.lock() {
+                g.sending = false;
+            }
+            return 1;
+        }
+    }
+
+    // ── 6. 더블탭 확인 ──
+    if is_down {
+        let dt_binding = guard.config.double_taps.iter()
+            .find(|dt| dt.key == vkey)
+            .cloned();
+
+        if let Some(dt) = dt_binding {
+            if guard.last_tap_key == Some(vkey) {
+                let elapsed = kb.time.wrapping_sub(guard.last_tap_tick);
+                if elapsed < dt.timeout_ms {
+                    guard.last_tap_key = None;
+                    guard.dt_consumed_key = Some(vkey);
+                    if is_modifier_key(&vkey) {
+                        guard.modifiers_held.remove(&vkey);
+                    }
+                    guard.sending = true;
+                    drop(guard);
+                    execute_action(&dt.action);
+                    if let Ok(mut g) = state.lock() {
+                        g.sending = false;
+                    }
+                    return 1;
+                }
+            }
+        } else if !is_modifier_key(&vkey) {
+            guard.last_tap_key = None;
+        }
+    }
+
+    // ── 7. 단순 리매핑 확인 ──
     if let Some(action) = guard.config.remaps.get(&vkey) {
         if is_down {
             let action = action.clone();
             guard.sending = true;
             drop(guard);
-
             execute_action(&action);
-
             if let Ok(mut g) = state.lock() {
                 g.sending = false;
             }
@@ -310,6 +410,15 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
         if is_up {
             return 1;
+        }
+    }
+
+    // ── 8. 더블탭 상태 기록 (keyup 시 탭 완료 기록) ──
+    if is_up {
+        let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
+        if has_dt {
+            guard.last_tap_key = Some(vkey);
+            guard.last_tap_tick = kb.time;
         }
     }
 
@@ -345,6 +454,11 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             trigger_down_tick: 0,
             layer_key_used: false,
             sending: false,
+            modifiers_held: HashSet::new(),
+            last_tap_key: None,
+            last_tap_tick: 0,
+            combo_consumed_key: None,
+            dt_consumed_key: None,
         }));
 
         // 글로벌 상태 설정 (콜백에서 접근)

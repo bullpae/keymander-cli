@@ -27,6 +27,7 @@ pub enum VKey {
     LShift, RShift, LCtrl, RCtrl, LAlt, RAlt, LWin, RWin,
     Semicolon, Quote, Comma, Period, Slash, Backslash,
     LBracket, RBracket, Minus, Equal, Grave,
+    Hangul, Hanja,
 }
 
 /// 키 이름 문자열 → VKey 파싱
@@ -83,6 +84,8 @@ impl VKey {
             "-" | "minus" => Some(Self::Minus),
             "=" | "equal" => Some(Self::Equal),
             "`" | "grave" => Some(Self::Grave),
+            "hangul" | "han" | "kor" => Some(Self::Hangul),
+            "hanja" => Some(Self::Hanja),
             _ => None,
         }
     }
@@ -111,6 +114,32 @@ pub enum MacroStep {
     Combo { modifiers: Vec<VKey>, key: VKey },
 }
 
+// ── 수정자 / 콤보 / 더블탭 ──────────────────────────────────────────────────
+
+/// 수정자 키 종류 (좌/우 구분 없이 매칭)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Modifier {
+    Shift,
+    Ctrl,
+    Alt,
+    Win,
+}
+
+/// 수정자+키 조합 트리거 (예: Shift+Space)
+#[derive(Debug, Clone)]
+pub struct ComboTrigger {
+    pub modifiers: Vec<Modifier>,
+    pub key: VKey,
+}
+
+/// 더블탭 바인딩: 같은 키를 빠르게 두 번 탭하면 액션 실행
+#[derive(Debug, Clone)]
+pub struct DoubleTapBinding {
+    pub key: VKey,
+    pub action: BindAction,
+    pub timeout_ms: u32,
+}
+
 // ── 레이어 ──────────────────────────────────────────────────────────────────
 
 /// 키 레이어: 특정 키를 홀드하면 활성화되는 리매핑 세트
@@ -136,6 +165,10 @@ pub struct KeybindConfig {
     pub remaps: HashMap<VKey, BindAction>,
     /// 레이어 목록
     pub layers: Vec<Layer>,
+    /// 수정자+키 콤보 바인딩 (예: Shift+Space → 한영 전환)
+    pub combos: Vec<(ComboTrigger, BindAction)>,
+    /// 더블탭 바인딩 (예: RShift 두 번 → 한영 전환)
+    pub double_taps: Vec<DoubleTapBinding>,
 }
 
 impl KeybindConfig {
@@ -144,6 +177,8 @@ impl KeybindConfig {
         Self {
             remaps: HashMap::new(),
             layers: Vec::new(),
+            combos: Vec::new(),
+            double_taps: Vec::new(),
         }
     }
 
@@ -184,6 +219,17 @@ impl KeybindConfig {
                 tap_hold_ms: 200,
                 mappings,
             }],
+            combos: vec![
+                (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
+                 BindAction::SendKey(VKey::Hangul)),
+            ],
+            double_taps: vec![
+                DoubleTapBinding {
+                    key: VKey::RShift,
+                    action: BindAction::SendKey(VKey::Hangul),
+                    timeout_ms: 300,
+                },
+            ],
         }
     }
 
@@ -194,6 +240,17 @@ impl KeybindConfig {
         Self {
             remaps,
             layers: Vec::new(),
+            combos: vec![
+                (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
+                 BindAction::SendKey(VKey::Hangul)),
+            ],
+            double_taps: vec![
+                DoubleTapBinding {
+                    key: VKey::RShift,
+                    action: BindAction::SendKey(VKey::Hangul),
+                    timeout_ms: 300,
+                },
+            ],
         }
     }
 }
@@ -259,6 +316,8 @@ mod tests {
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
+        assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
+        assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
     }
 
     #[test]
@@ -266,5 +325,15 @@ mod tests {
         let config = KeybindConfig::minimal_preset();
         assert!(config.remaps.contains_key(&VKey::CapsLock));
         assert!(config.layers.is_empty());
+        assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
+        assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
+    }
+
+    #[test]
+    fn test_hangul_vkey() {
+        assert_eq!(VKey::from_name("hangul"), Some(VKey::Hangul));
+        assert_eq!(VKey::from_name("han"), Some(VKey::Hangul));
+        assert_eq!(VKey::from_name("kor"), Some(VKey::Hangul));
+        assert_eq!(VKey::from_name("hanja"), Some(VKey::Hanja));
     }
 }

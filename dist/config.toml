@@ -79,3 +79,13 @@
 [launcher.keymap]
 # backend = "kanata"
 # active_profile = "vim-nav.kbd"
+#
+# ── 콤보 & 더블탭 (프리셋에 포함) ────────────────────────────
+# vim-nav / minimal 프리셋에 기본 포함:
+#
+#   Shift+Space → 한/영 전환
+#     수정자(Shift)+키(Space) 조합으로 한영 토글 (VK_HANGUL)
+#
+#   RShift 더블탭 → 한/영 전환
+#     오른쪽 Shift를 300ms 이내 두 번 탭하면 한영 토글
+#     첫 번째 탭은 정상 동작, 두 번째 탭만 치환됨
