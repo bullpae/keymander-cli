@@ -147,6 +147,10 @@ enum DaemonAction {
     Stop,
     /// Show daemon status
     Status,
+    /// Register daemon to start at login
+    Install,
+    /// Unregister daemon from starting at login
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -289,6 +293,8 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Start => cmd::daemon::Action::Start,
                 DaemonAction::Stop => cmd::daemon::Action::Stop,
                 DaemonAction::Status => cmd::daemon::Action::Status,
+                DaemonAction::Install => cmd::daemon::Action::Install,
+                DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,
             })?;
         }
         Some(Commands::Portable { action }) => {

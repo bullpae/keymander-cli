@@ -9,6 +9,8 @@ pub enum Action {
     Start,
     Stop,
     Status,
+    Install,
+    Uninstall,
 }
 
 pub fn run(action: Action) -> Result<()> {
@@ -16,6 +18,8 @@ pub fn run(action: Action) -> Result<()> {
         Action::Start => start_daemon(),
         Action::Stop => send_command(ipc::Request::Shutdown, "stop"),
         Action::Status => check_status(),
+        Action::Install => run_daemon_cmd("install"),
+        Action::Uninstall => run_daemon_cmd("uninstall"),
     }
 }
 
@@ -154,6 +158,28 @@ fn read_port() -> Result<u16> {
     let content = std::fs::read_to_string(&path)?;
     let port: u16 = content.trim().parse()?;
     Ok(port)
+}
+
+/// kmd-daemon 바이너리에 명령 위임 (install/uninstall 등)
+fn run_daemon_cmd(cmd: &str) -> Result<()> {
+    let daemon_exe = find_daemon_exe();
+    let output = std::process::Command::new(&daemon_exe)
+        .arg(cmd)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    match output {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Err(e) => {
+            eprintln!("kmd-daemon 실행 실패: {e}");
+            eprintln!("경로: {}", daemon_exe.display());
+            std::process::exit(1);
+        }
+    }
 }
 
 /// kmd-daemon 바이너리 경로 찾기
