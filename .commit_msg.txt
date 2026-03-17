@@ -1,8 +1,0 @@
-feat: 포터블 번들 배포 — 올인원 zip/tar.gz 패키징
-
-- dist/config.toml: 주석 포함 기본 설정 파일 (포터블 번들용)
-- dist/README.txt: 빠른 시작 가이드 (사용법, 핫키, 데몬, 포터블 모드)
-- release.yml: build-bundle 잡 추가 — kmd+kmd-desktop+kmd-daemon을
-  kmd-data/ 포함 keymander-portable-<target>.zip/.tar.gz로 패키징
-- scripts/build-portable.ps1: Windows 로컬 빌드 스크립트
-- scripts/build-portable.sh: macOS/Linux 로컬 빌드 스크립트
