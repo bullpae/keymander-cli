@@ -11,7 +11,7 @@ use kmd_core::ItemKind;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-const ICON_SIZE: u32 = 32;
+const FALLBACK_ICON_SIZE: u32 = 32;
 
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
     LazyLock::new(|| Mutex::new(HashMap::with_capacity(64)));
@@ -39,11 +39,13 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
 
 #[cfg(windows)]
 mod platform {
-    use super::ICON_SIZE;
+    use super::FALLBACK_ICON_SIZE;
     use iced::widget::image::Handle;
 
     pub fn extract_icon(path: &str) -> Option<Handle> {
-        use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_LARGEICON};
+        use windows::Win32::UI::Shell::{
+            SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_LARGEICON,
+        };
         use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
         unsafe {
@@ -62,11 +64,10 @@ mod platform {
                 return None;
             }
 
-            let rgba = hicon_to_rgba(info.hIcon);
+            let result = hicon_to_rgba(info.hIcon);
             let _ = DestroyIcon(info.hIcon);
 
-            rgba.map(|pixels| encode_png(ICON_SIZE, ICON_SIZE, &pixels))
-                .flatten()
+            result.and_then(|(pixels, w, h)| encode_png(w, h, &pixels))
         }
     }
 
@@ -82,14 +83,27 @@ mod platform {
         Some(Handle::from_bytes(buf))
     }
 
+    /// HICON → (RGBA pixel data, width, height)
     unsafe fn hicon_to_rgba(
         hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, u32, u32)> {
         use windows::Win32::Graphics::Gdi::*;
         use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
 
         let mut icon_info = ICONINFO::default();
         GetIconInfo(hicon, &mut icon_info).ok()?;
+
+        // 실제 비트맵 크기 조회
+        let (width, height) = if !icon_info.hbmColor.0.is_null() {
+            bitmap_dimensions(icon_info.hbmColor)
+        } else {
+            (0, 0)
+        };
+        let (width, height) = if width > 0 && height > 0 {
+            (width, height)
+        } else {
+            (FALLBACK_ICON_SIZE, FALLBACK_ICON_SIZE)
+        };
 
         let hdc_screen = GetDC(None);
         let hdc = CreateCompatibleDC(hdc_screen);
@@ -100,12 +114,11 @@ mod platform {
             return None;
         }
 
-        let size = ICON_SIZE;
         let mut bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: size as i32,
-                biHeight: size as i32, // bottom-up
+                biWidth: width as i32,
+                biHeight: height as i32, // bottom-up
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0 as u32,
@@ -114,7 +127,7 @@ mod platform {
             ..Default::default()
         };
 
-        let pixel_count = (size * size * 4) as usize;
+        let pixel_count = (width * height * 4) as usize;
         let mut pixels = vec![0u8; pixel_count];
 
         let old = SelectObject(hdc, icon_info.hbmColor);
@@ -122,7 +135,7 @@ mod platform {
             hdc,
             icon_info.hbmColor,
             0,
-            size,
+            height,
             Some(pixels.as_mut_ptr() as *mut _),
             &mut bmi,
             DIB_RGB_COLORS,
@@ -138,7 +151,7 @@ mod platform {
         }
 
         // bottom-up → top-down 변환
-        let row_bytes = (size * 4) as usize;
+        let row_bytes = (width * 4) as usize;
         let mut top_down = Vec::with_capacity(pixel_count);
         for row in pixels.chunks_exact(row_bytes).rev() {
             top_down.extend_from_slice(row);
@@ -153,7 +166,24 @@ mod platform {
             }
         }
 
-        Some(top_down)
+        Some((top_down, width, height))
+    }
+
+    /// HBITMAP의 실제 픽셀 크기 조회
+    unsafe fn bitmap_dimensions(hbm: windows::Win32::Graphics::Gdi::HBITMAP) -> (u32, u32) {
+        use windows::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
+
+        let mut bm = BITMAP::default();
+        let ret = GetObjectW(
+            hbm,
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut _ as *mut _),
+        );
+        if ret > 0 && bm.bmWidth > 0 && bm.bmHeight > 0 {
+            (bm.bmWidth as u32, bm.bmHeight as u32)
+        } else {
+            (0, 0)
+        }
     }
 
     unsafe fn cleanup_bitmaps(info: &windows::Win32::UI::WindowsAndMessaging::ICONINFO) {
