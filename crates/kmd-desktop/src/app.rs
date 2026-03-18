@@ -723,7 +723,9 @@ impl App {
             }
         }
 
-        self.resize_window()
+        let resize = self.resize_window();
+        let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
+        Task::batch([resize, refocus])
     }
 
     /// classify_web_query 통합 분류기 사용
@@ -1801,14 +1803,18 @@ impl App {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                self.scroll_to_selected()
+                let scroll = self.scroll_to_selected();
+                let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
+                Task::batch([scroll, refocus])
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 let max = self.results.len().saturating_sub(1);
                 if self.selected < max {
                     self.selected += 1;
                 }
-                self.scroll_to_selected()
+                let scroll = self.scroll_to_selected();
+                let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
+                Task::batch([scroll, refocus])
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !self.query.is_empty() {
