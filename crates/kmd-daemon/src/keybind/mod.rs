@@ -96,6 +96,7 @@ impl VKey {
 
 /// 키 바인딩이 트리거되었을 때 수행할 동작
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum BindAction {
     /// 다른 키 하나를 전송
     SendKey(VKey),
@@ -109,6 +110,7 @@ pub enum BindAction {
 
 /// 매크로 한 스텝
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum MacroStep {
     KeyPress(VKey),
     KeyRelease(VKey),
@@ -129,6 +131,7 @@ pub enum Modifier {
 
 /// 수정자+키 조합 트리거 (예: Shift+Space)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ComboTrigger {
     pub modifiers: Vec<Modifier>,
     pub key: VKey,
@@ -136,6 +139,7 @@ pub struct ComboTrigger {
 
 /// 더블탭 바인딩: 같은 키를 빠르게 두 번 탭하면 액션 실행
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DoubleTapBinding {
     pub key: VKey,
     pub action: BindAction,
@@ -146,8 +150,8 @@ pub struct DoubleTapBinding {
 
 /// 키 레이어: 특정 키를 홀드하면 활성화되는 리매핑 세트
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Layer {
-    #[allow(dead_code)]
     pub name: String,
     /// 이 레이어를 활성화하는 트리거 키
     pub trigger: VKey,
@@ -163,6 +167,7 @@ pub struct Layer {
 
 /// 레이어 내 더블탭 설정
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LayerDoubleTap {
     pub single_action: BindAction,
     pub double_action: BindAction,
@@ -173,6 +178,7 @@ pub struct LayerDoubleTap {
 
 /// 키 바인딩 엔진 설정
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KeybindConfig {
     /// 항상 활성화되는 단순 리매핑
     pub remaps: HashMap<VKey, BindAction>,

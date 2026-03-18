@@ -12,7 +12,9 @@ use kmd_core::ItemKind;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
+#[allow(dead_code)]
 const FALLBACK_ICON_SIZE: u32 = 32;
+#[allow(dead_code)]
 const TARGET_ICON_SIZE: u32 = 32;
 
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
