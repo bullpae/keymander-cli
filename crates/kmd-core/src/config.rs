@@ -2,6 +2,7 @@
 //!
 //! Launcher-focused config with keybindings and provider settings.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -269,8 +270,22 @@ pub struct KeymapConfig {
     pub kanata_path: Option<PathBuf>,
     /// Directory containing keymap profile files.
     pub profile_dir: Option<PathBuf>,
-    /// Active profile file name (e.g. vim-nav.kbd).
+    /// Active profile: "vim-nav" | "minimal" | "none" | "custom"
+    /// "custom"이면 아래 remaps/layers/combos/double_taps 사용
     pub active_profile: String,
+
+    /// 단순 리맵 (항상 활성). 키이름 = "대상키" 또는 "Ctrl+키"
+    #[serde(default)]
+    pub remaps: HashMap<String, String>,
+    /// 레이어 정의. 이름 = { trigger, mappings, ... }
+    #[serde(default)]
+    pub layers: HashMap<String, LayerToml>,
+    /// 수정자+키 콤보 (예: Shift+Space → Hangul)
+    #[serde(default)]
+    pub combos: Vec<ComboToml>,
+    /// 글로벌 더블탭
+    #[serde(default)]
+    pub double_taps: Vec<DoubleTapToml>,
 }
 
 impl Default for KeymapConfig {
@@ -280,8 +295,71 @@ impl Default for KeymapConfig {
             kanata_path: None,
             profile_dir: None,
             active_profile: "vim-nav.kbd".to_string(),
+            remaps: HashMap::new(),
+            layers: HashMap::new(),
+            combos: Vec::new(),
+            double_taps: Vec::new(),
         }
     }
+}
+
+/// TOML 레이어 설정
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LayerToml {
+    /// 레이어 활성화 트리거 키 (예: "LAlt")
+    pub trigger: String,
+    /// 짧게 탭했을 때 보낼 키 (예: "Escape")
+    pub tap_action: Option<String>,
+    /// tap-hold 판정 시간 (ms, 기본 200)
+    pub tap_hold_ms: Option<u32>,
+    /// 레이어 내 키 매핑: 키이름 = "대상" (예: H = "Left", P = "Ctrl+V")
+    pub mappings: HashMap<String, String>,
+    /// 레이어 내 더블탭: 키이름 = { single, double, timeout_ms }
+    pub double_taps: HashMap<String, LayerDoubleTapToml>,
+}
+
+impl Default for LayerToml {
+    fn default() -> Self {
+        Self {
+            trigger: String::new(),
+            tap_action: None,
+            tap_hold_ms: None,
+            mappings: HashMap::new(),
+            double_taps: HashMap::new(),
+        }
+    }
+}
+
+/// TOML 레이어 내 더블탭 설정
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LayerDoubleTapToml {
+    /// 한 번 탭 시 액션 (예: "Ctrl+Left")
+    pub single: String,
+    /// 더블탭 시 액션 (예: "Home")
+    pub double: String,
+    /// 타임아웃 (ms, 기본 300)
+    pub timeout_ms: Option<u32>,
+}
+
+/// TOML 콤보 설정
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ComboToml {
+    /// 트리거 (예: "Shift+Space")
+    pub trigger: String,
+    /// 실행 액션 (예: "Hangul")
+    pub action: String,
+}
+
+/// TOML 글로벌 더블탭 설정
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DoubleTapToml {
+    /// 키 (예: "RShift")
+    pub key: String,
+    /// 액션 (예: "Hangul")
+    pub action: String,
+    /// 타임아웃 (ms, 기본 300)
+    pub timeout_ms: Option<u32>,
 }
 
 /// 재사용 가능한 프롬프트 템플릿. `@ll :name question` 형태로 LLM에 전달.

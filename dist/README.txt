@@ -86,6 +86,40 @@
   방법 4: kmd config set general.theme "nord"
 
 ------------------------------------------------------------
+  커스텀 키 매핑 설정
+------------------------------------------------------------
+
+  config.toml 에서 키 바인딩을 자유롭게 설정할 수 있습니다.
+
+  1. active_profile = "custom" 으로 변경
+  2. [launcher.keymap.remaps], [launcher.keymap.layers.이름] 등 정의
+  3. kmd-daemon restart 또는 stop → start
+
+  예) Alt+H/J/K/L 방향키, CapsLock→Escape, Shift+Space→한영:
+
+    [launcher.keymap]
+    active_profile = "custom"
+
+    [launcher.keymap.remaps]
+    CapsLock = "Escape"
+
+    [launcher.keymap.layers.nav]
+    trigger = "LAlt"
+    tap_action = "Escape"
+
+    [launcher.keymap.layers.nav.mappings]
+    H = "Left"
+    J = "Down"
+    K = "Up"
+    L = "Right"
+
+    [[launcher.keymap.combos]]
+    trigger = "Shift+Space"
+    action = "Hangul"
+
+  자세한 형식은 config.toml 의 주석을 참고하세요.
+
+------------------------------------------------------------
   포터블 모드 안내
 ------------------------------------------------------------
 

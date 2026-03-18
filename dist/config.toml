@@ -86,15 +86,73 @@
 
 # ── 키맵 설정 (데몬 연동) ────────────────────────────────────
 [launcher.keymap]
-# backend = "kanata"
-# active_profile = "vim-nav.kbd"
+# active_profile = "vim-nav"
 #
-# ── 콤보 & 더블탭 (프리셋에 포함) ────────────────────────────
-# vim-nav / minimal 프리셋에 기본 포함:
+# 프리셋: "vim-nav" (기본) | "minimal" | "none" | "custom"
+# "custom"으로 설정하면 아래 remaps/layers/combos/double_taps 사용
 #
-#   Shift+Space → 한/영 전환
-#     수정자(Shift)+키(Space) 조합으로 한영 토글 (VK_HANGUL)
+# ── 프리셋 설명 ─────────────────────────────────────────────
+# vim-nav: Alt 홀드 → h/j/k/l 방향키, i/o 단어이동+더블탭 Home/End 등
+# minimal: CapsLock → Escape
+# none:    키 바인딩 비활성화
 #
-#   RShift 더블탭 → 한/영 전환
-#     오른쪽 Shift를 300ms 이내 두 번 탭하면 한영 토글
-#     첫 번째 탭은 정상 동작, 두 번째 탭만 치환됨
+# ── 커스텀 설정 예제 ────────────────────────────────────────
+# active_profile = "custom"
+#
+# ── 단순 리맵 (항상 활성) ──
+# [launcher.keymap.remaps]
+# CapsLock = "Escape"
+#
+# ── 레이어 (키를 홀드하면 활성화) ──
+# [launcher.keymap.layers.nav]
+# trigger = "LAlt"
+# tap_action = "Escape"           # 짧게 탭하면 Escape
+# tap_hold_ms = 200
+#
+# [launcher.keymap.layers.nav.mappings]
+# H = "Left"                      # Alt+H → 왼쪽
+# J = "Down"                      # Alt+J → 아래
+# K = "Up"                        # Alt+K → 위
+# L = "Right"                     # Alt+L → 오른쪽
+# N = "PageUp"                    # Alt+N → 페이지 업
+# M = "PageDown"                  # Alt+M → 페이지 다운
+# "." = "Backspace"               # Alt+. → 백스페이스
+# "/" = "Delete"                   # Alt+/ → Delete
+# P = "Ctrl+V"                    # Alt+P → 붙여넣기
+# Y = "macro:Home;Shift+End;Ctrl+C"  # Alt+Y → 줄 복사
+# Space = "launch:kmd-desktop"    # Alt+Space → kmd-desktop 실행
+#
+# ── 레이어 내 더블탭 ──
+# [launcher.keymap.layers.nav.double_taps.I]
+# single = "Ctrl+Left"            # Alt+I 한번 → 단어 왼쪽 이동
+# double = "Home"                 # Alt+I 더블탭 → 줄 처음
+# timeout_ms = 300
+#
+# [launcher.keymap.layers.nav.double_taps.O]
+# single = "Ctrl+Right"           # Alt+O 한번 → 단어 오른쪽 이동
+# double = "End"                  # Alt+O 더블탭 → 줄 끝
+# timeout_ms = 300
+#
+# ── 글로벌 콤보 (수정자+키) ──
+# [[launcher.keymap.combos]]
+# trigger = "Shift+Space"
+# action = "Hangul"               # Shift+Space → 한/영 전환
+#
+# ── 글로벌 더블탭 ──
+# [[launcher.keymap.double_taps]]
+# key = "RShift"
+# action = "Hangul"               # RShift 빠르게 두 번 → 한/영 전환
+# timeout_ms = 300
+#
+# ── 액션 문자열 형식 ──────────────────────────────────────
+# "Home"              → 단일 키 전송
+# "Ctrl+Left"         → 수정자+키 콤보 전송
+# "Ctrl+Shift+End"    → 복수 수정자+키 콤보
+# "launch:kmd-desktop" → 프로그램 실행
+# "macro:Home;Shift+End;Ctrl+C" → 여러 키 순차 실행 (;로 구분)
+#
+# 키 이름: a-z, 0-9, f1-f12, Home, End, Left, Right, Up, Down,
+#          PageUp, PageDown, Space, Enter, Escape, Tab, CapsLock,
+#          Backspace, Delete, Insert, LAlt, RAlt, LCtrl, RCtrl,
+#          LShift, RShift, LWin, Hangul, Hanja, Semicolon, Comma,
+#          Period, Slash, Backslash, LBracket, RBracket, Minus, Equal

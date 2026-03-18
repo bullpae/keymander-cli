@@ -286,6 +286,253 @@ impl KeybindConfig {
     }
 }
 
+// ── TOML 설정 → KeybindConfig 변환 ───────────────────────────────────────────
+
+impl KeybindConfig {
+    /// kmd-core의 TOML 설정을 런타임 KeybindConfig로 변환
+    pub fn from_config(cfg: &kmd_core::config::KeymapConfig) -> Option<Self> {
+        let has_custom = !cfg.remaps.is_empty()
+            || !cfg.layers.is_empty()
+            || !cfg.combos.is_empty()
+            || !cfg.double_taps.is_empty();
+        if !has_custom {
+            return None;
+        }
+
+        let mut remaps = HashMap::new();
+        for (key_str, action_str) in &cfg.remaps {
+            if let (Some(key), Some(action)) = (VKey::from_name(key_str), parse_action(action_str))
+            {
+                remaps.insert(key, action);
+            } else {
+                tracing::warn!("리맵 파싱 실패: {key_str} = {action_str}");
+            }
+        }
+
+        let mut layers = Vec::new();
+        for (name, layer_cfg) in &cfg.layers {
+            if layer_cfg.trigger.is_empty() {
+                tracing::warn!("레이어 '{name}': trigger가 비어있어 건너뜀");
+                continue;
+            }
+            let Some(trigger) = VKey::from_name(&layer_cfg.trigger) else {
+                tracing::warn!("레이어 '{name}': 알 수 없는 trigger '{}'", layer_cfg.trigger);
+                continue;
+            };
+
+            let tap_action = layer_cfg
+                .tap_action
+                .as_deref()
+                .and_then(VKey::from_name);
+
+            let mut mappings = HashMap::new();
+            for (k, v) in &layer_cfg.mappings {
+                if let (Some(key), Some(action)) = (VKey::from_name(k), parse_action(v)) {
+                    mappings.insert(key, action);
+                } else {
+                    tracing::warn!("레이어 '{name}' 매핑 파싱 실패: {k} = {v}");
+                }
+            }
+
+            let mut double_tap_mappings = HashMap::new();
+            for (k, dt) in &layer_cfg.double_taps {
+                let Some(key) = VKey::from_name(k) else {
+                    tracing::warn!("레이어 '{name}' 더블탭 키 파싱 실패: {k}");
+                    continue;
+                };
+                let (Some(single), Some(double)) =
+                    (parse_action(&dt.single), parse_action(&dt.double))
+                else {
+                    tracing::warn!(
+                        "레이어 '{name}' 더블탭 액션 파싱 실패: {k} (single={}, double={})",
+                        dt.single,
+                        dt.double
+                    );
+                    continue;
+                };
+                double_tap_mappings.insert(
+                    key,
+                    LayerDoubleTap {
+                        single_action: single,
+                        double_action: double,
+                        timeout_ms: dt.timeout_ms.unwrap_or(300),
+                    },
+                );
+            }
+
+            layers.push(Layer {
+                name: name.clone(),
+                trigger,
+                tap_action,
+                tap_hold_ms: layer_cfg.tap_hold_ms.unwrap_or(200),
+                mappings,
+                double_tap_mappings,
+            });
+        }
+
+        let mut combos = Vec::new();
+        for combo_cfg in &cfg.combos {
+            if let (Some(trigger), Some(action)) =
+                (parse_combo_trigger(&combo_cfg.trigger), parse_action(&combo_cfg.action))
+            {
+                combos.push((trigger, action));
+            } else {
+                tracing::warn!(
+                    "콤보 파싱 실패: trigger={}, action={}",
+                    combo_cfg.trigger,
+                    combo_cfg.action
+                );
+            }
+        }
+
+        let mut double_taps = Vec::new();
+        for dt_cfg in &cfg.double_taps {
+            if let (Some(key), Some(action)) =
+                (VKey::from_name(&dt_cfg.key), parse_action(&dt_cfg.action))
+            {
+                double_taps.push(DoubleTapBinding {
+                    key,
+                    action,
+                    timeout_ms: dt_cfg.timeout_ms.unwrap_or(300),
+                });
+            } else {
+                tracing::warn!(
+                    "더블탭 파싱 실패: key={}, action={}",
+                    dt_cfg.key,
+                    dt_cfg.action
+                );
+            }
+        }
+
+        tracing::info!(
+            "커스텀 키 설정 로드: 리맵 {}개, 레이어 {}개, 콤보 {}개, 더블탭 {}개",
+            remaps.len(),
+            layers.len(),
+            combos.len(),
+            double_taps.len()
+        );
+
+        Some(Self {
+            remaps,
+            layers,
+            combos,
+            double_taps,
+        })
+    }
+}
+
+/// 액션 문자열 파서.
+///
+/// 지원 형식:
+/// - `"Home"` → SendKey(Home)
+/// - `"Ctrl+Left"` → SendCombo { mods: [LCtrl], key: Left }
+/// - `"Ctrl+Shift+End"` → SendCombo { mods: [LCtrl, LShift], key: End }
+/// - `"launch:kmd-desktop"` → Launch("kmd-desktop")
+/// - `"macro:Home;Shift+End;Ctrl+C"` → Macro([...])
+fn parse_action(s: &str) -> Option<BindAction> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    if let Some(cmd) = s.strip_prefix("launch:") {
+        return Some(BindAction::Launch(cmd.trim().to_string()));
+    }
+
+    if let Some(macro_str) = s.strip_prefix("macro:") {
+        return parse_macro(macro_str);
+    }
+
+    // 수정자+키 콤보 (예: "Ctrl+Left", "Ctrl+Shift+End")
+    if s.contains('+') {
+        let parts: Vec<&str> = s.split('+').collect();
+        if parts.len() >= 2 {
+            let key_str = parts.last().unwrap().trim();
+            let mod_strs = &parts[..parts.len() - 1];
+
+            if let Some(key) = VKey::from_name(key_str) {
+                let modifiers: Vec<VKey> = mod_strs
+                    .iter()
+                    .filter_map(|m| parse_modifier_vkey(m.trim()))
+                    .collect();
+                if !modifiers.is_empty() {
+                    return Some(BindAction::SendCombo { modifiers, key });
+                }
+            }
+        }
+    }
+
+    VKey::from_name(s).map(BindAction::SendKey)
+}
+
+/// 수정자 이름 → VKey (액션 실행용, L/R 구분)
+fn parse_modifier_vkey(name: &str) -> Option<VKey> {
+    match name.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => Some(VKey::LCtrl),
+        "shift" => Some(VKey::LShift),
+        "alt" => Some(VKey::LAlt),
+        "win" | "super" | "meta" => Some(VKey::LWin),
+        _ => VKey::from_name(name),
+    }
+}
+
+/// 수정자 이름 → Modifier (콤보 트리거용, L/R 무관)
+fn parse_modifier(name: &str) -> Option<Modifier> {
+    match name.to_ascii_lowercase().as_str() {
+        "shift" | "lshift" | "rshift" => Some(Modifier::Shift),
+        "ctrl" | "control" | "lctrl" | "rctrl" => Some(Modifier::Ctrl),
+        "alt" | "lalt" | "ralt" => Some(Modifier::Alt),
+        "win" | "super" | "meta" | "lwin" | "rwin" => Some(Modifier::Win),
+        _ => None,
+    }
+}
+
+/// 콤보 트리거 문자열 파서 (예: "Shift+Space" → ComboTrigger)
+fn parse_combo_trigger(s: &str) -> Option<ComboTrigger> {
+    let parts: Vec<&str> = s.split('+').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let key = VKey::from_name(parts.last().unwrap().trim())?;
+    let modifiers: Vec<Modifier> = parts[..parts.len() - 1]
+        .iter()
+        .filter_map(|m| parse_modifier(m.trim()))
+        .collect();
+    if modifiers.is_empty() {
+        return None;
+    }
+    Some(ComboTrigger { modifiers, key })
+}
+
+/// 매크로 문자열 파서: "Home;Shift+End;Ctrl+C" → Macro steps
+fn parse_macro(s: &str) -> Option<BindAction> {
+    let mut steps = Vec::new();
+    for part in s.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if part.contains('+') {
+            let parts: Vec<&str> = part.split('+').collect();
+            let key = VKey::from_name(parts.last().unwrap().trim())?;
+            let modifiers: Vec<VKey> = parts[..parts.len() - 1]
+                .iter()
+                .filter_map(|m| parse_modifier_vkey(m.trim()))
+                .collect();
+            steps.push(MacroStep::Combo { modifiers, key });
+        } else {
+            let key = VKey::from_name(part)?;
+            steps.push(MacroStep::KeyPress(key));
+            steps.push(MacroStep::KeyRelease(key));
+        }
+    }
+    if steps.is_empty() {
+        None
+    } else {
+        Some(BindAction::Macro(steps))
+    }
+}
+
 // ── Backend trait ────────────────────────────────────────────────────────────
 
 /// 키보드 훅 백엔드 인터페이스 (플랫폼별 구현)
@@ -371,5 +618,101 @@ mod tests {
         assert_eq!(VKey::from_name("han"), Some(VKey::Hangul));
         assert_eq!(VKey::from_name("kor"), Some(VKey::Hangul));
         assert_eq!(VKey::from_name("hanja"), Some(VKey::Hanja));
+    }
+
+    #[test]
+    fn test_parse_action_simple() {
+        assert!(matches!(parse_action("Home"), Some(BindAction::SendKey(VKey::Home))));
+        assert!(matches!(parse_action("Escape"), Some(BindAction::SendKey(VKey::Escape))));
+        assert!(parse_action("").is_none());
+        assert!(parse_action("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_parse_action_combo() {
+        let action = parse_action("Ctrl+Left").unwrap();
+        match action {
+            BindAction::SendCombo { modifiers, key } => {
+                assert_eq!(modifiers, vec![VKey::LCtrl]);
+                assert_eq!(key, VKey::Left);
+            }
+            _ => panic!("Ctrl+Left -> SendCombo 예상"),
+        }
+
+        let action = parse_action("Ctrl+Shift+End").unwrap();
+        match action {
+            BindAction::SendCombo { modifiers, key } => {
+                assert_eq!(modifiers.len(), 2);
+                assert_eq!(key, VKey::End);
+            }
+            _ => panic!("Ctrl+Shift+End -> SendCombo 예상"),
+        }
+    }
+
+    #[test]
+    fn test_parse_action_launch() {
+        let action = parse_action("launch:kmd-desktop").unwrap();
+        match action {
+            BindAction::Launch(cmd) => assert_eq!(cmd, "kmd-desktop"),
+            _ => panic!("launch 예상"),
+        }
+    }
+
+    #[test]
+    fn test_parse_action_macro() {
+        let action = parse_action("macro:Home;Shift+End;Ctrl+C").unwrap();
+        match action {
+            BindAction::Macro(steps) => {
+                assert_eq!(steps.len(), 4); // Home(press+release) + Shift+End(combo) + Ctrl+C(combo)
+            }
+            _ => panic!("macro 예상"),
+        }
+    }
+
+    #[test]
+    fn test_parse_combo_trigger() {
+        let trigger = parse_combo_trigger("Shift+Space").unwrap();
+        assert_eq!(trigger.modifiers, vec![Modifier::Shift]);
+        assert_eq!(trigger.key, VKey::Space);
+
+        assert!(parse_combo_trigger("Space").is_none(), "수정자 없는 트리거는 실패");
+    }
+
+    #[test]
+    fn test_from_config_custom() {
+        use kmd_core::config::*;
+        let mut keymap = KeymapConfig::default();
+        keymap.active_profile = "custom".to_string();
+        keymap.remaps.insert("CapsLock".into(), "Escape".into());
+        keymap.combos.push(ComboToml {
+            trigger: "Shift+Space".into(),
+            action: "Hangul".into(),
+        });
+        keymap.double_taps.push(DoubleTapToml {
+            key: "RShift".into(),
+            action: "Hangul".into(),
+            timeout_ms: Some(300),
+        });
+
+        let mut layer = LayerToml::default();
+        layer.trigger = "LAlt".into();
+        layer.tap_action = Some("Escape".into());
+        layer.mappings.insert("H".into(), "Left".into());
+        layer.mappings.insert("J".into(), "Down".into());
+        layer.double_taps.insert("I".into(), LayerDoubleTapToml {
+            single: "Ctrl+Left".into(),
+            double: "Home".into(),
+            timeout_ms: Some(300),
+        });
+        keymap.layers.insert("nav".into(), layer);
+
+        let config = KeybindConfig::from_config(&keymap).unwrap();
+        assert!(config.remaps.contains_key(&VKey::CapsLock));
+        assert_eq!(config.layers.len(), 1);
+        assert_eq!(config.layers[0].trigger, VKey::LAlt);
+        assert!(config.layers[0].mappings.contains_key(&VKey::H));
+        assert!(config.layers[0].double_tap_mappings.contains_key(&VKey::I));
+        assert_eq!(config.combos.len(), 1);
+        assert_eq!(config.double_taps.len(), 1);
     }
 }

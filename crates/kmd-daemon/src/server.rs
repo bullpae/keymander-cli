@@ -187,9 +187,19 @@ fn load_config() -> Config {
     Config::load(&config_dir).unwrap_or_default()
 }
 
-/// config의 keymap 프리셋에 따라 KeybindConfig 선택
+/// config의 keymap 설정에 따라 KeybindConfig 결정.
+/// "custom"이면 TOML 설정을 파싱, 아니면 프리셋 사용.
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let profile = &config.launcher.keymap.active_profile;
+
+    if profile.contains("custom") {
+        if let Some(custom) = KeybindConfig::from_config(&config.launcher.keymap) {
+            return custom;
+        }
+        tracing::warn!("custom 프로필이지만 설정이 비어있어 vim-nav 프리셋 사용");
+        return KeybindConfig::vim_nav_preset();
+    }
+
     if profile.contains("vim-nav") {
         KeybindConfig::vim_nav_preset()
     } else if profile.contains("minimal") {
@@ -197,7 +207,9 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     } else if profile.contains("none") {
         KeybindConfig::empty()
     } else {
-        KeybindConfig::vim_nav_preset()
+        // 프리셋 이름이 아닌 경우 TOML 커스텀 설정을 시도
+        KeybindConfig::from_config(&config.launcher.keymap)
+            .unwrap_or_else(KeybindConfig::vim_nav_preset)
     }
 }
 
