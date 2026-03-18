@@ -15,6 +15,7 @@ use std::time::Duration;
 use iced::keyboard;
 use iced::widget::operation::scroll_to;
 use iced::widget::scrollable as scrollable_mod;
+use iced::widget::text::Wrapping;
 use iced::widget::{
     column, container, image, mouse_area, row, scrollable, text, text_input, Column, Space,
 };
@@ -1913,9 +1914,15 @@ impl App {
                 .center_y(icon_size)
                 .into()
         };
-        let title = text(&item.name).size(14).color(t.text);
-        let subtitle = text(&item.path).size(11).color(t.subtext);
-        let info = column![title, subtitle].spacing(2);
+        let title = text(&item.name)
+            .size(14)
+            .color(t.text)
+            .wrapping(Wrapping::None);
+        let subtitle = text(&item.path)
+            .size(11)
+            .color(t.subtext)
+            .wrapping(Wrapping::None);
+        let info = column![title, subtitle].spacing(2).width(Fill);
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
@@ -1945,16 +1952,10 @@ impl App {
             Color::TRANSPARENT
         };
 
-        let row_content = row![
-            left_bar,
-            icon_element,
-            info,
-            Space::new().width(Fill),
-            badge
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center)
-        .padding(Padding::from([4, 12]));
+        let row_content = row![left_bar, icon_element, info, badge]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .padding(Padding::from([4, 12]));
 
         mouse_area(
             container(row_content)
