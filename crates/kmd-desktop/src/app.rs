@@ -124,6 +124,7 @@ pub enum Message {
     EngineReady,
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
+    ShellDone(Result<String, String>),
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -443,6 +444,21 @@ impl App {
                     _ => {}
                 }
                 Task::none()
+            }
+            Message::ShellDone(result) => {
+                match result {
+                    Ok(output) => {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(&output);
+                        }
+                        let first_line = output.lines().next().unwrap_or("(no output)");
+                        tracing::info!("Shell output copied: {first_line}");
+                    }
+                    Err(msg) => {
+                        tracing::error!("Shell error: {msg}");
+                    }
+                }
+                return iced::exit();
             }
         }
     }
@@ -1505,25 +1521,25 @@ impl App {
             self.window_state.save();
         }
 
-        // Shell 명령 실행 → 결과를 클립보드에 복사
+        // Shell 명령 → 백그라운드 스레드에서 비동기 실행
         if result.item.kind == ItemKind::Shell {
-            use kmd_core::plugin::Extension;
-            let shell_ext = builtin_shell::ShellExtension;
-            match shell_ext.execute(&result.item) {
-                kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(&output);
+            let item = result.item.clone();
+            return Task::future(async move {
+                let res = tokio::task::spawn_blocking(move || {
+                    use kmd_core::plugin::Extension;
+                    let shell_ext = builtin_shell::ShellExtension;
+                    match shell_ext.execute(&item) {
+                        kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
+                            Ok(output)
+                        }
+                        kmd_core::plugin::ExtensionAction::Display(msg) => Err(msg),
+                        _ => Err("Unknown action".to_string()),
                     }
-                    let first_line = output.lines().next().unwrap_or("(no output)");
-                    tracing::info!("Shell output copied: {first_line}");
-                }
-                kmd_core::plugin::ExtensionAction::Display(msg) => {
-                    tracing::error!("Shell error: {msg}");
-                    return Task::none();
-                }
-                _ => {}
-            }
-            return iced::exit();
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("Task panicked: {e}")));
+                Message::ShellDone(res)
+            });
         }
 
         // 웹 검색 결과 — extract_batch_urls 통합 추출
