@@ -100,9 +100,10 @@ fn main() -> iced::Result {
 
     iced::application(
         move || {
-            let (guard, config, ws) = boot_data
+            let mut lock = boot_data
                 .lock()
-                .expect("boot mutex poisoned")
+                .unwrap_or_else(|e| e.into_inner());
+            let (guard, config, ws) = lock
                 .take()
                 .expect("boot called more than once");
             app::App::new(guard, config, ws)

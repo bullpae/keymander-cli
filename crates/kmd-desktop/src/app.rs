@@ -298,23 +298,31 @@ impl App {
     fn spawn_full_engine_load_task(&self) -> Task<Message> {
         let slot = self.engine_slot.clone();
         Task::future(async move {
-            let _ = tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 let config = crate::engine::load_config();
                 let eng = crate::engine::create_search_engine(&config);
-                *slot.lock().expect("engine_slot poisoned") = Some(EngineLoadResult {
-                    engine: eng,
-                    use_emoji: config.general.emoji_icons,
-                    llm_providers: config.launcher.multi_llm_providers.clone(),
-                    multi_web_providers: config.launcher.multi_web_providers.clone(),
-                    llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
-                    multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
-                    spell_providers: config.launcher.spell_providers.clone(),
-                    spell_prefixes: config.launcher.spell_prefixes.clone(),
-                    translate_providers: config.launcher.translate_providers.clone(),
-                    translate_prefixes: config.launcher.translate_prefixes.clone(),
-                });
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = Some(EngineLoadResult {
+                        engine: eng,
+                        use_emoji: config.general.emoji_icons,
+                        llm_providers: config.launcher.multi_llm_providers.clone(),
+                        multi_web_providers: config.launcher.multi_web_providers.clone(),
+                        llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+                        multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
+                        spell_providers: config.launcher.spell_providers.clone(),
+                        spell_prefixes: config.launcher.spell_prefixes.clone(),
+                        translate_providers: config.launcher.translate_providers.clone(),
+                        translate_prefixes: config.launcher.translate_prefixes.clone(),
+                    });
+                } else {
+                    tracing::error!("engine_slot mutex poisoned — 엔진 로드 결과 저장 실패");
+                }
             })
-            .await;
+            .await
+            {
+                Ok(()) => {}
+                Err(e) => tracing::error!("엔진 로드 태스크 패닉: {e}"),
+            }
             Message::EngineReady
         })
     }
@@ -465,7 +473,10 @@ impl App {
                 let loaded = self
                     .engine_slot
                     .lock()
-                    .expect("engine_slot poisoned")
+                    .unwrap_or_else(|e| {
+                        tracing::error!("engine_slot mutex poisoned — 복구 시도");
+                        e.into_inner()
+                    })
                     .take();
 
                 if let Some(res) = loaded {
@@ -533,7 +544,9 @@ impl App {
                 match result {
                     Ok(output) => {
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(&output);
+                            if let Err(e) = clipboard.set_text(&output) {
+                                tracing::warn!("클립보드 쓰기 실패: {e}");
+                            }
                         }
                         let first_line = output.lines().next().unwrap_or("(no output)");
                         tracing::info!("Shell output copied: {first_line}");
@@ -587,13 +600,19 @@ impl App {
                         .unwrap_or_default()
                 };
                 if !folder.is_empty() {
-                    let _ = kmd_core::action::open_with_system(&folder);
+                    if let kmd_core::action::ActionResult::Error(e) =
+                        kmd_core::action::open_with_system(&folder)
+                    {
+                        tracing::warn!("폴더 열기 실패: {e}");
+                    }
                 }
                 return iced::exit();
             }
             ContextAction::CopyPath => {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(&item.path);
+                    if let Err(e) = clipboard.set_text(&item.path) {
+                        tracing::warn!("클립보드 쓰기 실패: {e}");
+                    }
                 }
                 return iced::exit();
             }
@@ -604,7 +623,9 @@ impl App {
                     item.name.clone()
                 };
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(&text);
+                    if let Err(e) = clipboard.set_text(&text) {
+                        tracing::warn!("클립보드 쓰기 실패: {e}");
+                    }
                 }
                 return iced::exit();
             }
@@ -677,7 +698,9 @@ impl App {
                 let final_prompt =
                     kmd_core::prompt::apply_template(&config.launcher.prompt_templates, &prompt);
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(final_prompt);
+                    if let Err(e) = clipboard.set_text(final_prompt) {
+                        tracing::warn!("클립보드 쓰기 실패: {e}");
+                    }
                 }
             }
         }
@@ -841,7 +864,11 @@ impl App {
                     &self.translate_providers,
                 );
                 for url in &urls {
-                    let _ = kmd_core::action::open_url(url);
+                    if let kmd_core::action::ActionResult::Error(e) =
+                        kmd_core::action::open_url(url)
+                    {
+                        tracing::warn!("URL 열기 실패: {url} — {e}");
+                    }
                 }
                 self.results.clear();
                 self.selected = 0;
@@ -1401,11 +1428,15 @@ impl App {
                         tracing::warn!("Failed to create config file: {e}");
                     }
                 }
-                let _ = open::that(&config_path);
+                if let Err(e) = open::that(&config_path) {
+                    tracing::warn!("설정 파일 열기 실패: {e}");
+                }
             }
             "dir" => {
                 let config_dir = kmd_core::Config::default_config_dir();
-                let _ = open::that(&config_dir);
+                if let Err(e) = open::that(&config_dir) {
+                    tracing::warn!("설정 디렉토리 열기 실패: {e}");
+                }
             }
             "reset_position" => {
                 WindowState::reset();
@@ -1723,7 +1754,11 @@ impl App {
                     self.copy_multi_llm_prompt_to_clipboard();
                 }
                 for url in urls {
-                    let _ = kmd_core::action::open_url(&url);
+                    if let kmd_core::action::ActionResult::Error(e) =
+                        kmd_core::action::open_url(&url)
+                    {
+                        tracing::warn!("URL 열기 실패: {url} — {e}");
+                    }
                 }
                 return iced::exit();
             }
@@ -2563,19 +2598,24 @@ fn launch_in_terminal(cmd: &str) {
     }
     #[cfg(target_os = "macos")]
     {
-        let script = format!("tell application \"Terminal\" to do script \"{}\"", cmd);
-        let _ = std::process::Command::new("osascript")
+        let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{}\"",
+            escaped
+        );
+        if let Err(e) = std::process::Command::new("osascript")
             .args(["-e", &script])
-            .spawn();
+            .spawn()
+        {
+            tracing::warn!("터미널 실행 실패: {e}");
+        }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
+        let escaped = cmd.replace('\'', "'\\''");
         for term in &["x-terminal-emulator", "gnome-terminal", "xterm"] {
             if std::process::Command::new(term)
-                .args([
-                    "-e",
-                    &format!("sh -c '{} ; read -p \"Press Enter...\"'", cmd),
-                ])
+                .args(["-e", &format!("sh -c '{escaped} ; read -p \"Press Enter...\"'")])
                 .spawn()
                 .is_ok()
             {
