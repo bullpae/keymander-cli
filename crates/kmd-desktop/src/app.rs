@@ -526,9 +526,14 @@ impl App {
                         self.state_dirty = true;
                     }
                     window::Event::Resized(size) => {
-                        if (size.width - self.window_width).abs() > 1.0 {
-                            self.window_width = size.width;
-                            self.window_state.width = Some(size.width);
+                        let base_width = if !self.results.is_empty() {
+                            (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
+                        } else {
+                            size.width
+                        };
+                        if (base_width - self.window_width).abs() > 1.0 {
+                            self.window_width = base_width;
+                            self.window_state.width = Some(base_width);
                             self.state_dirty = true;
                         }
                     }
@@ -2297,12 +2302,11 @@ impl App {
 
     fn view_detail_panel(&self) -> Element<'_, Message> {
         let t = &self.theme;
-        let surface = t.surface;
         let panel_bg = Color {
-            r: (surface.r + 0.02).min(1.0),
-            g: (surface.g + 0.02).min(1.0),
-            b: (surface.b + 0.02).min(1.0),
-            a: surface.a,
+            r: (t.surface.r - 0.01).max(0.0),
+            g: (t.surface.g - 0.01).max(0.0),
+            b: (t.surface.b - 0.01).max(0.0),
+            a: t.surface.a,
         };
 
         let Some(result) = self.results.get(self.selected) else {
@@ -2313,8 +2317,8 @@ impl App {
         };
         let item = &result.item;
 
-        // 큰 아이콘
-        let big_icon_size: f32 = 56.0;
+        // ── 아이콘 영역 (그라데이션 배경 위 큰 아이콘) ──
+        let big_icon_size: f32 = 52.0;
         let big_icon: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
@@ -2326,107 +2330,172 @@ impl App {
                 .height(big_icon_size)
                 .into()
         } else {
-            container(text(&item.icon).size(big_icon_size - 8.0))
+            container(text(&item.icon).size(big_icon_size - 10.0))
                 .center_x(big_icon_size)
                 .center_y(big_icon_size)
                 .into()
         };
 
-        let icon_row = container(big_icon)
-            .width(Fill)
-            .center_x(Fill)
-            .padding(Padding { top: 16.0, right: 0.0, bottom: 8.0, left: 0.0 });
+        let kind_color = t.kind_color(item.kind);
+        let icon_glow = Color { a: 0.06, ..kind_color };
+        let icon_area = container(
+            container(big_icon)
+                .width(Fill)
+                .center_x(Fill)
+                .padding(Padding::from([20, 0])),
+        )
+        .width(Fill)
+        .style(move |_: &_| container::Style {
+            background: Some(Background::Color(icon_glow)),
+            ..Default::default()
+        });
 
-        // 이름
-        let name = text(&item.name)
-            .size(15)
-            .color(t.text)
-            .wrapping(Wrapping::None)
-            .center();
+        // ── 이름 (Bold, 중앙) ──
+        let name_str = if item.name.len() > 28 {
+            format!("{}...", &item.name[..25])
+        } else {
+            item.name.clone()
+        };
+        let name_label = container(
+            text(name_str).size(14).color(t.text).wrapping(Wrapping::None).center(),
+        )
+        .width(Fill)
+        .center_x(Fill)
+        .padding(Padding::from([8, 12]));
 
-        // 경로
-        let path_text = if item.path.len() > 40 {
-            format!("...{}", &item.path[item.path.len() - 37..])
+        // ── "Path" 라벨 + 경로 (왼쪽 정렬, 말줄임) ──
+        let path_text = if item.path.chars().count() > 35 {
+            let end: String = item.path.chars().rev().take(32).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("...{end}")
         } else {
             item.path.clone()
         };
-        let path_label = text(path_text)
-            .size(10)
-            .color(t.subtext)
-            .wrapping(Wrapping::None)
-            .center();
+        let path_section = container(
+            column![
+                text("Path").size(9).color(t.overlay),
+                text(path_text).size(10).color(t.subtext).wrapping(Wrapping::None),
+            ]
+            .spacing(2),
+        )
+        .width(Fill)
+        .padding(Padding::from([4, 16]));
 
-        // 종류 뱃지
-        let kind_color = t.kind_color(item.kind);
+        // ── 뱃지 행 ──
         let kind_label = item.kind.to_string();
         let badge_bg = Color { a: 0.12, ..kind_color };
-        let badge_border = Color { a: 0.25, ..kind_color };
-        let badge = container(text(kind_label).size(10).color(kind_color))
+        let badge_border_c = Color { a: 0.22, ..kind_color };
+        let badge = container(text(kind_label).size(9).color(kind_color))
             .padding(Padding::from([2, 8]))
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(badge_bg)),
                 border: Border {
-                    radius: 4.0.into(),
+                    radius: 10.0.into(),
                     width: 1.0,
-                    color: badge_border,
+                    color: badge_border_c,
                 },
                 ..Default::default()
             });
-        let badge_row = container(badge).width(Fill).center_x(Fill);
-
-        // 구분선
-        let divider_color = t.border;
-        let action_divider = container(text(""))
+        let badge_row = container(badge)
             .width(Fill)
-            .height(1)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(divider_color)),
-                ..Default::default()
-            });
+            .padding(Padding::from([2, 16]));
 
-        // 액션 버튼 목록
+        // ── 구분선 (패딩 있는 정돈된 선) ──
+        let sep_color = t.border;
+        let divider = container(
+            container(text(""))
+                .width(Fill)
+                .height(1)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(sep_color)),
+                    ..Default::default()
+                }),
+        )
+        .padding(Padding::from([4, 14]));
+
+        // ── 액션 목록 ──
         let actions = context_actions_for(item.kind);
-        let mut action_list = Column::new().spacing(0);
+        let mut action_list = Column::new().spacing(1);
         for (i, action) in actions.iter().enumerate() {
             let action_clone = action.clone();
             let label_text = action.label().to_string();
             let shortcut_text = action.shortcut().to_string();
             let is_primary = i == 0;
 
-            let accent_color = t.accent;
             let text_color = if is_primary { t.accent } else { t.text };
-            let hover_bg = Color { a: 0.08, ..accent_color };
+            let accent_c = t.accent;
+            let surface_c = t.surface2;
 
-            let label = text(label_text).size(12).color(text_color);
-            let shortcut = text(shortcut_text).size(10).color(t.overlay);
+            let icon_text = match action {
+                ContextAction::Open => "\u{2197}",
+                ContextAction::OpenAsAdmin => "\u{26A1}",
+                ContextAction::OpenFolder => "\u{1F4C1}",
+                ContextAction::CopyPath => "\u{1F4CB}",
+                ContextAction::CopyName => "\u{270D}",
+                ContextAction::Uninstall => "\u{2715}",
+            };
 
-            let action_row = row![label, Space::new().width(Fill), shortcut]
-                .align_y(iced::Alignment::Center)
-                .padding(Padding::from([8, 16]));
+            let icon_label = text(icon_text).size(12);
+            let label = text(label_text).size(11).color(text_color);
+            let shortcut = text(shortcut_text).size(9).color(t.overlay);
 
-            let action_container = container(action_row).width(Fill).style(
+            let action_row = row![
+                container(icon_label).width(22).center_x(22),
+                label,
+                Space::new().width(Fill),
+                shortcut
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
+            .padding(Padding::from([6, 14]));
+
+            let action_btn = container(action_row).width(Fill).style(
                 move |_: &_| container::Style {
-                    background: Some(Background::Color(hover_bg)),
+                    background: if is_primary {
+                        Some(Background::Color(Color { a: 0.10, ..accent_c }))
+                    } else {
+                        Some(Background::Color(Color { a: 0.0, ..surface_c }))
+                    },
+                    border: if is_primary {
+                        Border {
+                            radius: 6.0.into(),
+                            width: 1.0,
+                            color: Color { a: 0.18, ..accent_c },
+                        }
+                    } else {
+                        Border::default()
+                    },
                     ..Default::default()
                 },
             );
 
-            action_list = action_list.push(
-                mouse_area(action_container)
-                    .on_press(Message::RunAction(action_clone))
-                    .interaction(iced::mouse::Interaction::Pointer),
-            );
+            let wrapped = if is_primary {
+                container(
+                    mouse_area(action_btn)
+                        .on_press(Message::RunAction(action_clone))
+                        .interaction(iced::mouse::Interaction::Pointer),
+                )
+                .padding(Padding::from([2, 10]))
+            } else {
+                container(
+                    mouse_area(action_btn)
+                        .on_press(Message::RunAction(action_clone))
+                        .interaction(iced::mouse::Interaction::Pointer),
+                )
+                .padding(Padding::from([0, 10]))
+            };
+
+            action_list = action_list.push(wrapped);
         }
 
         let panel_content = column![
-            icon_row,
-            container(name).width(Fill).center_x(Fill),
-            container(path_label).width(Fill).center_x(Fill).padding(Padding::from([2, 8])),
-            container(badge_row).padding(Padding::from([6, 0])),
-            action_divider,
+            icon_area,
+            name_label,
+            path_section,
+            badge_row,
+            divider,
             action_list,
         ]
-        .spacing(2);
+        .spacing(0);
 
         container(panel_content)
             .width(DETAIL_PANEL_WIDTH)
