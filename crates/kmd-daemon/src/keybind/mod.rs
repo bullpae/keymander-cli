@@ -229,12 +229,12 @@ fn platform_word_modifier() -> VKey {
     VKey::LCtrl
 }
 
-/// 줄 시작 액션 (macOS: Cmd+Left, Windows/Linux: Home)
+/// 줄 시작 액션 (macOS: Ctrl+A — Cocoa+readline 범용, Windows/Linux: Home)
 #[cfg(target_os = "macos")]
 fn platform_home_action() -> BindAction {
     BindAction::SendCombo {
-        modifiers: vec![VKey::LWin],
-        key: VKey::Left,
+        modifiers: vec![VKey::LCtrl],
+        key: VKey::A,
     }
 }
 #[cfg(not(target_os = "macos"))]
@@ -242,17 +242,53 @@ fn platform_home_action() -> BindAction {
     BindAction::SendKey(VKey::Home)
 }
 
-/// 줄 끝 액션 (macOS: Cmd+Right, Windows/Linux: End)
+/// 줄 끝 액션 (macOS: Ctrl+E — Cocoa+readline 범용, Windows/Linux: End)
 #[cfg(target_os = "macos")]
 fn platform_end_action() -> BindAction {
     BindAction::SendCombo {
-        modifiers: vec![VKey::LWin],
-        key: VKey::Right,
+        modifiers: vec![VKey::LCtrl],
+        key: VKey::E,
     }
 }
 #[cfg(not(target_os = "macos"))]
 fn platform_end_action() -> BindAction {
     BindAction::SendKey(VKey::End)
+}
+
+/// 줄 전체 복사 매크로 스텝 (줄 시작 → 줄 끝까지 선택 → 복사)
+/// macOS: Ctrl+A → Shift+Ctrl+E → Cmd+C
+/// Windows/Linux: Home → Shift+End → Ctrl+C
+#[cfg(target_os = "macos")]
+fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
+    vec![
+        MacroStep::Combo {
+            modifiers: vec![VKey::LCtrl],
+            key: VKey::A,
+        },
+        MacroStep::Combo {
+            modifiers: vec![VKey::LShift, VKey::LCtrl],
+            key: VKey::E,
+        },
+        MacroStep::Combo {
+            modifiers: vec![copy_mod],
+            key: VKey::C,
+        },
+    ]
+}
+#[cfg(not(target_os = "macos"))]
+fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
+    vec![
+        MacroStep::KeyPress(VKey::Home),
+        MacroStep::KeyRelease(VKey::Home),
+        MacroStep::Combo {
+            modifiers: vec![VKey::LShift],
+            key: VKey::End,
+        },
+        MacroStep::Combo {
+            modifiers: vec![copy_mod],
+            key: VKey::C,
+        },
+    ]
 }
 
 // ── 수정자 키 헬퍼 (플랫폼 공용) ─────────────────────────────────────────────
@@ -398,25 +434,15 @@ impl KeybindConfig {
         mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
-        mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
-        // y → 줄 복사
         mappings.insert(
-            VKey::Y,
-            BindAction::Macro(vec![
-                MacroStep::Combo {
-                    modifiers: vec![copy_mod],
-                    key: VKey::Left,
-                },
-                MacroStep::Combo {
-                    modifiers: vec![VKey::LShift, copy_mod],
-                    key: VKey::Right,
-                },
-                MacroStep::Combo {
-                    modifiers: vec![copy_mod],
-                    key: VKey::C,
-                },
-            ]),
+            VKey::Space,
+            BindAction::SendCombo {
+                modifiers: vec![VKey::LAlt],
+                key: VKey::Space,
+            },
         );
+        // y → 줄 복사
+        mappings.insert(VKey::Y, BindAction::Macro(line_copy_steps(copy_mod)));
         // p → 붙여넣기
         mappings.insert(
             VKey::P,

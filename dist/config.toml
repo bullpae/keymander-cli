@@ -68,7 +68,7 @@
 # kmd-desktop 실행 글로벌 핫키 (데몬 모드에서 동작)
 # vim-nav 레이어와 독립적으로 항상 등록됨
 # 형식: "수정자+키" (예: "alt+space", "ctrl+space", "cmd+j")
-global_hotkey = "alt+space"
+# global_hotkey = "alt+space"
 
 # TUI 키 바인딩
 # quit = "ctrl+c"
@@ -107,21 +107,21 @@ N = "PageUp"                       # Alt+N → 페이지 업
 M = "PageDown"                     # Alt+M → 페이지 다운
 "." = "Backspace"                   # Alt+. → 백스페이스
 "/" = "Delete"                      # Alt+/ → Delete
-Space = "launch:kmd-desktop"        # Alt+Space → kmd-desktop 실행
+Space = "Alt+Space"                  # Alt+Space → 입력 소스 전환 (한/영)
 # ── macOS: Cmd 사용  |  Windows: "Ctrl+V", "macro:Home;Shift+End;Ctrl+C" ──
 P = "Cmd+V"                         # Alt+P → 붙여넣기
-Y = "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C"  # Alt+Y → 줄 복사
+Y = "macro:Ctrl+A;Shift+Ctrl+E;Cmd+C"  # Alt+Y → 줄 복사 (Ctrl+A/E = macOS 범용)
 
 # ── 레이어 내 더블탭 ──
 # macOS: Alt=단어이동, Cmd=줄시작/끝  |  Windows: Ctrl=단어이동, Home/End
 [launcher.keymap.layers.nav.double_taps.I]
 single = "Alt+Left"                 # Alt+I 한번 → 단어 왼쪽 이동
-double = "Cmd+Left"                 # Alt+I 더블탭 → 줄 처음
+double = "Ctrl+A"                   # Alt+I 더블탭 → 줄 처음 (Cocoa+readline 범용)
 timeout_ms = 300
 
 [launcher.keymap.layers.nav.double_taps.O]
 single = "Alt+Right"                # Alt+O 한번 → 단어 오른쪽 이동
-double = "Cmd+Right"                # Alt+O 더블탭 → 줄 끝
+double = "Ctrl+E"                   # Alt+O 더블탭 → 줄 끝 (Cocoa+readline 범용)
 timeout_ms = 300
 
 # ── 글로벌 콤보 (수정자+키) ──
