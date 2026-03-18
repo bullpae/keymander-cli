@@ -5,8 +5,9 @@
 //!   2. The *new* process creates a `kmd.quit` signal file, waits briefly, then exits
 //!   3. The *existing* process detects `kmd.quit` in its event loop and exits gracefully
 //!
-//! Combined with immediate `ShowWindow(SW_HIDE)` on startup, the toggle-off
-//! path is nearly invisible — the console window is hidden before it renders.
+//! On Unix, `flock(2)` is used for reliable instance detection.
+//! PID-based checks alone are unreliable because zombie processes and PID
+//! recycling cause false positives on macOS/Linux.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,9 +35,12 @@ pub enum InstanceAction {
 }
 
 /// RAII guard — removes the lock file when dropped.
+/// On Unix, holds an open file descriptor with `flock` to guarantee
+/// the OS releases the lock even on crash/SIGKILL.
 pub struct Guard {
     lock_path: PathBuf,
     quit_signal_path: PathBuf,
+    _lock_file: Option<fs::File>,
 }
 
 impl Guard {
@@ -54,8 +58,8 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
+        // lock file 삭제 (flock은 _lock_file Drop 시 자동 해제)
         let _ = fs::remove_file(&self.lock_path);
-        // Also clean up any leftover quit signal
         let _ = fs::remove_file(&self.quit_signal_path);
     }
 }
@@ -69,7 +73,6 @@ pub fn lock_paths(data_dir: &Path) -> (PathBuf, PathBuf) {
 ///
 /// `data_dir` is the kmd data directory (e.g. `~/.local/share/kmd`).
 pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
-    // Ensure directory exists
     let _ = fs::create_dir_all(data_dir);
 
     let (lock_path, quit_signal_path) = lock_paths(data_dir);
@@ -77,21 +80,86 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
     // Clean up any stale quit signal from a previous crash
     let _ = fs::remove_file(&quit_signal_path);
 
-    // Read existing lock file
-    if let Ok(contents) = fs::read_to_string(&lock_path) {
+    #[cfg(unix)]
+    {
+        if let Some(action) = acquire_or_toggle_flock(&lock_path, &quit_signal_path) {
+            return action;
+        }
+        // flock 실패 시 PID 기반 폴백
+    }
+
+    acquire_or_toggle_pid(&lock_path, &quit_signal_path)
+}
+
+// ── Unix: flock 기반 (좀비/PID 재활용에 안전) ────────────────────────────────
+
+#[cfg(unix)]
+fn try_flock_nonblocking(file: &fs::File) -> bool {
+    use std::os::unix::io::AsRawFd;
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
+#[cfg(unix)]
+fn acquire_or_toggle_flock(
+    lock_path: &PathBuf,
+    quit_signal_path: &PathBuf,
+) -> Option<InstanceAction> {
+    use std::io::{Seek, Write};
+
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .ok()?;
+
+    if try_flock_nonblocking(&lock_file) {
+        // flock 획득 → 다른 인스턴스 없음 (또는 이전 인스턴스 크래시)
+        let mut f = &lock_file;
+        let _ = lock_file.set_len(0);
+        let _ = f.seek(std::io::SeekFrom::Start(0));
+        let _ = write!(f, "{}", std::process::id());
+        return Some(InstanceAction::Acquired(Guard {
+            lock_path: lock_path.clone(),
+            quit_signal_path: quit_signal_path.clone(),
+            _lock_file: Some(lock_file),
+        }));
+    }
+
+    // flock 실패 → 다른 인스턴스가 확실히 살아있음
+    if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
+        return Some(InstanceAction::SignalledExisting);
+    }
+
+    let _ = fs::write(quit_signal_path, "quit");
+
+    for _ in 0..TOGGLE_WAIT_ITERATIONS {
+        std::thread::sleep(std::time::Duration::from_millis(TOGGLE_WAIT_MS));
+        if try_flock_nonblocking(&lock_file) {
+            // 상대방이 종료됨 → flock 해제 후 정리
+            use std::os::unix::io::AsRawFd;
+            unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
+            let _ = fs::remove_file(lock_path);
+            break;
+        }
+    }
+
+    Some(InstanceAction::SignalledExisting)
+}
+
+// ── PID 기반 (Windows / Unix 폴백) ──────────────────────────────────────────
+
+fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> InstanceAction {
+    if let Ok(contents) = fs::read_to_string(lock_path) {
         if let Ok(pid) = contents.trim().parse::<u32>() {
             if pid != std::process::id() && is_process_alive(pid) {
-                // Hotkey repeat can spawn another process immediately after launch.
-                // In that window, treat it as duplicate launch instead of toggle-off.
-                if is_recent_lock(&lock_path, RECENT_LOCK_DEBOUNCE_MS) {
+                if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
                     return InstanceAction::SignalledExisting;
                 }
-                // ── Another instance is alive — signal it to quit ────────
 
-                // Write the quit signal file
-                let _ = fs::write(&quit_signal_path, "quit");
+                let _ = fs::write(quit_signal_path, "quit");
 
-                // Wait for the existing process to exit (up to ~2 seconds)
                 for _ in 0..TOGGLE_WAIT_ITERATIONS {
                     std::thread::sleep(std::time::Duration::from_millis(TOGGLE_WAIT_MS));
                     if !is_process_alive(pid) {
@@ -99,26 +167,23 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
                     }
                 }
 
-                // Clean up if the process didn't remove its lock
                 if !is_process_alive(pid) {
-                    let _ = fs::remove_file(&lock_path);
+                    let _ = fs::remove_file(lock_path);
                 }
 
                 return InstanceAction::SignalledExisting;
             }
         }
-        // Stale lock file — remove it
-        let _ = fs::remove_file(&lock_path);
+        let _ = fs::remove_file(lock_path);
     }
 
-    // ── No other instance — acquire the lock ─────────────────────────────
-
     let our_pid = std::process::id();
-    let _ = fs::write(&lock_path, our_pid.to_string());
+    let _ = fs::write(lock_path, our_pid.to_string());
 
     InstanceAction::Acquired(Guard {
-        lock_path,
-        quit_signal_path,
+        lock_path: lock_path.clone(),
+        quit_signal_path: quit_signal_path.clone(),
+        _lock_file: None,
     })
 }
 
@@ -181,21 +246,17 @@ mod tests {
     fn test_acquire_new_instance() {
         let dir = std::env::temp_dir().join("kmd_test_single_instance_v2");
         let _ = fs::create_dir_all(&dir);
-        // Clean up from previous runs
         let _ = fs::remove_file(dir.join(LOCK_FILE));
         let _ = fs::remove_file(dir.join(QUIT_SIGNAL));
 
         match acquire_or_toggle(&dir) {
             InstanceAction::Acquired(guard) => {
-                // Lock file should exist with our PID
                 let contents = fs::read_to_string(&guard.lock_path).unwrap();
                 assert_eq!(contents, std::process::id().to_string());
 
-                // should_quit should be false
                 assert!(!guard.should_quit());
 
                 drop(guard);
-                // Lock file should be cleaned up
                 assert!(!dir.join(LOCK_FILE).exists());
             }
             InstanceAction::SignalledExisting => panic!("Should have acquired, not signalled"),
@@ -210,7 +271,7 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let _ = fs::remove_file(dir.join(QUIT_SIGNAL));
 
-        // Write a fake PID that doesn't exist
+        // 존재하지 않는 PID
         fs::write(dir.join(LOCK_FILE), "99999999").unwrap();
 
         match acquire_or_toggle(&dir) {
@@ -236,7 +297,6 @@ mod tests {
             InstanceAction::Acquired(guard) => {
                 assert!(!guard.should_quit());
 
-                // Simulate external quit signal
                 fs::write(&guard.quit_signal_path, "quit").unwrap();
                 assert!(guard.should_quit());
 
@@ -281,6 +341,33 @@ mod tests {
             !is_recent_lock(&lock, RECENT_LOCK_DEBOUNCE_MS),
             "2초 전 파일은 700ms debounce를 초과하여 recent가 아님"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_flock_prevents_zombie_false_positive() {
+        // flock 기반이면 좀비 PID가 있어도 잠금 획득 가능
+        let dir = std::env::temp_dir().join("kmd_test_flock_zombie");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::remove_file(dir.join(LOCK_FILE));
+        let _ = fs::remove_file(dir.join(QUIT_SIGNAL));
+
+        // 현재 프로세스의 PID로 lock 파일 생성 (flock 없이)
+        fs::write(dir.join(LOCK_FILE), "1").unwrap();
+
+        // flock을 못 잡고 있으므로 새 인스턴스가 획득할 수 있어야 함
+        match acquire_or_toggle(&dir) {
+            InstanceAction::Acquired(guard) => {
+                let contents = fs::read_to_string(&guard.lock_path).unwrap();
+                assert_eq!(contents, std::process::id().to_string());
+                drop(guard);
+            }
+            InstanceAction::SignalledExisting => {
+                panic!("flock 없는 stale lock은 acquire 되어야 함")
+            }
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
