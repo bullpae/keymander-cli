@@ -46,19 +46,18 @@ pub fn run() -> color_eyre::Result<()> {
     // 포트/PID 파일 기록
     write_runtime_files(port)?;
 
-    // accept 타임아웃 설정 (주기적으로 shutdown 플래그 확인)
-    listener.set_nonblocking(false)?;
+    listener.set_nonblocking(true)?;
 
     println!("kmd-daemon 실행 중 (port={port}, pid={})", std::process::id());
 
-    // 메인 accept 루프
-    for stream in listener.incoming() {
+    // 메인 accept 루프 (non-blocking + poll)
+    loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
 
-        match stream {
-            Ok(stream) => {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
                 let engine = engine.clone();
                 let shutdown = shutdown.clone();
                 let started_at = started_at;
@@ -68,6 +67,9 @@ pub fn run() -> color_eyre::Result<()> {
                         tracing::warn!("클라이언트 처리 에러: {e}");
                     }
                 });
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
                 if shutdown.load(Ordering::Relaxed) {

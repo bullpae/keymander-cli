@@ -97,17 +97,43 @@ fn check_status() -> Result<()> {
 }
 
 fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
+    let is_shutdown = matches!(request, ipc::Request::Shutdown);
     match ipc::send_request_result(&request) {
-        Ok(ipc::Response::Ok { message }) => println!("{message}"),
+        Ok(ipc::Response::Ok { message }) => {
+            println!("{message}");
+            if is_shutdown {
+                wait_for_daemon_exit();
+            }
+        }
         Ok(ipc::Response::Error { message }) => eprintln!("에러: {message}"),
         Ok(_) => println!("완료"),
         Err(ipc::IpcError::Io(_)) => {
-            eprintln!("데몬 연결 실패");
+            println!("데몬이 이미 종료되었거나 종료 중입니다.");
             ipc::cleanup_stale_files();
+        }
+        Err(ipc::IpcError::NoDaemon) => {
+            println!("데몬이 실행 중이지 않습니다.");
         }
         Err(e) => eprintln!("{e}"),
     }
     Ok(())
+}
+
+/// Shutdown 응답 후 데몬이 실제 종료될 때까지 대기 (최대 3초)
+fn wait_for_daemon_exit() {
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        match ipc::read_port() {
+            Err(_) => return,
+            Ok(port) => {
+                if TcpStream::connect(format!("127.0.0.1:{port}")).is_err() {
+                    ipc::cleanup_stale_files();
+                    return;
+                }
+            }
+        }
+    }
+    ipc::cleanup_stale_files();
 }
 
 /// kmd-desktop 바이너리를 실행
