@@ -19,7 +19,9 @@ static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
     LazyLock::new(|| Mutex::new(HashMap::with_capacity(128)));
 
 /// 아이템의 네이티브 아이콘 반환 (캐시됨).
-/// App/Executable: 실행 파일 아이콘, File: 연결 프로그램 아이콘, Directory: 폴더 아이콘
+/// App/Executable: 실행 파일 아이콘 (shell:appsFolder 포함)
+/// File: 연결 프로그램 아이콘 (.lnk는 대상 앱 아이콘)
+/// Directory: 폴더 아이콘
 pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
     if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
         return None;
@@ -31,7 +33,11 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
             if let Some(cached) = cache.get(path) {
                 return cached.clone();
             }
-            let handle = platform::extract_icon(path);
+            let handle = if path.starts_with("shell:") {
+                platform::extract_pidl_icon(path)
+            } else {
+                platform::extract_icon(path)
+            };
             cache.insert(path.to_string(), handle.clone());
             handle
         }
@@ -43,6 +49,16 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
                 .to_lowercase();
             if ext.is_empty() {
                 return None;
+            }
+            // .lnk 파일은 바로가기 대상의 실제 아이콘을 사용
+            if ext == "lnk" {
+                let mut cache = ICON_CACHE.lock().ok()?;
+                if let Some(cached) = cache.get(path) {
+                    return cached.clone();
+                }
+                let handle = platform::extract_icon(path);
+                cache.insert(path.to_string(), handle.clone());
+                return handle;
             }
             let cache_key = format!("ext:{ext}");
             let mut cache = ICON_CACHE.lock().ok()?;
@@ -84,6 +100,49 @@ mod platform {
     /// 실제 파일/바로가기 경로에서 아이콘 추출 (App/Executable용)
     pub fn extract_icon(path: &str) -> Option<Handle> {
         extract_shell_icon(path, FILE_FLAGS_AND_ATTRIBUTES(0), false)
+    }
+
+    /// shell:appsFolder\... URI에서 PIDL을 통해 아이콘 추출 (UWP/Store 앱용)
+    pub fn extract_pidl_icon(uri: &str) -> Option<Handle> {
+        use windows::Win32::UI::Shell::{SHParseDisplayName, SHGFI_PIDL};
+
+        unsafe {
+            let wide: Vec<u16> = uri.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut pidl = std::ptr::null_mut();
+
+            SHParseDisplayName(
+                windows::core::PCWSTR(wide.as_ptr()),
+                None,
+                &mut pidl,
+                0,
+                None,
+            )
+            .ok()?;
+
+            if pidl.is_null() {
+                return None;
+            }
+
+            let mut info = SHFILEINFOW::default();
+            let result = SHGetFileInfoW(
+                windows::core::PCWSTR(pidl as *const u16),
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut info),
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_FLAGS(SHGFI_PIDL.0 | SHGFI_ICON.0 | SHGFI_LARGEICON.0),
+            );
+
+            windows::Win32::System::Com::CoTaskMemFree(Some(pidl as *const _));
+
+            if result == 0 || info.hIcon.0.is_null() {
+                return None;
+            }
+
+            let rgba = hicon_to_rgba(info.hIcon);
+            let _ = DestroyIcon(info.hIcon);
+
+            rgba.and_then(|(pixels, w, h)| normalize_and_encode(w, h, &pixels))
+        }
     }
 
     /// 확장자 기반 연결 프로그램 아이콘 추출 (File용, 파일 존재 불필요)
@@ -281,6 +340,10 @@ mod platform {
     use iced::widget::image::Handle;
 
     pub fn extract_icon(_path: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_pidl_icon(_uri: &str) -> Option<Handle> {
         None
     }
 
