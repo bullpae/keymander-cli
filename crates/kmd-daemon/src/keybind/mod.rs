@@ -8,6 +8,9 @@
 #[cfg(windows)]
 pub mod windows;
 
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -90,6 +93,40 @@ impl VKey {
             _ => None,
         }
     }
+}
+
+// ── 플랫폼별 키 헬퍼 (프리셋 생성 시 사용) ──────────────────────────────────
+
+/// 복사/붙여넣기에 사용할 수정자 (macOS: Cmd, Windows/Linux: Ctrl)
+#[cfg(target_os = "macos")]
+fn platform_copy_modifier() -> VKey { VKey::LWin }
+#[cfg(not(target_os = "macos"))]
+fn platform_copy_modifier() -> VKey { VKey::LCtrl }
+
+/// 단어 이동에 사용할 수정자 (macOS: Option, Windows/Linux: Ctrl)
+#[cfg(target_os = "macos")]
+fn platform_word_modifier() -> VKey { VKey::LAlt }
+#[cfg(not(target_os = "macos"))]
+fn platform_word_modifier() -> VKey { VKey::LCtrl }
+
+/// 줄 시작 액션 (macOS: Cmd+Left, Windows/Linux: Home)
+#[cfg(target_os = "macos")]
+fn platform_home_action() -> BindAction {
+    BindAction::SendCombo { modifiers: vec![VKey::LWin], key: VKey::Left }
+}
+#[cfg(not(target_os = "macos"))]
+fn platform_home_action() -> BindAction {
+    BindAction::SendKey(VKey::Home)
+}
+
+/// 줄 끝 액션 (macOS: Cmd+Right, Windows/Linux: End)
+#[cfg(target_os = "macos")]
+fn platform_end_action() -> BindAction {
+    BindAction::SendCombo { modifiers: vec![VKey::LWin], key: VKey::Right }
+}
+#[cfg(not(target_os = "macos"))]
+fn platform_end_action() -> BindAction {
+    BindAction::SendKey(VKey::End)
 }
 
 // ── 바인딩 액션 ─────────────────────────────────────────────────────────────
@@ -201,8 +238,16 @@ impl KeybindConfig {
         }
     }
 
-    /// vim-nav 프리셋: Alt 홀드 → Vim 네비게이션
+    /// vim-nav 프리셋: Alt(Option) 홀드 → Vim 네비게이션
+    ///
+    /// macOS/Windows 차이:
+    /// - 단어 이동: macOS=Option+화살표, Windows=Ctrl+화살표
+    /// - 복사/붙여넣기: macOS=Cmd+C/V, Windows=Ctrl+C/V
+    /// - 줄 시작/끝: macOS=Cmd+화살표, Windows=Home/End
     pub fn vim_nav_preset() -> Self {
+        let copy_mod = platform_copy_modifier();
+        let word_mod = platform_word_modifier();
+
         let mut mappings = HashMap::new();
         mappings.insert(VKey::H, BindAction::SendKey(VKey::Left));
         mappings.insert(VKey::J, BindAction::SendKey(VKey::Down));
@@ -212,37 +257,37 @@ impl KeybindConfig {
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
         mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
-        // y → 줄 복사 (Home, Shift+End, Ctrl+C)
+        // y → 줄 복사
         mappings.insert(VKey::Y, BindAction::Macro(vec![
-            MacroStep::KeyPress(VKey::Home),
-            MacroStep::KeyRelease(VKey::Home),
-            MacroStep::Combo { modifiers: vec![VKey::LShift], key: VKey::End },
-            MacroStep::Combo { modifiers: vec![VKey::LCtrl], key: VKey::C },
+            MacroStep::Combo { modifiers: vec![copy_mod], key: VKey::Left },
+            MacroStep::Combo { modifiers: vec![VKey::LShift, copy_mod], key: VKey::Right },
+            MacroStep::Combo { modifiers: vec![copy_mod], key: VKey::C },
         ]));
-        // p → 붙여넣기 (Ctrl+V)
+        // p → 붙여넣기
         mappings.insert(VKey::P, BindAction::SendCombo {
-            modifiers: vec![VKey::LCtrl],
+            modifiers: vec![copy_mod],
             key: VKey::V,
         });
         // / → Delete
         mappings.insert(VKey::Slash, BindAction::SendKey(VKey::Delete));
 
-        // Alt+I/O: 한 번 → 단어 이동, 더블탭 → Home/End
         let mut double_tap_mappings = HashMap::new();
+        // I: 탭 → 단어 왼쪽, 더블탭 → 줄 시작
         double_tap_mappings.insert(VKey::I, LayerDoubleTap {
             single_action: BindAction::SendCombo {
-                modifiers: vec![VKey::LCtrl],
+                modifiers: vec![word_mod],
                 key: VKey::Left,
             },
-            double_action: BindAction::SendKey(VKey::Home),
+            double_action: platform_home_action(),
             timeout_ms: 300,
         });
+        // O: 탭 → 단어 오른쪽, 더블탭 → 줄 끝
         double_tap_mappings.insert(VKey::O, LayerDoubleTap {
             single_action: BindAction::SendCombo {
-                modifiers: vec![VKey::LCtrl],
+                modifiers: vec![word_mod],
                 key: VKey::Right,
             },
-            double_action: BindAction::SendKey(VKey::End),
+            double_action: platform_end_action(),
             timeout_ms: 300,
         });
 
@@ -555,17 +600,21 @@ pub fn create_backend() -> Box<dyn KeyboardBackend> {
     {
         Box::new(windows::WindowsKeyboardBackend::new())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(macos::MacOSKeyboardBackend::new())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Box::new(StubBackend)
     }
 }
 
 /// 미구현 플랫폼 스텁
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 struct StubBackend;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl KeyboardBackend for StubBackend {
     fn start(&mut self, _config: KeybindConfig) -> Result<(), String> {
         Err("이 플랫폼에서는 키 바인딩이 아직 지원되지 않습니다.".into())

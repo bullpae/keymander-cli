@@ -1,0 +1,679 @@
+//! macOS 키 바인딩 백엔드 — CGEventTap 글로벌 키보드 훅
+//!
+//! Core Graphics CGEventTap으로 키 이벤트를 가로채고,
+//! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
+//!
+//! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
+
+use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, Modifier, VKey};
+use std::collections::HashSet;
+use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
+
+// ── Core Graphics / Core Foundation FFI ──────────────────────────────────────
+
+type CGEventRef = *mut c_void;
+type CGEventSourceRef = *mut c_void;
+type CFMachPortRef = *mut c_void;
+type CFRunLoopRef = *mut c_void;
+type CFRunLoopSourceRef = *mut c_void;
+type CFStringRef = *const c_void;
+type CGEventTapProxy = *mut c_void;
+
+const CG_EVENT_KEY_DOWN: u32 = 10;
+const CG_EVENT_KEY_UP: u32 = 11;
+const CG_EVENT_FLAGS_CHANGED: u32 = 12;
+const CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+
+const CG_SESSION_EVENT_TAP: u32 = 1;
+const CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+const CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+
+const CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000;
+const CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x0004_0000;
+const CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
+const CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+
+const CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+const CG_EVENT_SOURCE_USER_DATA: u32 = 42;
+const CG_EVENT_SOURCE_STATE_PRIVATE: i32 = -1;
+
+/// 자체 생성 이벤트 식별용 매직 넘버
+const MAGIC_USER_DATA: i64 = 0x6B6D6400; // "kmd\0"
+
+type CGEventTapCallBack = unsafe extern "C" fn(
+    proxy: CGEventTapProxy,
+    type_: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef;
+
+#[link(name = "CoreGraphics", kind = "framework")]
+#[allow(dead_code)]
+extern "C" {
+    fn CGEventTapCreate(
+        tap: u32,
+        place: u32,
+        options: u32,
+        events_of_interest: u64,
+        callback: CGEventTapCallBack,
+        user_info: *mut c_void,
+    ) -> CFMachPortRef;
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    fn CGEventSourceCreate(state_id: i32) -> CGEventSourceRef;
+    fn CGEventCreateKeyboardEvent(
+        source: CGEventSourceRef,
+        virtual_key: u16,
+        key_down: bool,
+    ) -> CGEventRef;
+    fn CGEventPost(tap: u32, event: CGEventRef);
+    fn CGEventSetFlags(event: CGEventRef, flags: u64);
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
+    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFMachPortCreateRunLoopSource(
+        allocator: *const c_void,
+        port: CFMachPortRef,
+        order: i64,
+    ) -> CFRunLoopSourceRef;
+    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+    fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+    fn CFRunLoopRun();
+    fn CFRunLoopStop(rl: CFRunLoopRef);
+    fn CFRelease(cf: *mut c_void);
+    static kCFRunLoopCommonModes: CFStringRef;
+}
+
+// ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
+
+fn vkey_to_cg(key: VKey) -> u16 {
+    match key {
+        VKey::A => 0x00, VKey::S => 0x01, VKey::D => 0x02, VKey::F => 0x03,
+        VKey::H => 0x04, VKey::G => 0x05, VKey::Z => 0x06, VKey::X => 0x07,
+        VKey::C => 0x08, VKey::V => 0x09, VKey::B => 0x0B, VKey::Q => 0x0C,
+        VKey::W => 0x0D, VKey::E => 0x0E, VKey::R => 0x0F, VKey::Y => 0x10,
+        VKey::T => 0x11, VKey::O => 0x1F, VKey::U => 0x20, VKey::I => 0x22,
+        VKey::P => 0x23, VKey::L => 0x25, VKey::J => 0x26, VKey::K => 0x28,
+        VKey::N => 0x2D, VKey::M => 0x2E,
+        VKey::Num0 => 0x1D, VKey::Num1 => 0x12, VKey::Num2 => 0x13,
+        VKey::Num3 => 0x14, VKey::Num4 => 0x15, VKey::Num5 => 0x17,
+        VKey::Num6 => 0x16, VKey::Num7 => 0x1A, VKey::Num8 => 0x1C,
+        VKey::Num9 => 0x19,
+        VKey::F1 => 0x7A, VKey::F2 => 0x78, VKey::F3 => 0x63,
+        VKey::F4 => 0x76, VKey::F5 => 0x60, VKey::F6 => 0x61,
+        VKey::F7 => 0x62, VKey::F8 => 0x64, VKey::F9 => 0x65,
+        VKey::F10 => 0x6D, VKey::F11 => 0x67, VKey::F12 => 0x6F,
+        VKey::Escape => 0x35, VKey::Tab => 0x30,
+        VKey::CapsLock => 0x39, VKey::Space => 0x31,
+        VKey::Enter => 0x24, VKey::Backspace => 0x33,
+        VKey::Delete => 0x75,
+        VKey::Left => 0x7B, VKey::Right => 0x7C,
+        VKey::Up => 0x7E, VKey::Down => 0x7D,
+        VKey::Home => 0x73, VKey::End => 0x77,
+        VKey::PageUp => 0x74, VKey::PageDown => 0x79,
+        VKey::Insert => 0x72, VKey::PrintScreen => 0x69,
+        VKey::ScrollLock => 0x6B, VKey::Pause => 0x71,
+        VKey::LShift => 0x38, VKey::RShift => 0x3C,
+        VKey::LCtrl => 0x3B, VKey::RCtrl => 0x3E,
+        VKey::LAlt => 0x3A, VKey::RAlt => 0x3D,
+        VKey::LWin => 0x37, VKey::RWin => 0x36,
+        VKey::Semicolon => 0x29, VKey::Quote => 0x27,
+        VKey::Comma => 0x2B, VKey::Period => 0x2F,
+        VKey::Slash => 0x2C, VKey::Backslash => 0x2A,
+        VKey::LBracket => 0x21, VKey::RBracket => 0x1E,
+        VKey::Minus => 0x1B, VKey::Equal => 0x18,
+        VKey::Grave => 0x32,
+        VKey::Hangul => 0x68, VKey::Hanja => 0x68,
+    }
+}
+
+fn cg_to_vkey(keycode: u16) -> Option<VKey> {
+    match keycode {
+        0x00 => Some(VKey::A), 0x01 => Some(VKey::S), 0x02 => Some(VKey::D),
+        0x03 => Some(VKey::F), 0x04 => Some(VKey::H), 0x05 => Some(VKey::G),
+        0x06 => Some(VKey::Z), 0x07 => Some(VKey::X), 0x08 => Some(VKey::C),
+        0x09 => Some(VKey::V), 0x0B => Some(VKey::B), 0x0C => Some(VKey::Q),
+        0x0D => Some(VKey::W), 0x0E => Some(VKey::E), 0x0F => Some(VKey::R),
+        0x10 => Some(VKey::Y), 0x11 => Some(VKey::T), 0x1F => Some(VKey::O),
+        0x20 => Some(VKey::U), 0x22 => Some(VKey::I), 0x23 => Some(VKey::P),
+        0x25 => Some(VKey::L), 0x26 => Some(VKey::J), 0x28 => Some(VKey::K),
+        0x2D => Some(VKey::N), 0x2E => Some(VKey::M),
+        0x1D => Some(VKey::Num0), 0x12 => Some(VKey::Num1), 0x13 => Some(VKey::Num2),
+        0x14 => Some(VKey::Num3), 0x15 => Some(VKey::Num4), 0x17 => Some(VKey::Num5),
+        0x16 => Some(VKey::Num6), 0x1A => Some(VKey::Num7), 0x1C => Some(VKey::Num8),
+        0x19 => Some(VKey::Num9),
+        0x7A => Some(VKey::F1), 0x78 => Some(VKey::F2), 0x63 => Some(VKey::F3),
+        0x76 => Some(VKey::F4), 0x60 => Some(VKey::F5), 0x61 => Some(VKey::F6),
+        0x62 => Some(VKey::F7), 0x64 => Some(VKey::F8), 0x65 => Some(VKey::F9),
+        0x6D => Some(VKey::F10), 0x67 => Some(VKey::F11), 0x6F => Some(VKey::F12),
+        0x35 => Some(VKey::Escape), 0x30 => Some(VKey::Tab),
+        0x39 => Some(VKey::CapsLock), 0x31 => Some(VKey::Space),
+        0x24 => Some(VKey::Enter), 0x33 => Some(VKey::Backspace),
+        0x75 => Some(VKey::Delete),
+        0x7B => Some(VKey::Left), 0x7C => Some(VKey::Right),
+        0x7E => Some(VKey::Up), 0x7D => Some(VKey::Down),
+        0x73 => Some(VKey::Home), 0x77 => Some(VKey::End),
+        0x74 => Some(VKey::PageUp), 0x79 => Some(VKey::PageDown),
+        0x38 => Some(VKey::LShift), 0x3C => Some(VKey::RShift),
+        0x3B => Some(VKey::LCtrl), 0x3E => Some(VKey::RCtrl),
+        0x3A => Some(VKey::LAlt), 0x3D => Some(VKey::RAlt),
+        0x37 => Some(VKey::LWin), 0x36 => Some(VKey::RWin),
+        0x29 => Some(VKey::Semicolon), 0x27 => Some(VKey::Quote),
+        0x2B => Some(VKey::Comma), 0x2F => Some(VKey::Period),
+        0x2C => Some(VKey::Slash), 0x2A => Some(VKey::Backslash),
+        0x21 => Some(VKey::LBracket), 0x1E => Some(VKey::RBracket),
+        0x1B => Some(VKey::Minus), 0x18 => Some(VKey::Equal),
+        0x32 => Some(VKey::Grave),
+        _ => None,
+    }
+}
+
+// ── 키 시뮬레이션 ────────────────────────────────────────────────────────────
+
+fn modifiers_to_flags(mods: &[VKey]) -> u64 {
+    let mut flags = 0u64;
+    for m in mods {
+        match m {
+            VKey::LShift | VKey::RShift => flags |= CG_EVENT_FLAG_MASK_SHIFT,
+            VKey::LCtrl | VKey::RCtrl => flags |= CG_EVENT_FLAG_MASK_CONTROL,
+            VKey::LAlt | VKey::RAlt => flags |= CG_EVENT_FLAG_MASK_ALTERNATE,
+            VKey::LWin | VKey::RWin => flags |= CG_EVENT_FLAG_MASK_COMMAND,
+            _ => {}
+        }
+    }
+    flags
+}
+
+fn send_key_event(keycode: u16, key_down: bool, flags: u64) {
+    unsafe {
+        let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
+        if source.is_null() { return; }
+        let event = CGEventCreateKeyboardEvent(source, keycode, key_down);
+        if event.is_null() { CFRelease(source); return; }
+        CGEventSetFlags(event, flags);
+        CGEventSetIntegerValueField(event, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
+        CGEventPost(CG_SESSION_EVENT_TAP, event);
+        CFRelease(event);
+        CFRelease(source);
+    }
+}
+
+fn send_key_press(keycode: u16) {
+    send_key_event(keycode, true, 0);
+    send_key_event(keycode, false, 0);
+}
+
+fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
+    let flags = modifiers_to_flags(modifier_vkeys);
+    let kc = vkey_to_cg(key);
+    send_key_event(kc, true, flags);
+    send_key_event(kc, false, flags);
+}
+
+// ── 헬퍼 ─────────────────────────────────────────────────────────────────────
+
+fn is_modifier_key(vkey: &VKey) -> bool {
+    matches!(vkey,
+        VKey::LShift | VKey::RShift |
+        VKey::LCtrl | VKey::RCtrl |
+        VKey::LAlt | VKey::RAlt |
+        VKey::LWin | VKey::RWin
+    )
+}
+
+fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
+    match m {
+        Modifier::Shift => held.contains(&VKey::LShift) || held.contains(&VKey::RShift),
+        Modifier::Ctrl => held.contains(&VKey::LCtrl) || held.contains(&VKey::RCtrl),
+        Modifier::Alt => held.contains(&VKey::LAlt) || held.contains(&VKey::RAlt),
+        Modifier::Win => held.contains(&VKey::LWin) || held.contains(&VKey::RWin),
+    }
+}
+
+// ── 액션 실행 ────────────────────────────────────────────────────────────────
+
+fn execute_action(action: &BindAction) {
+    match action {
+        BindAction::SendKey(key) => {
+            send_key_press(vkey_to_cg(*key));
+        }
+        BindAction::SendCombo { modifiers, key } => {
+            send_combo(modifiers, *key);
+        }
+        BindAction::Macro(steps) => {
+            for step in steps {
+                match step {
+                    MacroStep::KeyPress(k) => send_key_event(vkey_to_cg(*k), true, 0),
+                    MacroStep::KeyRelease(k) => send_key_event(vkey_to_cg(*k), false, 0),
+                    MacroStep::Combo { modifiers, key } => {
+                        send_combo(modifiers, *key);
+                    }
+                }
+            }
+        }
+        BindAction::Launch(cmd) => {
+            let cmd = cmd.clone();
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new(&cmd).spawn();
+            });
+        }
+    }
+}
+
+// ── 글로벌 상태 ──────────────────────────────────────────────────────────────
+
+static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
+
+struct HookState {
+    config: KeybindConfig,
+    active_layer: Option<usize>,
+    trigger_down_time: Instant,
+    layer_key_used: bool,
+    modifiers_held: HashSet<VKey>,
+    last_tap_key: Option<VKey>,
+    last_tap_time: Instant,
+    combo_consumed_key: Option<VKey>,
+    dt_consumed_key: Option<VKey>,
+    layer_dt_last_key: Option<VKey>,
+    layer_dt_last_time: Instant,
+}
+
+// ── CGEventTap 콜백 ─────────────────────────────────────────────────────────
+
+unsafe extern "C" fn event_tap_callback(
+    _proxy: CGEventTapProxy,
+    type_: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef {
+    // 타임아웃으로 비활성화된 경우 재활성화
+    if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+        let tap = user_info as CFMachPortRef;
+        if !tap.is_null() {
+            CGEventTapEnable(tap, true);
+        }
+        return event;
+    }
+
+    // keyDown, keyUp, flagsChanged 만 처리
+    if type_ != CG_EVENT_KEY_DOWN && type_ != CG_EVENT_KEY_UP && type_ != CG_EVENT_FLAGS_CHANGED {
+        return event;
+    }
+
+    // 자체 생성 이벤트 패스스루
+    if CGEventGetIntegerValueField(event, CG_EVENT_SOURCE_USER_DATA) == MAGIC_USER_DATA {
+        return event;
+    }
+
+    let keycode = CGEventGetIntegerValueField(event, CG_KEYBOARD_EVENT_KEYCODE) as u16;
+    let Some(vkey) = cg_to_vkey(keycode) else {
+        return event;
+    };
+
+    let state = match HOOK_STATE.get() {
+        Some(s) => s,
+        None => return event,
+    };
+    let mut guard = match state.lock() {
+        Ok(g) => g,
+        Err(_) => return event,
+    };
+
+    let now = Instant::now();
+
+    // ── flagsChanged 이벤트: 수정자 키 상태 추적 ──
+    if type_ == CG_EVENT_FLAGS_CHANGED {
+        let is_down = !guard.modifiers_held.contains(&vkey);
+        if is_down {
+            guard.modifiers_held.insert(vkey);
+        } else {
+            guard.modifiers_held.remove(&vkey);
+        }
+
+        // 레이어 트리거 확인
+        for (idx, layer) in guard.config.layers.iter().enumerate() {
+            if vkey == layer.trigger {
+                if is_down {
+                    if guard.active_layer.is_none() {
+                        guard.active_layer = Some(idx);
+                        guard.trigger_down_time = now;
+                        guard.layer_key_used = false;
+                    }
+                    return std::ptr::null_mut(); // 억제
+                } else if guard.active_layer == Some(idx) {
+                    let elapsed = guard.trigger_down_time.elapsed().as_millis() as u32;
+                    let tap_hold_ms = layer.tap_hold_ms;
+                    let tap_action = layer.tap_action;
+                    let was_used = guard.layer_key_used;
+
+                    guard.active_layer = None;
+                    guard.layer_key_used = false;
+
+                    if !was_used && elapsed < tap_hold_ms {
+                        if let Some(tap_key) = tap_action {
+                            let action = BindAction::SendKey(tap_key);
+                            drop(guard);
+                            execute_action(&action);
+                        }
+                    }
+                    return std::ptr::null_mut(); // 억제
+                }
+            }
+        }
+
+        // 콤보 키의 keyup 억제
+        if !is_down {
+            if guard.combo_consumed_key == Some(vkey) {
+                guard.combo_consumed_key = None;
+                return std::ptr::null_mut();
+            }
+            if guard.dt_consumed_key == Some(vkey) {
+                guard.dt_consumed_key = None;
+                return std::ptr::null_mut();
+            }
+        }
+
+        // 더블탭 (RShift 등 수정자 키)
+        if is_down {
+            let dt_binding = guard.config.double_taps.iter()
+                .find(|dt| dt.key == vkey)
+                .cloned();
+            if let Some(dt) = dt_binding {
+                if guard.last_tap_key == Some(vkey) {
+                    let elapsed = guard.last_tap_time.elapsed().as_millis() as u32;
+                    if elapsed < dt.timeout_ms {
+                        guard.last_tap_key = None;
+                        guard.dt_consumed_key = Some(vkey);
+                        guard.modifiers_held.remove(&vkey);
+                        let action = dt.action.clone();
+                        drop(guard);
+                        execute_action(&action);
+                        return std::ptr::null_mut();
+                    }
+                }
+            }
+        }
+        if !is_down {
+            let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
+            if has_dt {
+                guard.last_tap_key = Some(vkey);
+                guard.last_tap_time = now;
+            }
+        }
+
+        return event;
+    }
+
+    // ── keyDown / keyUp 이벤트 ──
+    let is_down = type_ == CG_EVENT_KEY_DOWN;
+    let is_up = type_ == CG_EVENT_KEY_UP;
+
+    // 콤보/더블탭으로 소비된 키의 keyup 억제
+    if is_up {
+        if guard.combo_consumed_key == Some(vkey) {
+            guard.combo_consumed_key = None;
+            return std::ptr::null_mut();
+        }
+        if guard.dt_consumed_key == Some(vkey) {
+            guard.dt_consumed_key = None;
+            return std::ptr::null_mut();
+        }
+    }
+
+    // ── 활성 레이어 매핑 확인 ──
+    if let Some(layer_idx) = guard.active_layer {
+        // 레이어 내 더블탭 매핑
+        let dt_opt = guard.config.layers[layer_idx]
+            .double_tap_mappings
+            .get(&vkey)
+            .cloned();
+
+        if let Some(dt) = dt_opt {
+            if is_down {
+                guard.layer_key_used = true;
+
+                if guard.layer_dt_last_key == Some(vkey) {
+                    let elapsed = guard.layer_dt_last_time.elapsed().as_millis() as u32;
+                    if elapsed < dt.timeout_ms {
+                        guard.layer_dt_last_key = None;
+                        let action = dt.double_action.clone();
+                        drop(guard);
+                        execute_action(&action);
+                        return std::ptr::null_mut();
+                    }
+                }
+
+                guard.layer_dt_last_key = Some(vkey);
+                guard.layer_dt_last_time = now;
+                let action = dt.single_action.clone();
+                drop(guard);
+                execute_action(&action);
+                return std::ptr::null_mut();
+            }
+            if is_up {
+                return std::ptr::null_mut();
+            }
+        }
+
+        // 일반 레이어 매핑
+        let action_opt = guard.config.layers[layer_idx]
+            .mappings
+            .get(&vkey)
+            .cloned();
+
+        if let Some(action) = action_opt {
+            if is_down {
+                guard.layer_key_used = true;
+                guard.layer_dt_last_key = None;
+                drop(guard);
+                execute_action(&action);
+                return std::ptr::null_mut();
+            }
+            if is_up {
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    // ── 콤보 리맵 확인 ──
+    if is_down && !is_modifier_key(&vkey) {
+        let combo_action = guard.config.combos.iter()
+            .find(|(trigger, _)| {
+                trigger.key == vkey
+                    && trigger.modifiers.iter().all(|m| modifier_satisfied(m, &guard.modifiers_held))
+            })
+            .map(|(_, action)| action.clone());
+
+        if let Some(action) = combo_action {
+            guard.combo_consumed_key = Some(vkey);
+            drop(guard);
+            execute_action(&action);
+            return std::ptr::null_mut();
+        }
+    }
+
+    // ── 더블탭 확인 ──
+    if is_down {
+        let dt_binding = guard.config.double_taps.iter()
+            .find(|dt| dt.key == vkey)
+            .cloned();
+
+        if let Some(dt) = dt_binding {
+            if guard.last_tap_key == Some(vkey) {
+                let elapsed = guard.last_tap_time.elapsed().as_millis() as u32;
+                if elapsed < dt.timeout_ms {
+                    guard.last_tap_key = None;
+                    guard.dt_consumed_key = Some(vkey);
+                    let action = dt.action.clone();
+                    drop(guard);
+                    execute_action(&action);
+                    return std::ptr::null_mut();
+                }
+            }
+        } else if !is_modifier_key(&vkey) {
+            guard.last_tap_key = None;
+        }
+    }
+
+    // ── 단순 리매핑 확인 ──
+    if let Some(action) = guard.config.remaps.get(&vkey).cloned() {
+        if is_down {
+            drop(guard);
+            execute_action(&action);
+            return std::ptr::null_mut();
+        }
+        if is_up {
+            return std::ptr::null_mut();
+        }
+    }
+
+    // ── 더블탭 상태 기록 (keyup 시) ──
+    if is_up {
+        let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
+        if has_dt {
+            guard.last_tap_key = Some(vkey);
+            guard.last_tap_time = now;
+        }
+    }
+
+    drop(guard);
+    event
+}
+
+// ── Backend 구현 ─────────────────────────────────────────────────────────────
+
+/// CFRunLoopRef 등 raw pointer를 스레드 간 안전하게 전달하기 위한 래퍼.
+/// CFRunLoopStop은 다른 스레드에서 호출해도 안전하다.
+struct SendPtr(*mut c_void);
+unsafe impl Send for SendPtr {}
+unsafe impl Sync for SendPtr {}
+
+pub struct MacOSKeyboardBackend {
+    running: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    run_loop: Arc<Mutex<Option<SendPtr>>>,
+}
+
+impl MacOSKeyboardBackend {
+    pub fn new() -> Self {
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+            thread: None,
+            run_loop: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl KeyboardBackend for MacOSKeyboardBackend {
+    fn start(&mut self, config: KeybindConfig) -> Result<(), String> {
+        if self.running.load(Ordering::Relaxed) {
+            return Err("키 바인딩이 이미 실행 중입니다.".into());
+        }
+
+        let now = Instant::now();
+        let state = Arc::new(Mutex::new(HookState {
+            config,
+            active_layer: None,
+            trigger_down_time: now,
+            layer_key_used: false,
+            modifiers_held: HashSet::new(),
+            last_tap_key: None,
+            last_tap_time: now,
+            combo_consumed_key: None,
+            dt_consumed_key: None,
+            layer_dt_last_key: None,
+            layer_dt_last_time: now,
+        }));
+
+        let _ = HOOK_STATE.set(state);
+
+        let running = self.running.clone();
+        running.store(true, Ordering::Relaxed);
+        let rl_store = self.run_loop.clone();
+
+        let thread = std::thread::spawn(move || {
+            unsafe {
+                let events_of_interest: u64 =
+                    (1u64 << CG_EVENT_KEY_DOWN)
+                    | (1u64 << CG_EVENT_KEY_UP)
+                    | (1u64 << CG_EVENT_FLAGS_CHANGED);
+
+                let tap = CGEventTapCreate(
+                    CG_SESSION_EVENT_TAP,
+                    CG_HEAD_INSERT_EVENT_TAP,
+                    CG_EVENT_TAP_OPTION_DEFAULT,
+                    events_of_interest,
+                    event_tap_callback,
+                    std::ptr::null_mut(), // userInfo는 콜백 내에서 tap이 필요할 때 설정
+                );
+
+                if tap.is_null() {
+                    tracing::error!(
+                        "CGEventTapCreate 실패 — 접근성(손쉬운 사용) 권한을 확인하세요."
+                    );
+                    running.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                // 타임아웃 재활성화를 위해 tap을 userInfo로 재설정
+                // (첫 생성 시에는 tap 포인터를 모르므로, 별도 enable 필요 없음)
+
+                let source = CFMachPortCreateRunLoopSource(
+                    std::ptr::null(),
+                    tap,
+                    0,
+                );
+                if source.is_null() {
+                    tracing::error!("CFMachPortCreateRunLoopSource 실패");
+                    CFRelease(tap);
+                    running.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                let rl = CFRunLoopGetCurrent();
+                CFRunLoopAddSource(rl, source, kCFRunLoopCommonModes);
+                CGEventTapEnable(tap, true);
+
+                if let Ok(mut store) = rl_store.lock() {
+                    *store = Some(SendPtr(rl));
+                }
+
+                tracing::info!("CGEventTap 키보드 훅 설치 완료");
+
+                CFRunLoopRun();
+
+                CGEventTapEnable(tap, false);
+                CFRelease(source);
+                CFRelease(tap);
+
+                tracing::info!("CGEventTap 키보드 훅 해제 완료");
+            }
+        });
+
+        self.thread = Some(thread);
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        self.running.store(false, Ordering::Relaxed);
+        if let Ok(store) = self.run_loop.lock() {
+            if let Some(ref rl) = *store {
+                unsafe { CFRunLoopStop(rl.0); }
+            }
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
+}
