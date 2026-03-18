@@ -437,7 +437,7 @@ impl KeybindConfig {
         mappings.insert(
             VKey::Space,
             BindAction::SendCombo {
-                modifiers: vec![VKey::LAlt],
+                modifiers: vec![VKey::LShift],
                 key: VKey::Space,
             },
         );
@@ -490,18 +490,8 @@ impl KeybindConfig {
                 mappings,
                 double_tap_mappings,
             }],
-            combos: vec![(
-                ComboTrigger {
-                    modifiers: vec![Modifier::Shift],
-                    key: VKey::Space,
-                },
-                BindAction::SendKey(VKey::Hangul),
-            )],
-            double_taps: vec![DoubleTapBinding {
-                key: VKey::RShift,
-                action: BindAction::SendKey(VKey::Hangul),
-                timeout_ms: 300,
-            }],
+            combos: vec![],
+            double_taps: vec![],
         }
     }
 
@@ -860,8 +850,8 @@ mod tests {
             layer.double_tap_mappings.contains_key(&VKey::O),
             "Alt+O 더블탭"
         );
-        assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
-        assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
+        assert!(config.combos.is_empty(), "콤보는 시스템 입력소스 전환에 위임");
+        assert!(config.double_taps.is_empty());
     }
 
     #[test]

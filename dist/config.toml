@@ -107,7 +107,7 @@ N = "PageUp"                       # Alt+N → 페이지 업
 M = "PageDown"                     # Alt+M → 페이지 다운
 "." = "Backspace"                   # Alt+. → 백스페이스
 "/" = "Delete"                      # Alt+/ → Delete
-Space = "Alt+Space"                  # Alt+Space → 입력 소스 전환 (한/영)
+Space = "Shift+Space"                # Alt+Space → 한/영 전환 (Shift+Space 전달)
 # ── macOS: Cmd 사용  |  Windows: "Ctrl+V", "macro:Home;Shift+End;Ctrl+C" ──
 P = "Cmd+V"                         # Alt+P → 붙여넣기
 Y = "macro:Ctrl+A;Shift+Ctrl+E;Cmd+C"  # Alt+Y → 줄 복사 (Ctrl+A/E = macOS 범용)
@@ -125,9 +125,10 @@ double = "Ctrl+E"                   # Alt+O 더블탭 → 줄 끝 (Cocoa+readlin
 timeout_ms = 300
 
 # ── 글로벌 콤보 (수정자+키) ──
-[[launcher.keymap.combos]]
-trigger = "Shift+Space"
-action = "Hangul"                   # Shift+Space → 한/영 전환
+# Shift+Space는 macOS 시스템 입력소스 전환으로 직접 처리됨 (데몬이 가로채지 않음)
+# [[launcher.keymap.combos]]
+# trigger = "Shift+Space"
+# action = "Hangul"
 
 # ── 글로벌 더블탭 ──
 [[launcher.keymap.double_taps]]
