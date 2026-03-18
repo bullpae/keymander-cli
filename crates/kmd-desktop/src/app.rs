@@ -536,6 +536,12 @@ impl App {
                             self.state_dirty = true;
                         }
                     }
+                    window::Event::Unfocused => {
+                        if self.state_dirty {
+                            self.window_state.save();
+                        }
+                        return iced::exit();
+                    }
                     _ => {}
                 }
                 Task::none()
@@ -1870,10 +1876,9 @@ impl App {
         self.query.clear();
         self.results.clear();
         self.selected = 0;
-        Task::batch([
-            self.resize_window(),
-            iced::widget::operation::focus::<Message>(self.input_id.clone()),
-        ])
+        let resize = self.resize_window();
+        let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
+        Task::batch([resize, refocus])
     }
 
     fn resize_window(&mut self) -> Task<Message> {
@@ -2394,11 +2399,7 @@ impl App {
         });
 
         // ── 이름 (Bold, 중앙) ──
-        let name_str = if item.name.len() > 28 {
-            format!("{}...", &item.name[..25])
-        } else {
-            item.name.clone()
-        };
+        let name_str = truncate_str(&item.name, 25);
         let name_label = container(
             text(name_str)
                 .size(14)
@@ -2623,6 +2624,17 @@ fn launch_in_terminal(cmd: &str) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// UTF-8 안전한 문자열 truncation (한글/CJK 안전)
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}...")
+    }
+}
 
 fn items_to_results(
     items: impl IntoIterator<Item = kmd_core::IndexItem>,
