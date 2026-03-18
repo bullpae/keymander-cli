@@ -97,6 +97,7 @@ pub struct App {
     window_width: f32,
     window_state: WindowState,
     state_dirty: bool,
+    last_window_size: Size,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -276,6 +277,7 @@ impl App {
             window_width,
             window_state,
             state_dirty: false,
+            last_window_size: Size::new(window_width, SEARCH_BAR_HEIGHT),
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
@@ -526,6 +528,7 @@ impl App {
                         self.state_dirty = true;
                     }
                     window::Event::Resized(size) => {
+                        self.last_window_size = size;
                         let base_width = if !self.results.is_empty() {
                             (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
                         } else {
@@ -723,9 +726,7 @@ impl App {
             }
         }
 
-        let resize = self.resize_window();
-        let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
-        Task::batch([resize, refocus])
+        self.resize_window()
     }
 
     /// classify_web_query 통합 분류기 사용
@@ -1803,18 +1804,14 @@ impl App {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                let scroll = self.scroll_to_selected();
-                let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
-                Task::batch([scroll, refocus])
+                self.scroll_to_selected()
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 let max = self.results.len().saturating_sub(1);
                 if self.selected < max {
                     self.selected += 1;
                 }
-                let scroll = self.scroll_to_selected();
-                let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
-                Task::batch([scroll, refocus])
+                self.scroll_to_selected()
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if !self.query.is_empty() {
@@ -1851,7 +1848,7 @@ impl App {
         ])
     }
 
-    fn resize_window(&self) -> Task<Message> {
+    fn resize_window(&mut self) -> Task<Message> {
         let has_results = !self.results.is_empty();
         let height = if has_results {
             let rows = self.results.len().min(MAX_VISIBLE_ROWS) as f32;
@@ -1866,13 +1863,23 @@ impl App {
         };
         let size = Size::new(width, height);
 
-        match self.window_id {
+        if (size.width - self.last_window_size.width).abs() < 1.0
+            && (size.height - self.last_window_size.height).abs() < 1.0
+        {
+            return Task::none();
+        }
+
+        self.last_window_size = size;
+        let input_id = self.input_id.clone();
+        let resize_task = match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
                 Some(id) => window::resize(id, size),
                 None => Task::none(),
             }),
-        }
+        };
+        let refocus = iced::widget::operation::focus::<Message>(input_id);
+        Task::batch([resize_task, refocus])
     }
 }
 
