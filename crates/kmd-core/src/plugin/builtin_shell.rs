@@ -137,6 +137,20 @@ static QUICK_ACTIONS: &[QuickAction] = &[
     },
 ];
 
+/// Windows에서 콘솔 창 없이 cmd 실행하는 헬퍼
+#[cfg(target_os = "windows")]
+fn hidden_cmd() -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("cmd");
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hidden_cmd() -> Command {
+    Command::new("cmd")
+}
+
 pub struct ShellExtension;
 
 impl ShellExtension {
@@ -148,7 +162,7 @@ impl ShellExtension {
         }
 
         let output = if cfg!(target_os = "windows") {
-            Command::new("cmd").args(["/c", cmd_line]).output()
+            hidden_cmd().args(["/c", cmd_line]).output()
         } else {
             Command::new("sh").args(["-c", cmd_line]).output()
         };
@@ -179,6 +193,13 @@ impl ShellExtension {
         }
     }
 
+    /// Quick action 이름인지 확인
+    pub fn is_quick_action(name: &str) -> bool {
+        QUICK_ACTIONS
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(name))
+    }
+
     /// Execute a quick action by name
     pub fn execute_quick_action(name: &str) -> Result<String, String> {
         let action = QUICK_ACTIONS
@@ -186,8 +207,14 @@ impl ShellExtension {
             .find(|a| a.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| format!("Unknown quick action: {}", name))?;
 
-        let output = Command::new(action.command)
-            .args(action.args)
+        let mut cmd = Command::new(action.command);
+        cmd.args(action.args);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let output = cmd
             .output()
             .map_err(|e| format!("Failed to execute: {}", e))?;
 

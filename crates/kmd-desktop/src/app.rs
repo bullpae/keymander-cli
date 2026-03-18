@@ -1521,25 +1521,29 @@ impl App {
             self.window_state.save();
         }
 
-        // Shell 명령 → 백그라운드 스레드에서 비동기 실행
+        // Shell 명령 처리
         if result.item.kind == ItemKind::Shell {
-            let item = result.item.clone();
-            return Task::future(async move {
-                let res = tokio::task::spawn_blocking(move || {
-                    use kmd_core::plugin::Extension;
-                    let shell_ext = builtin_shell::ShellExtension;
-                    match shell_ext.execute(&item) {
-                        kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
-                            Ok(output)
+            if builtin_shell::ShellExtension::is_quick_action(&result.item.path) {
+                // Quick Action → 백그라운드 실행, 결과를 클립보드에 복사
+                let item = result.item.clone();
+                return Task::future(async move {
+                    let res = tokio::task::spawn_blocking(move || {
+                        use kmd_core::plugin::Extension;
+                        let shell_ext = builtin_shell::ShellExtension;
+                        match shell_ext.execute(&item) {
+                            kmd_core::plugin::ExtensionAction::CopyToClipboard(o) => Ok(o),
+                            kmd_core::plugin::ExtensionAction::Display(msg) => Err(msg),
+                            _ => Err("Unknown action".to_string()),
                         }
-                        kmd_core::plugin::ExtensionAction::Display(msg) => Err(msg),
-                        _ => Err("Unknown action".to_string()),
-                    }
-                })
-                .await
-                .unwrap_or_else(|e| Err(format!("Task panicked: {e}")));
-                Message::ShellDone(res)
-            });
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("Task panicked: {e}")));
+                    Message::ShellDone(res)
+                });
+            }
+            // 사용자 명령 → 새 터미널 창에서 실행 (cmd /k 로 결과 유지)
+            launch_in_terminal(&result.item.path);
+            return iced::exit();
         }
 
         // 웹 검색 결과 — extract_batch_urls 통합 추출
@@ -2052,6 +2056,40 @@ impl App {
                 ..Default::default()
             })
             .into()
+    }
+}
+
+// ─── Shell Terminal Launch ────────────────────────────────────────────────────
+
+/// 새 터미널 창에서 셸 명령을 실행 (결과가 화면에 유지됨)
+fn launch_in_terminal(cmd: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let _ = std::process::Command::new("cmd")
+            .args(["/k", cmd])
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!("tell application \"Terminal\" to do script \"{}\"", cmd);
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        for term in &["x-terminal-emulator", "gnome-terminal", "xterm"] {
+            if std::process::Command::new(term)
+                .args(["-e", &format!("sh -c '{} ; read -p \"Press Enter...\"'", cmd)])
+                .spawn()
+                .is_ok()
+            {
+                return;
+            }
+        }
     }
 }
 
