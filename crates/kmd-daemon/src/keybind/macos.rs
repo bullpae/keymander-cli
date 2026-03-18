@@ -6,8 +6,8 @@
 //! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
 
 use super::{
-    is_modifier_key, modifier_satisfied, BindAction, KeybindConfig, KeyboardBackend, MacroStep,
-    VKey,
+    is_modifier_key, modifier_satisfied, resolve_launch_cmd, BindAction, KeybindConfig,
+    KeyboardBackend, MacroStep, VKey,
 };
 use std::collections::HashSet;
 use std::os::raw::c_void;
@@ -368,9 +368,10 @@ fn execute_action(action: &BindAction) {
             }
         }
         BindAction::Launch(cmd) => {
-            let cmd = cmd.clone();
+            let resolved = resolve_launch_cmd(cmd);
+            tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
-                let _ = std::process::Command::new(&cmd).spawn();
+                let _ = std::process::Command::new(&resolved).spawn();
             });
         }
     }

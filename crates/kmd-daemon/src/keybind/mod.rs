@@ -291,6 +291,27 @@ fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
     ]
 }
 
+// ── Launch 커맨드 경로 해석 ──────────────────────────────────────────────────
+
+/// `launch:name` 액션에서 실행 경로를 결정한다.
+/// 실행 파일과 같은 디렉토리에서 먼저 찾고, 없으면 원래 이름을 반환한다.
+pub fn resolve_launch_cmd(name: &str) -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            #[cfg(windows)]
+            let bin = format!("{name}.exe");
+            #[cfg(not(windows))]
+            let bin = name.to_string();
+
+            let sibling = dir.join(&bin);
+            if sibling.exists() {
+                return sibling.to_string_lossy().into_owned();
+            }
+        }
+    }
+    name.to_string()
+}
+
 // ── 수정자 키 헬퍼 (플랫폼 공용) ─────────────────────────────────────────────
 
 pub fn is_modifier_key(vkey: &VKey) -> bool {
@@ -434,13 +455,7 @@ impl KeybindConfig {
         mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
-        mappings.insert(
-            VKey::Space,
-            BindAction::SendCombo {
-                modifiers: vec![VKey::LShift],
-                key: VKey::Space,
-            },
-        );
+        mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
         // y → 줄 복사
         mappings.insert(VKey::Y, BindAction::Macro(line_copy_steps(copy_mod)));
         // p → 붙여넣기

@@ -482,7 +482,7 @@ pub struct KeybindingsConfig {
 impl Default for KeybindingsConfig {
     fn default() -> Self {
         Self {
-            global_hotkey: "alt+space".to_string(),
+            global_hotkey: String::new(),
             quit: "ctrl+c".to_string(),
             next: "down".to_string(),
             prev: "up".to_string(),
@@ -877,7 +877,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.general.render_fps, 30);
         assert_eq!(config.launcher.file_search_provider, "auto");
-        assert_eq!(config.keybindings.global_hotkey, "alt+space");
+        assert!(config.keybindings.global_hotkey.is_empty());
         assert_eq!(config.launcher.kind_weights.directory, 80);
         assert!(config.launcher.index_directories);
         assert!(!config.launcher.scan_drives);

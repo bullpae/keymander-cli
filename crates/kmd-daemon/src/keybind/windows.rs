@@ -4,8 +4,8 @@
 //! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
 
 use super::{
-    is_modifier_key, modifier_satisfied, BindAction, KeybindConfig, KeyboardBackend, MacroStep,
-    Modifier, VKey,
+    is_modifier_key, modifier_satisfied, resolve_launch_cmd, BindAction, KeybindConfig,
+    KeyboardBackend, MacroStep, Modifier, VKey,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -348,11 +348,12 @@ fn execute_action(action: &BindAction) {
             }
         }
         BindAction::Launch(cmd) => {
-            let cmd = cmd.clone();
+            let resolved = resolve_launch_cmd(cmd);
+            tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                let _ = std::process::Command::new(&cmd)
+                let _ = std::process::Command::new(&resolved)
                     .creation_flags(CREATE_NO_WINDOW)
                     .spawn();
             });
