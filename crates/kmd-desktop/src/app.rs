@@ -1902,23 +1902,15 @@ impl App {
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
                 .or_else(|| crate::app_icons::app_icon_for_item(item.kind, &item.path))
         {
-            container(
-                image(handle)
-                    .content_fit(iced::ContentFit::Contain)
-                    .width(icon_size)
-                    .height(icon_size),
-            )
-            .width(icon_size)
-            .height(icon_size)
-            .center_x(Fill)
-            .center_y(Fill)
-            .into()
-        } else {
-            container(text(&item.icon).size(icon_size - 4.0))
+            image(handle)
+                .content_fit(iced::ContentFit::Fill)
                 .width(icon_size)
                 .height(icon_size)
-                .center_x(Fill)
-                .center_y(Fill)
+                .into()
+        } else {
+            container(text(&item.icon).size(icon_size - 4.0))
+                .center_x(icon_size)
+                .center_y(icon_size)
                 .into()
         };
         let title = text(&item.name).size(14).color(t.text);
