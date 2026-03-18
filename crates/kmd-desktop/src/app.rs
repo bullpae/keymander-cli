@@ -41,6 +41,7 @@ const STATUS_BAR_HEIGHT: f32 = 28.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
+const DETAIL_PANEL_WIDTH: f32 = 260.0;
 
 /// Interval between quit-signal polls (ms). Also used to flush state to disk.
 const QUIT_POLL_MS: u64 = 300;
@@ -125,6 +126,93 @@ pub enum Message {
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
     ShellDone(Result<String, String>),
+    /// 상세 패널의 컨텍스트 액션 실행
+    RunAction(ContextAction),
+}
+
+// ─── Context Actions ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum ContextAction {
+    Open,
+    OpenAsAdmin,
+    OpenFolder,
+    CopyPath,
+    CopyName,
+    #[allow(dead_code)]
+    Uninstall,
+}
+
+impl ContextAction {
+    fn label(&self) -> &str {
+        match self {
+            Self::Open => "열기",
+            Self::OpenAsAdmin => "관리자 권한으로 열기",
+            Self::OpenFolder => "파일 위치 열기",
+            Self::CopyPath => "경로 복사",
+            Self::CopyName => "이름 복사",
+            Self::Uninstall => "프로그램 제거",
+        }
+    }
+
+    fn shortcut(&self) -> &str {
+        match self {
+            Self::Open => "Ctrl+1",
+            Self::OpenAsAdmin => "Ctrl+Shift+Enter",
+            Self::OpenFolder => "Ctrl+2",
+            Self::CopyPath => "Ctrl+3",
+            Self::CopyName => "Ctrl+4",
+            Self::Uninstall => "",
+        }
+    }
+
+    #[allow(dead_code)]
+    fn icon_char(&self) -> &str {
+        match self {
+            Self::Open => "\u{2197}",         // ↗
+            Self::OpenAsAdmin => "\u{26A1}",  // ⚡
+            Self::OpenFolder => "\u{1F4C2}",  // 📂
+            Self::CopyPath => "\u{1F4CB}",    // 📋
+            Self::CopyName => "\u{270D}",     // ✍
+            Self::Uninstall => "\u{1F5D1}",   // 🗑
+        }
+    }
+}
+
+/// 아이템 종류에 따라 사용 가능한 컨텍스트 액션 목록
+fn context_actions_for(kind: ItemKind) -> Vec<ContextAction> {
+    match kind {
+        ItemKind::App | ItemKind::Executable => vec![
+            ContextAction::Open,
+            ContextAction::OpenAsAdmin,
+            ContextAction::OpenFolder,
+            ContextAction::CopyPath,
+        ],
+        ItemKind::File => vec![
+            ContextAction::Open,
+            ContextAction::OpenFolder,
+            ContextAction::CopyPath,
+            ContextAction::CopyName,
+        ],
+        ItemKind::Directory => vec![
+            ContextAction::Open,
+            ContextAction::CopyPath,
+        ],
+        ItemKind::WebSearch => vec![
+            ContextAction::Open,
+            ContextAction::CopyName,
+        ],
+        ItemKind::Shell => vec![
+            ContextAction::Open,
+            ContextAction::CopyName,
+        ],
+        ItemKind::SystemCommand => vec![
+            ContextAction::Open,
+        ],
+        ItemKind::Calculator | ItemKind::Emoji => vec![
+            ContextAction::CopyName,
+        ],
+    }
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
@@ -263,7 +351,10 @@ impl App {
                 self.selected = index;
                 self.launch_selected()
             }
-            Message::KeyEvent(key, _modifiers) => {
+            Message::KeyEvent(key, modifiers) => {
+                if let Some(action) = self.match_shortcut(&key, &modifiers) {
+                    return self.execute_context_action(action);
+                }
                 let key_task = self.handle_key(key);
                 if self.full_warmup_started {
                     key_task
@@ -459,6 +550,86 @@ impl App {
                     }
                 }
                 return iced::exit();
+            }
+            Message::RunAction(action) => {
+                return self.execute_context_action(action);
+            }
+        }
+    }
+
+    fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
+        let Some(result) = self.results.get(self.selected) else {
+            return Task::none();
+        };
+        let item = &result.item;
+
+        match action {
+            ContextAction::Open => {
+                return self.launch_selected();
+            }
+            ContextAction::OpenAsAdmin => {
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    let path = item.path.clone();
+                    let _ = std::process::Command::new("powershell")
+                        .args(["-Command", &format!("Start-Process '{}' -Verb RunAs", path)])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .spawn();
+                    return iced::exit();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    return self.launch_selected();
+                }
+            }
+            ContextAction::OpenFolder => {
+                let path = std::path::Path::new(&item.path);
+                let folder = if path.is_dir() {
+                    item.path.clone()
+                } else {
+                    path.parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                if !folder.is_empty() {
+                    let _ = kmd_core::action::open_with_system(&folder);
+                }
+                return iced::exit();
+            }
+            ContextAction::CopyPath => {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(&item.path);
+                }
+                return iced::exit();
+            }
+            ContextAction::CopyName => {
+                let text = if item.kind == ItemKind::Calculator || item.kind == ItemKind::Emoji {
+                    item.path.clone()
+                } else {
+                    item.name.clone()
+                };
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(&text);
+                }
+                return iced::exit();
+            }
+            ContextAction::Uninstall => {
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    let _ = std::process::Command::new("control")
+                        .arg("appwiz.cpl")
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .spawn();
+                    return iced::exit();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    return Task::none();
+                }
             }
         }
     }
@@ -1580,6 +1751,45 @@ impl App {
         iced::exit()
     }
 
+    /// Ctrl+숫자/Ctrl+Shift+Enter 단축키 → ContextAction 매핑
+    fn match_shortcut(
+        &self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Option<ContextAction> {
+        if self.results.is_empty() {
+            return None;
+        }
+        let item_kind = self.results.get(self.selected)?.item.kind;
+        let available = context_actions_for(item_kind);
+
+        if modifiers.control() && modifiers.shift() {
+            if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                if available.iter().any(|a| matches!(a, ContextAction::OpenAsAdmin)) {
+                    return Some(ContextAction::OpenAsAdmin);
+                }
+            }
+        }
+
+        if modifiers.control() && !modifiers.shift() {
+            let idx = match key {
+                keyboard::Key::Character(c) => match c.as_str() {
+                    "1" => Some(0usize),
+                    "2" => Some(1),
+                    "3" => Some(2),
+                    "4" => Some(3),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(i) = idx {
+                return available.into_iter().nth(i);
+            }
+        }
+
+        None
+    }
+
     fn handle_key(&mut self, key: keyboard::Key) -> Task<Message> {
         match key {
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
@@ -1631,13 +1841,19 @@ impl App {
     }
 
     fn resize_window(&self) -> Task<Message> {
-        let height = if self.results.is_empty() {
-            SEARCH_BAR_HEIGHT
-        } else {
+        let has_results = !self.results.is_empty();
+        let height = if has_results {
             let rows = self.results.len().min(MAX_VISIBLE_ROWS) as f32;
             SEARCH_BAR_HEIGHT + (rows * ROW_HEIGHT) + STATUS_BAR_HEIGHT
+        } else {
+            SEARCH_BAR_HEIGHT
         };
-        let size = Size::new(self.window_width, height);
+        let width = if has_results {
+            self.window_width + DETAIL_PANEL_WIDTH + 1.0
+        } else {
+            self.window_width
+        };
+        let size = Size::new(width, height);
 
         match self.window_id {
             Some(id) => window::resize(id, size),
@@ -1703,19 +1919,19 @@ impl App {
         let has_results = !self.results.is_empty();
 
         let search_bar = self.view_search_bar();
-        let mut content = Column::new().push(search_bar);
+        let mut left_col = Column::new().push(search_bar);
 
         if has_results {
             let border_color = t.border;
-            content = content.push(container(text("")).width(Fill).height(1).style(
+            left_col = left_col.push(container(text("")).width(Fill).height(1).style(
                 move |_: &_| container::Style {
                     background: Some(Background::Color(border_color)),
                     ..Default::default()
                 },
             ));
-            content = content.push(self.view_results_list());
+            left_col = left_col.push(self.view_results_list());
             let sep_color = t.border;
-            content = content.push(
+            left_col = left_col.push(
                 container(text(""))
                     .width(Fill)
                     .height(1)
@@ -1724,9 +1940,31 @@ impl App {
                         ..Default::default()
                     }),
             );
-            content = content.push(self.view_status_bar());
-            content = content.push(self.view_accent_bar());
+            left_col = left_col.push(self.view_status_bar());
+            left_col = left_col.push(self.view_accent_bar());
         }
+
+        let content: Element<'_, Message> = if has_results {
+            let divider_color = t.border;
+            let divider = container(text(""))
+                .width(1)
+                .height(Fill)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(divider_color)),
+                    ..Default::default()
+                });
+
+            row![
+                container(left_col).width(Fill),
+                divider,
+                self.view_detail_panel()
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into()
+        } else {
+            left_col.into()
+        };
 
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
@@ -1755,7 +1993,6 @@ impl App {
                 snap: false,
             });
 
-        // Invisible edge grips for natural resize on borderless window.
         let left_edge_resize = mouse_area(container(text("")).width(8).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::West))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
@@ -2053,6 +2290,149 @@ impl App {
             .height(2)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(accent)),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn view_detail_panel(&self) -> Element<'_, Message> {
+        let t = &self.theme;
+        let surface = t.surface;
+        let panel_bg = Color {
+            r: (surface.r + 0.02).min(1.0),
+            g: (surface.g + 0.02).min(1.0),
+            b: (surface.b + 0.02).min(1.0),
+            a: surface.a,
+        };
+
+        let Some(result) = self.results.get(self.selected) else {
+            return container(text(""))
+                .width(DETAIL_PANEL_WIDTH)
+                .height(Fill)
+                .into();
+        };
+        let item = &result.item;
+
+        // 큰 아이콘
+        let big_icon_size: f32 = 56.0;
+        let big_icon: Element<'_, Message> = if let Some(handle) =
+            crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
+                .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
+                .or_else(|| crate::app_icons::app_icon_for_item(item.kind, &item.path))
+        {
+            image(handle)
+                .content_fit(iced::ContentFit::Fill)
+                .width(big_icon_size)
+                .height(big_icon_size)
+                .into()
+        } else {
+            container(text(&item.icon).size(big_icon_size - 8.0))
+                .center_x(big_icon_size)
+                .center_y(big_icon_size)
+                .into()
+        };
+
+        let icon_row = container(big_icon)
+            .width(Fill)
+            .center_x(Fill)
+            .padding(Padding { top: 16.0, right: 0.0, bottom: 8.0, left: 0.0 });
+
+        // 이름
+        let name = text(&item.name)
+            .size(15)
+            .color(t.text)
+            .wrapping(Wrapping::None)
+            .center();
+
+        // 경로
+        let path_text = if item.path.len() > 40 {
+            format!("...{}", &item.path[item.path.len() - 37..])
+        } else {
+            item.path.clone()
+        };
+        let path_label = text(path_text)
+            .size(10)
+            .color(t.subtext)
+            .wrapping(Wrapping::None)
+            .center();
+
+        // 종류 뱃지
+        let kind_color = t.kind_color(item.kind);
+        let kind_label = item.kind.to_string();
+        let badge_bg = Color { a: 0.12, ..kind_color };
+        let badge_border = Color { a: 0.25, ..kind_color };
+        let badge = container(text(kind_label).size(10).color(kind_color))
+            .padding(Padding::from([2, 8]))
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(badge_bg)),
+                border: Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: badge_border,
+                },
+                ..Default::default()
+            });
+        let badge_row = container(badge).width(Fill).center_x(Fill);
+
+        // 구분선
+        let divider_color = t.border;
+        let action_divider = container(text(""))
+            .width(Fill)
+            .height(1)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_color)),
+                ..Default::default()
+            });
+
+        // 액션 버튼 목록
+        let actions = context_actions_for(item.kind);
+        let mut action_list = Column::new().spacing(0);
+        for (i, action) in actions.iter().enumerate() {
+            let action_clone = action.clone();
+            let label_text = action.label().to_string();
+            let shortcut_text = action.shortcut().to_string();
+            let is_primary = i == 0;
+
+            let accent_color = t.accent;
+            let text_color = if is_primary { t.accent } else { t.text };
+            let hover_bg = Color { a: 0.08, ..accent_color };
+
+            let label = text(label_text).size(12).color(text_color);
+            let shortcut = text(shortcut_text).size(10).color(t.overlay);
+
+            let action_row = row![label, Space::new().width(Fill), shortcut]
+                .align_y(iced::Alignment::Center)
+                .padding(Padding::from([8, 16]));
+
+            let action_container = container(action_row).width(Fill).style(
+                move |_: &_| container::Style {
+                    background: Some(Background::Color(hover_bg)),
+                    ..Default::default()
+                },
+            );
+
+            action_list = action_list.push(
+                mouse_area(action_container)
+                    .on_press(Message::RunAction(action_clone))
+                    .interaction(iced::mouse::Interaction::Pointer),
+            );
+        }
+
+        let panel_content = column![
+            icon_row,
+            container(name).width(Fill).center_x(Fill),
+            container(path_label).width(Fill).center_x(Fill).padding(Padding::from([2, 8])),
+            container(badge_row).padding(Padding::from([6, 0])),
+            action_divider,
+            action_list,
+        ]
+        .spacing(2);
+
+        container(panel_content)
+            .width(DETAIL_PANEL_WIDTH)
+            .height(Fill)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(panel_bg)),
                 ..Default::default()
             })
             .into()
