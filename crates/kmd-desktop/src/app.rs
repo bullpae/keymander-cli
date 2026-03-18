@@ -1673,6 +1673,16 @@ impl App {
                 },
             ));
             content = content.push(self.view_results_list());
+            let sep_color = t.border;
+            content = content.push(
+                container(text(""))
+                    .width(Fill)
+                    .height(1)
+                    .style(move |_: &_| container::Style {
+                        background: Some(Background::Color(sep_color)),
+                        ..Default::default()
+                    }),
+            );
             content = content.push(self.view_status_bar());
             content = content.push(self.view_accent_bar());
         }
@@ -1922,7 +1932,10 @@ impl App {
             .size(11)
             .color(t.subtext)
             .wrapping(Wrapping::None);
-        let info = column![title, subtitle].spacing(2).width(Fill);
+        let info = column![title, subtitle]
+            .spacing(2)
+            .width(Fill)
+            .clip(true);
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
