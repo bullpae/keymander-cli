@@ -191,23 +191,36 @@ fn load_config() -> Config {
 ///
 /// - "vim-nav": config 파일에 커스텀 설정이 있으면 그 값을 사용, 없으면 하드코딩 프리셋
 /// - "minimal": config 파일 → 없으면 minimal 프리셋
-/// - "none": 키 바인딩 비활성화
+/// - "none": 키 바인딩 비활성화 (global_hotkey만 동작)
 /// - 기타: TOML 커스텀 설정 시도 → 없으면 vim-nav 프리셋 폴백
+///
+/// `keybindings.global_hotkey`는 프로필과 무관하게 항상 적용됨.
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let profile = &config.launcher.keymap.active_profile;
 
-    if profile.contains("none") {
-        return KeybindConfig::empty();
+    let mut kb = if profile.contains("none") {
+        KeybindConfig::empty()
+    } else if profile.contains("minimal") {
+        KeybindConfig::from_config(&config.launcher.keymap)
+            .unwrap_or_else(KeybindConfig::minimal_preset)
+    } else {
+        KeybindConfig::from_config(&config.launcher.keymap)
+            .unwrap_or_else(KeybindConfig::vim_nav_preset)
+    };
+
+    // global_hotkey → kmd-desktop 실행 콤보 (프로필과 무관하게 항상 등록)
+    let hotkey = &config.keybindings.global_hotkey;
+    if !hotkey.is_empty() {
+        if let Some(trigger) = keybind::parse_combo_trigger(hotkey) {
+            kb.combos.push((
+                trigger,
+                keybind::BindAction::Launch("kmd-desktop".into()),
+            ));
+            tracing::info!("글로벌 핫키 등록: {hotkey} → kmd-desktop 실행");
+        }
     }
 
-    if profile.contains("minimal") {
-        return KeybindConfig::from_config(&config.launcher.keymap)
-            .unwrap_or_else(KeybindConfig::minimal_preset);
-    }
-
-    // "vim-nav", "custom", 기타 모두: config 파일 값 우선, 없으면 프리셋 폴백
-    KeybindConfig::from_config(&config.launcher.keymap)
-        .unwrap_or_else(KeybindConfig::vim_nav_preset)
+    kb
 }
 
 fn write_runtime_files(port: u16) -> color_eyre::Result<()> {

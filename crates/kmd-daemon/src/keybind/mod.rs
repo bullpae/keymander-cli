@@ -538,8 +538,8 @@ fn parse_modifier(name: &str) -> Option<Modifier> {
     }
 }
 
-/// 콤보 트리거 문자열 파서 (예: "Shift+Space" → ComboTrigger)
-fn parse_combo_trigger(s: &str) -> Option<ComboTrigger> {
+/// 콤보 트리거 문자열 파서 (예: "Shift+Space", "Alt+Space" → ComboTrigger)
+pub fn parse_combo_trigger(s: &str) -> Option<ComboTrigger> {
     let parts: Vec<&str> = s.split('+').collect();
     if parts.len() < 2 {
         return None;

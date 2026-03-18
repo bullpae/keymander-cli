@@ -65,8 +65,10 @@
 
 # ── 키 바인딩 ────────────────────────────────────────────────
 [keybindings]
-# 글로벌 핫키 (데몬 모드)
-# global_hotkey = "alt+space"
+# kmd-desktop 실행 글로벌 핫키 (데몬 모드에서 동작)
+# vim-nav 레이어와 독립적으로 항상 등록됨
+# 형식: "수정자+키" (예: "alt+space", "ctrl+space", "cmd+j")
+global_hotkey = "alt+space"
 
 # TUI 키 바인딩
 # quit = "ctrl+c"
