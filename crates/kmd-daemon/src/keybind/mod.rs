@@ -155,8 +155,18 @@ pub struct Layer {
     pub tap_action: Option<VKey>,
     /// tap-hold 판정 시간 (밀리초)
     pub tap_hold_ms: u32,
-    /// 레이어 활성 시 키 매핑
+    /// 레이어 활성 시 키 매핑 (즉시 실행)
     pub mappings: HashMap<VKey, BindAction>,
+    /// 레이어 내 더블탭 매핑: 첫 탭 → single_action, 두 번째 탭(timeout 이내) → double_action
+    pub double_tap_mappings: HashMap<VKey, LayerDoubleTap>,
+}
+
+/// 레이어 내 더블탭 설정
+#[derive(Debug, Clone)]
+pub struct LayerDoubleTap {
+    pub single_action: BindAction,
+    pub double_action: BindAction,
+    pub timeout_ms: u32,
 }
 
 // ── 전체 키 바인딩 설정 ─────────────────────────────────────────────────────
@@ -195,8 +205,6 @@ impl KeybindConfig {
         mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
-        mappings.insert(VKey::I, BindAction::SendKey(VKey::Home));
-        mappings.insert(VKey::O, BindAction::SendKey(VKey::End));
         mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
         // y → 줄 복사 (Home, Shift+End, Ctrl+C)
         mappings.insert(VKey::Y, BindAction::Macro(vec![
@@ -213,6 +221,25 @@ impl KeybindConfig {
         // / → Delete
         mappings.insert(VKey::Slash, BindAction::SendKey(VKey::Delete));
 
+        // Alt+I/O: 한 번 → 단어 이동, 더블탭 → Home/End
+        let mut double_tap_mappings = HashMap::new();
+        double_tap_mappings.insert(VKey::I, LayerDoubleTap {
+            single_action: BindAction::SendCombo {
+                modifiers: vec![VKey::LCtrl],
+                key: VKey::Left,
+            },
+            double_action: BindAction::SendKey(VKey::Home),
+            timeout_ms: 300,
+        });
+        double_tap_mappings.insert(VKey::O, LayerDoubleTap {
+            single_action: BindAction::SendCombo {
+                modifiers: vec![VKey::LCtrl],
+                key: VKey::Right,
+            },
+            double_action: BindAction::SendKey(VKey::End),
+            timeout_ms: 300,
+        });
+
         Self {
             remaps: HashMap::new(),
             layers: vec![Layer {
@@ -221,6 +248,7 @@ impl KeybindConfig {
                 tap_action: Some(VKey::Escape),
                 tap_hold_ms: 200,
                 mappings,
+                double_tap_mappings,
             }],
             combos: vec![
                 (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
@@ -242,7 +270,7 @@ impl KeybindConfig {
         remaps.insert(VKey::CapsLock, BindAction::SendKey(VKey::Escape));
         Self {
             remaps,
-            layers: Vec::new(),
+            layers: vec![],
             combos: vec![
                 (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
                  BindAction::SendKey(VKey::Hangul)),
@@ -320,6 +348,10 @@ mod tests {
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
+        assert!(!layer.mappings.contains_key(&VKey::I), "I는 double_tap_mappings로 이동");
+        assert!(!layer.mappings.contains_key(&VKey::O), "O는 double_tap_mappings로 이동");
+        assert!(layer.double_tap_mappings.contains_key(&VKey::I), "Alt+I 더블탭");
+        assert!(layer.double_tap_mappings.contains_key(&VKey::O), "Alt+O 더블탭");
         assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
         assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
     }

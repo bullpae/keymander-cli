@@ -35,6 +35,10 @@ struct HookState {
     combo_consumed_key: Option<VKey>,
     /// 더블탭으로 소비된 키 (해당 키의 keyup도 억제)
     dt_consumed_key: Option<VKey>,
+    /// 레이어 내 더블탭: 마지막으로 실행된 키
+    layer_dt_last_key: Option<VKey>,
+    /// 레이어 내 더블탭: 마지막 실행 시각 (tick count)
+    layer_dt_last_tick: u32,
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -361,6 +365,38 @@ unsafe extern "system" fn keyboard_hook_proc(
 
     // ── 4. 활성 레이어 매핑 확인 ──
     if let Some(layer_idx) = guard.active_layer {
+        // 4a. 레이어 내 더블탭 매핑 우선 확인
+        let dt_opt = guard.config.layers[layer_idx]
+            .double_tap_mappings
+            .get(&vkey)
+            .cloned();
+
+        if let Some(dt) = dt_opt {
+            if is_down {
+                guard.layer_key_used = true;
+
+                // 이전 탭과 동일 키이고 timeout 이내면 → 더블탭 액션
+                if guard.layer_dt_last_key == Some(vkey) {
+                    let elapsed = kb.time.wrapping_sub(guard.layer_dt_last_tick);
+                    if elapsed < dt.timeout_ms {
+                        guard.layer_dt_last_key = None;
+                        dispatch_action(guard, state, &dt.double_action);
+                        return 1;
+                    }
+                }
+
+                // 첫 번째 탭 → 싱글 액션 즉시 실행, 더블탭 대기 기록
+                guard.layer_dt_last_key = Some(vkey);
+                guard.layer_dt_last_tick = kb.time;
+                dispatch_action(guard, state, &dt.single_action);
+                return 1;
+            }
+            if is_up {
+                return 1;
+            }
+        }
+
+        // 4b. 일반 레이어 매핑
         let action_opt = guard.config.layers[layer_idx]
             .mappings
             .get(&vkey)
@@ -369,6 +405,7 @@ unsafe extern "system" fn keyboard_hook_proc(
         if let Some(action) = action_opt {
             if is_down {
                 guard.layer_key_used = true;
+                guard.layer_dt_last_key = None;
                 dispatch_action(guard, state, &action);
                 return 1;
             }
@@ -475,6 +512,8 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             last_tap_tick: 0,
             combo_consumed_key: None,
             dt_consumed_key: None,
+            layer_dt_last_key: None,
+            layer_dt_last_tick: 0,
         }));
 
         // 글로벌 상태 설정 (콜백에서 접근)
