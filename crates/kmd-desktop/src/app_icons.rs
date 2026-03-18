@@ -1,10 +1,11 @@
-//! 네이티브 앱 아이콘 추출 — OS Shell API로 실행 파일/바로가기에서 아이콘 추출
+//! 네이티브 아이콘 추출 — OS Shell API로 파일/앱/디렉터리 아이콘 추출
 //!
 //! Windows: SHGetFileInfoW → HICON → BGRA → RGBA pixel data
 //! macOS/Linux: 향후 구현 (현재 None 반환)
 //!
-//! 아이콘은 경로 기준으로 캐시되며, iced의 `Handle::from_bytes`를 사용하여
-//! 텍스처 캐시가 정상 작동한다.
+//! App/Executable: 경로 기준 캐시
+//! File: 확장자 기준 캐시 (같은 확장자는 같은 아이콘)
+//! Directory: 고정 "dir" 키로 캐시
 
 use iced::widget::image::Handle;
 use kmd_core::ItemKind;
@@ -15,25 +16,56 @@ const FALLBACK_ICON_SIZE: u32 = 32;
 const TARGET_ICON_SIZE: u32 = 32;
 
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::with_capacity(64)));
+    LazyLock::new(|| Mutex::new(HashMap::with_capacity(128)));
 
-/// App/Executable 아이템의 네이티브 아이콘 반환 (캐시됨).
-/// 지원하지 않는 종류이거나 추출 실패 시 None.
+/// 아이템의 네이티브 아이콘 반환 (캐시됨).
+/// App/Executable: 실행 파일 아이콘, File: 연결 프로그램 아이콘, Directory: 폴더 아이콘
 pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
-    if !matches!(kind, ItemKind::App | ItemKind::Executable) {
-        return None;
-    }
     if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
         return None;
     }
 
-    let mut cache = ICON_CACHE.lock().ok()?;
-    if let Some(cached) = cache.get(path) {
-        return cached.clone();
+    match kind {
+        ItemKind::App | ItemKind::Executable => {
+            let mut cache = ICON_CACHE.lock().ok()?;
+            if let Some(cached) = cache.get(path) {
+                return cached.clone();
+            }
+            let handle = platform::extract_icon(path);
+            cache.insert(path.to_string(), handle.clone());
+            handle
+        }
+        ItemKind::File => {
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext.is_empty() {
+                return None;
+            }
+            let cache_key = format!("ext:{ext}");
+            let mut cache = ICON_CACHE.lock().ok()?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached.clone();
+            }
+            let dummy = format!("file.{ext}");
+            let handle = platform::extract_icon_by_ext(&dummy);
+            cache.insert(cache_key, handle.clone());
+            handle
+        }
+        ItemKind::Directory => {
+            let cache_key = "type:dir".to_string();
+            let mut cache = ICON_CACHE.lock().ok()?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached.clone();
+            }
+            let handle = platform::extract_folder_icon();
+            cache.insert(cache_key, handle.clone());
+            handle
+        }
+        _ => None,
     }
-    let handle = platform::extract_icon(path);
-    cache.insert(path.to_string(), handle.clone());
-    handle
 }
 
 // ── Windows 구현 ────────────────────────────────────────────────────────────
@@ -42,33 +74,66 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
 mod platform {
     use super::FALLBACK_ICON_SIZE;
     use iced::widget::image::Handle;
+    use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+    use windows::Win32::UI::Shell::{
+        SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_LARGEICON,
+        SHGFI_USEFILEATTRIBUTES,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
+    /// 실제 파일/바로가기 경로에서 아이콘 추출 (App/Executable용)
     pub fn extract_icon(path: &str) -> Option<Handle> {
-        use windows::Win32::UI::Shell::{
-            SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_LARGEICON,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+        extract_shell_icon(path, FILE_FLAGS_AND_ATTRIBUTES(0), false)
+    }
 
+    /// 확장자 기반 연결 프로그램 아이콘 추출 (File용, 파일 존재 불필요)
+    pub fn extract_icon_by_ext(dummy_name: &str) -> Option<Handle> {
+        extract_shell_icon(
+            dummy_name,
+            FILE_FLAGS_AND_ATTRIBUTES(0x80), // FILE_ATTRIBUTE_NORMAL
+            true,
+        )
+    }
+
+    /// 폴더 아이콘 추출
+    pub fn extract_folder_icon() -> Option<Handle> {
+        extract_shell_icon(
+            "directory",
+            FILE_FLAGS_AND_ATTRIBUTES(0x10), // FILE_ATTRIBUTE_DIRECTORY
+            true,
+        )
+    }
+
+    fn extract_shell_icon(
+        path: &str,
+        file_attrs: FILE_FLAGS_AND_ATTRIBUTES,
+        use_file_attrs: bool,
+    ) -> Option<Handle> {
         unsafe {
             let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
             let mut info = SHFILEINFOW::default();
 
+            let mut flags = SHGFI_ICON.0 | SHGFI_LARGEICON.0;
+            if use_file_attrs {
+                flags |= SHGFI_USEFILEATTRIBUTES.0;
+            }
+
             let result = SHGetFileInfoW(
                 windows::core::PCWSTR(wide.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+                file_attrs,
                 Some(&mut info),
                 std::mem::size_of::<SHFILEINFOW>() as u32,
-                SHGFI_FLAGS(SHGFI_ICON.0 | SHGFI_LARGEICON.0),
+                SHGFI_FLAGS(flags),
             );
 
             if result == 0 || info.hIcon.0.is_null() {
                 return None;
             }
 
-            let result = hicon_to_rgba(info.hIcon);
+            let rgba = hicon_to_rgba(info.hIcon);
             let _ = DestroyIcon(info.hIcon);
 
-            result.and_then(|(pixels, w, h)| normalize_and_encode(w, h, &pixels))
+            rgba.and_then(|(pixels, w, h)| normalize_and_encode(w, h, &pixels))
         }
     }
 
@@ -216,6 +281,14 @@ mod platform {
     use iced::widget::image::Handle;
 
     pub fn extract_icon(_path: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_icon_by_ext(_dummy_name: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_folder_icon() -> Option<Handle> {
         None
     }
 }
