@@ -134,12 +134,30 @@ fn vk_to_vkey(vk: u16) -> Option<VKey> {
 /// LLKHF_INJECTED 플래그 — SendInput으로 주입된 이벤트 식별
 const LLKHF_INJECTED: u32 = 0x00000010;
 
+/// 확장 키 여부 판정 — 이 키들은 KEYEVENTF_EXTENDEDKEY 플래그 필수
+fn is_extended_vk(vk: u16) -> bool {
+    matches!(
+        vk,
+        VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT
+            | VK_HOME | VK_END | VK_PRIOR | VK_NEXT
+            | VK_INSERT | VK_DELETE
+            | VK_RCONTROL | VK_RMENU
+            | VK_LWIN | VK_RWIN
+            | VK_SNAPSHOT
+    )
+}
+
 fn send_key_down(vk: u16) {
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;
         input.Anonymous.ki.wVk = vk;
-        input.Anonymous.ki.dwFlags = 0;
+        input.Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
+        input.Anonymous.ki.dwFlags = if is_extended_vk(vk) {
+            KEYEVENTF_EXTENDEDKEY
+        } else {
+            0
+        };
         SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
     }
 }
@@ -149,7 +167,13 @@ fn send_key_up(vk: u16) {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;
         input.Anonymous.ki.wVk = vk;
-        input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+        input.Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
+        input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP
+            | if is_extended_vk(vk) {
+                KEYEVENTF_EXTENDEDKEY
+            } else {
+                0
+            };
         SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
     }
 }
