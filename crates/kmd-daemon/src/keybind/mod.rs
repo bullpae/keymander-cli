@@ -12,50 +12,156 @@ pub mod windows;
 pub mod macos;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── 가상 키 코드 (플랫폼 공용) ──────────────────────────────────────────────
 
 /// 플랫폼 독립적 가상 키 식별자
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VKey {
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
-    Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    Escape, Tab, CapsLock, Space, Enter, Backspace, Delete,
-    Left, Right, Up, Down,
-    Home, End, PageUp, PageDown,
-    Insert, PrintScreen, ScrollLock, Pause,
-    LShift, RShift, LCtrl, RCtrl, LAlt, RAlt, LWin, RWin,
-    Semicolon, Quote, Comma, Period, Slash, Backslash,
-    LBracket, RBracket, Minus, Equal, Grave,
-    Hangul, Hanja,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    Num0,
+    Num1,
+    Num2,
+    Num3,
+    Num4,
+    Num5,
+    Num6,
+    Num7,
+    Num8,
+    Num9,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    Escape,
+    Tab,
+    CapsLock,
+    Space,
+    Enter,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    PrintScreen,
+    ScrollLock,
+    Pause,
+    LShift,
+    RShift,
+    LCtrl,
+    RCtrl,
+    LAlt,
+    RAlt,
+    LWin,
+    RWin,
+    Semicolon,
+    Quote,
+    Comma,
+    Period,
+    Slash,
+    Backslash,
+    LBracket,
+    RBracket,
+    Minus,
+    Equal,
+    Grave,
+    Hangul,
+    Hanja,
 }
 
 /// 키 이름 문자열 → VKey 파싱 (config 파일 파싱 시 사용)
 impl VKey {
-    #[allow(dead_code)]
     pub fn from_name(name: &str) -> Option<Self> {
         let n = name.trim().to_ascii_lowercase();
         match n.as_str() {
-            "a" => Some(Self::A), "b" => Some(Self::B), "c" => Some(Self::C),
-            "d" => Some(Self::D), "e" => Some(Self::E), "f" => Some(Self::F),
-            "g" => Some(Self::G), "h" => Some(Self::H), "i" => Some(Self::I),
-            "j" => Some(Self::J), "k" => Some(Self::K), "l" => Some(Self::L),
-            "m" => Some(Self::M), "n" => Some(Self::N), "o" => Some(Self::O),
-            "p" => Some(Self::P), "q" => Some(Self::Q), "r" => Some(Self::R),
-            "s" => Some(Self::S), "t" => Some(Self::T), "u" => Some(Self::U),
-            "v" => Some(Self::V), "w" => Some(Self::W), "x" => Some(Self::X),
-            "y" => Some(Self::Y), "z" => Some(Self::Z),
-            "0" => Some(Self::Num0), "1" => Some(Self::Num1), "2" => Some(Self::Num2),
-            "3" => Some(Self::Num3), "4" => Some(Self::Num4), "5" => Some(Self::Num5),
-            "6" => Some(Self::Num6), "7" => Some(Self::Num7), "8" => Some(Self::Num8),
+            "a" => Some(Self::A),
+            "b" => Some(Self::B),
+            "c" => Some(Self::C),
+            "d" => Some(Self::D),
+            "e" => Some(Self::E),
+            "f" => Some(Self::F),
+            "g" => Some(Self::G),
+            "h" => Some(Self::H),
+            "i" => Some(Self::I),
+            "j" => Some(Self::J),
+            "k" => Some(Self::K),
+            "l" => Some(Self::L),
+            "m" => Some(Self::M),
+            "n" => Some(Self::N),
+            "o" => Some(Self::O),
+            "p" => Some(Self::P),
+            "q" => Some(Self::Q),
+            "r" => Some(Self::R),
+            "s" => Some(Self::S),
+            "t" => Some(Self::T),
+            "u" => Some(Self::U),
+            "v" => Some(Self::V),
+            "w" => Some(Self::W),
+            "x" => Some(Self::X),
+            "y" => Some(Self::Y),
+            "z" => Some(Self::Z),
+            "0" => Some(Self::Num0),
+            "1" => Some(Self::Num1),
+            "2" => Some(Self::Num2),
+            "3" => Some(Self::Num3),
+            "4" => Some(Self::Num4),
+            "5" => Some(Self::Num5),
+            "6" => Some(Self::Num6),
+            "7" => Some(Self::Num7),
+            "8" => Some(Self::Num8),
             "9" => Some(Self::Num9),
-            "f1" => Some(Self::F1), "f2" => Some(Self::F2), "f3" => Some(Self::F3),
-            "f4" => Some(Self::F4), "f5" => Some(Self::F5), "f6" => Some(Self::F6),
-            "f7" => Some(Self::F7), "f8" => Some(Self::F8), "f9" => Some(Self::F9),
-            "f10" => Some(Self::F10), "f11" => Some(Self::F11), "f12" => Some(Self::F12),
+            "f1" => Some(Self::F1),
+            "f2" => Some(Self::F2),
+            "f3" => Some(Self::F3),
+            "f4" => Some(Self::F4),
+            "f5" => Some(Self::F5),
+            "f6" => Some(Self::F6),
+            "f7" => Some(Self::F7),
+            "f8" => Some(Self::F8),
+            "f9" => Some(Self::F9),
+            "f10" => Some(Self::F10),
+            "f11" => Some(Self::F11),
+            "f12" => Some(Self::F12),
             "esc" | "escape" => Some(Self::Escape),
             "tab" => Some(Self::Tab),
             "caps" | "capslock" => Some(Self::CapsLock),
@@ -63,18 +169,24 @@ impl VKey {
             "enter" | "return" | "ret" => Some(Self::Enter),
             "backspace" | "bspc" | "bs" => Some(Self::Backspace),
             "delete" | "del" => Some(Self::Delete),
-            "left" => Some(Self::Left), "right" | "rght" => Some(Self::Right),
-            "up" => Some(Self::Up), "down" => Some(Self::Down),
-            "home" => Some(Self::Home), "end" => Some(Self::End),
+            "left" => Some(Self::Left),
+            "right" | "rght" => Some(Self::Right),
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "home" => Some(Self::Home),
+            "end" => Some(Self::End),
             "pageup" | "pgup" => Some(Self::PageUp),
             "pagedown" | "pgdn" => Some(Self::PageDown),
             "insert" | "ins" => Some(Self::Insert),
             "printscreen" | "prtsc" => Some(Self::PrintScreen),
             "scrolllock" => Some(Self::ScrollLock),
             "pause" => Some(Self::Pause),
-            "lshift" => Some(Self::LShift), "rshift" => Some(Self::RShift),
-            "lctrl" | "lcontrol" => Some(Self::LCtrl), "rctrl" | "rcontrol" => Some(Self::RCtrl),
-            "lalt" => Some(Self::LAlt), "ralt" => Some(Self::RAlt),
+            "lshift" => Some(Self::LShift),
+            "rshift" => Some(Self::RShift),
+            "lctrl" | "lcontrol" => Some(Self::LCtrl),
+            "rctrl" | "rcontrol" => Some(Self::RCtrl),
+            "lalt" => Some(Self::LAlt),
+            "ralt" => Some(Self::RAlt),
             "lwin" | "lsuper" | "lmeta" | "lcmd" | "cmd" => Some(Self::LWin),
             "rwin" | "rsuper" | "rmeta" | "rcmd" => Some(Self::RWin),
             ";" | "semicolon" => Some(Self::Semicolon),
@@ -99,20 +211,31 @@ impl VKey {
 
 /// 복사/붙여넣기에 사용할 수정자 (macOS: Cmd, Windows/Linux: Ctrl)
 #[cfg(target_os = "macos")]
-fn platform_copy_modifier() -> VKey { VKey::LWin }
+fn platform_copy_modifier() -> VKey {
+    VKey::LWin
+}
 #[cfg(not(target_os = "macos"))]
-fn platform_copy_modifier() -> VKey { VKey::LCtrl }
+fn platform_copy_modifier() -> VKey {
+    VKey::LCtrl
+}
 
 /// 단어 이동에 사용할 수정자 (macOS: Option, Windows/Linux: Ctrl)
 #[cfg(target_os = "macos")]
-fn platform_word_modifier() -> VKey { VKey::LAlt }
+fn platform_word_modifier() -> VKey {
+    VKey::LAlt
+}
 #[cfg(not(target_os = "macos"))]
-fn platform_word_modifier() -> VKey { VKey::LCtrl }
+fn platform_word_modifier() -> VKey {
+    VKey::LCtrl
+}
 
 /// 줄 시작 액션 (macOS: Cmd+Left, Windows/Linux: Home)
 #[cfg(target_os = "macos")]
 fn platform_home_action() -> BindAction {
-    BindAction::SendCombo { modifiers: vec![VKey::LWin], key: VKey::Left }
+    BindAction::SendCombo {
+        modifiers: vec![VKey::LWin],
+        key: VKey::Left,
+    }
 }
 #[cfg(not(target_os = "macos"))]
 fn platform_home_action() -> BindAction {
@@ -122,18 +245,45 @@ fn platform_home_action() -> BindAction {
 /// 줄 끝 액션 (macOS: Cmd+Right, Windows/Linux: End)
 #[cfg(target_os = "macos")]
 fn platform_end_action() -> BindAction {
-    BindAction::SendCombo { modifiers: vec![VKey::LWin], key: VKey::Right }
+    BindAction::SendCombo {
+        modifiers: vec![VKey::LWin],
+        key: VKey::Right,
+    }
 }
 #[cfg(not(target_os = "macos"))]
 fn platform_end_action() -> BindAction {
     BindAction::SendKey(VKey::End)
 }
 
+// ── 수정자 키 헬퍼 (플랫폼 공용) ─────────────────────────────────────────────
+
+pub fn is_modifier_key(vkey: &VKey) -> bool {
+    matches!(
+        vkey,
+        VKey::LShift
+            | VKey::RShift
+            | VKey::LCtrl
+            | VKey::RCtrl
+            | VKey::LAlt
+            | VKey::RAlt
+            | VKey::LWin
+            | VKey::RWin
+    )
+}
+
+pub fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
+    match m {
+        Modifier::Shift => held.contains(&VKey::LShift) || held.contains(&VKey::RShift),
+        Modifier::Ctrl => held.contains(&VKey::LCtrl) || held.contains(&VKey::RCtrl),
+        Modifier::Alt => held.contains(&VKey::LAlt) || held.contains(&VKey::RAlt),
+        Modifier::Win => held.contains(&VKey::LWin) || held.contains(&VKey::RWin),
+    }
+}
+
 // ── 바인딩 액션 ─────────────────────────────────────────────────────────────
 
 /// 키 바인딩이 트리거되었을 때 수행할 동작
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum BindAction {
     /// 다른 키 하나를 전송
     SendKey(VKey),
@@ -147,7 +297,6 @@ pub enum BindAction {
 
 /// 매크로 한 스텝
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum MacroStep {
     KeyPress(VKey),
     KeyRelease(VKey),
@@ -158,7 +307,6 @@ pub enum MacroStep {
 
 /// 수정자 키 종류 (좌/우 구분 없이 매칭)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum Modifier {
     Shift,
     Ctrl,
@@ -168,7 +316,6 @@ pub enum Modifier {
 
 /// 수정자+키 조합 트리거 (예: Shift+Space)
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ComboTrigger {
     pub modifiers: Vec<Modifier>,
     pub key: VKey,
@@ -176,7 +323,6 @@ pub struct ComboTrigger {
 
 /// 더블탭 바인딩: 같은 키를 빠르게 두 번 탭하면 액션 실행
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct DoubleTapBinding {
     pub key: VKey,
     pub action: BindAction,
@@ -187,7 +333,6 @@ pub struct DoubleTapBinding {
 
 /// 키 레이어: 특정 키를 홀드하면 활성화되는 리매핑 세트
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Layer {
     pub name: String,
     /// 이 레이어를 활성화하는 트리거 키
@@ -204,7 +349,6 @@ pub struct Layer {
 
 /// 레이어 내 더블탭 설정
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LayerDoubleTap {
     pub single_action: BindAction,
     pub double_action: BindAction,
@@ -215,7 +359,6 @@ pub struct LayerDoubleTap {
 
 /// 키 바인딩 엔진 설정
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct KeybindConfig {
     /// 항상 활성화되는 단순 리매핑
     pub remaps: HashMap<VKey, BindAction>,
@@ -228,7 +371,6 @@ pub struct KeybindConfig {
 }
 
 impl KeybindConfig {
-    #[allow(dead_code)]
     pub fn empty() -> Self {
         Self {
             remaps: HashMap::new(),
@@ -258,38 +400,59 @@ impl KeybindConfig {
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
         mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
         // y → 줄 복사
-        mappings.insert(VKey::Y, BindAction::Macro(vec![
-            MacroStep::Combo { modifiers: vec![copy_mod], key: VKey::Left },
-            MacroStep::Combo { modifiers: vec![VKey::LShift, copy_mod], key: VKey::Right },
-            MacroStep::Combo { modifiers: vec![copy_mod], key: VKey::C },
-        ]));
+        mappings.insert(
+            VKey::Y,
+            BindAction::Macro(vec![
+                MacroStep::Combo {
+                    modifiers: vec![copy_mod],
+                    key: VKey::Left,
+                },
+                MacroStep::Combo {
+                    modifiers: vec![VKey::LShift, copy_mod],
+                    key: VKey::Right,
+                },
+                MacroStep::Combo {
+                    modifiers: vec![copy_mod],
+                    key: VKey::C,
+                },
+            ]),
+        );
         // p → 붙여넣기
-        mappings.insert(VKey::P, BindAction::SendCombo {
-            modifiers: vec![copy_mod],
-            key: VKey::V,
-        });
+        mappings.insert(
+            VKey::P,
+            BindAction::SendCombo {
+                modifiers: vec![copy_mod],
+                key: VKey::V,
+            },
+        );
         // / → Delete
         mappings.insert(VKey::Slash, BindAction::SendKey(VKey::Delete));
 
         let mut double_tap_mappings = HashMap::new();
         // I: 탭 → 단어 왼쪽, 더블탭 → 줄 시작
-        double_tap_mappings.insert(VKey::I, LayerDoubleTap {
-            single_action: BindAction::SendCombo {
-                modifiers: vec![word_mod],
-                key: VKey::Left,
+        double_tap_mappings.insert(
+            VKey::I,
+            LayerDoubleTap {
+                single_action: BindAction::SendCombo {
+                    modifiers: vec![word_mod],
+                    key: VKey::Left,
+                },
+                double_action: platform_home_action(),
+                timeout_ms: 300,
             },
-            double_action: platform_home_action(),
-            timeout_ms: 300,
-        });
+        );
         // O: 탭 → 단어 오른쪽, 더블탭 → 줄 끝
-        double_tap_mappings.insert(VKey::O, LayerDoubleTap {
-            single_action: BindAction::SendCombo {
-                modifiers: vec![word_mod],
-                key: VKey::Right,
+        double_tap_mappings.insert(
+            VKey::O,
+            LayerDoubleTap {
+                single_action: BindAction::SendCombo {
+                    modifiers: vec![word_mod],
+                    key: VKey::Right,
+                },
+                double_action: platform_end_action(),
+                timeout_ms: 300,
             },
-            double_action: platform_end_action(),
-            timeout_ms: 300,
-        });
+        );
 
         Self {
             remaps: HashMap::new(),
@@ -301,17 +464,18 @@ impl KeybindConfig {
                 mappings,
                 double_tap_mappings,
             }],
-            combos: vec![
-                (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
-                 BindAction::SendKey(VKey::Hangul)),
-            ],
-            double_taps: vec![
-                DoubleTapBinding {
-                    key: VKey::RShift,
-                    action: BindAction::SendKey(VKey::Hangul),
-                    timeout_ms: 300,
+            combos: vec![(
+                ComboTrigger {
+                    modifiers: vec![Modifier::Shift],
+                    key: VKey::Space,
                 },
-            ],
+                BindAction::SendKey(VKey::Hangul),
+            )],
+            double_taps: vec![DoubleTapBinding {
+                key: VKey::RShift,
+                action: BindAction::SendKey(VKey::Hangul),
+                timeout_ms: 300,
+            }],
         }
     }
 
@@ -322,17 +486,18 @@ impl KeybindConfig {
         Self {
             remaps,
             layers: vec![],
-            combos: vec![
-                (ComboTrigger { modifiers: vec![Modifier::Shift], key: VKey::Space },
-                 BindAction::SendKey(VKey::Hangul)),
-            ],
-            double_taps: vec![
-                DoubleTapBinding {
-                    key: VKey::RShift,
-                    action: BindAction::SendKey(VKey::Hangul),
-                    timeout_ms: 300,
+            combos: vec![(
+                ComboTrigger {
+                    modifiers: vec![Modifier::Shift],
+                    key: VKey::Space,
                 },
-            ],
+                BindAction::SendKey(VKey::Hangul),
+            )],
+            double_taps: vec![DoubleTapBinding {
+                key: VKey::RShift,
+                action: BindAction::SendKey(VKey::Hangul),
+                timeout_ms: 300,
+            }],
         }
     }
 }
@@ -367,14 +532,14 @@ impl KeybindConfig {
                 continue;
             }
             let Some(trigger) = VKey::from_name(&layer_cfg.trigger) else {
-                tracing::warn!("레이어 '{name}': 알 수 없는 trigger '{}'", layer_cfg.trigger);
+                tracing::warn!(
+                    "레이어 '{name}': 알 수 없는 trigger '{}'",
+                    layer_cfg.trigger
+                );
                 continue;
             };
 
-            let tap_action = layer_cfg
-                .tap_action
-                .as_deref()
-                .and_then(VKey::from_name);
+            let tap_action = layer_cfg.tap_action.as_deref().and_then(VKey::from_name);
 
             let mut mappings = HashMap::new();
             for (k, v) in &layer_cfg.mappings {
@@ -423,9 +588,10 @@ impl KeybindConfig {
 
         let mut combos = Vec::new();
         for combo_cfg in &cfg.combos {
-            if let (Some(trigger), Some(action)) =
-                (parse_combo_trigger(&combo_cfg.trigger), parse_action(&combo_cfg.action))
-            {
+            if let (Some(trigger), Some(action)) = (
+                parse_combo_trigger(&combo_cfg.trigger),
+                parse_action(&combo_cfg.action),
+            ) {
                 combos.push((trigger, action));
             } else {
                 tracing::warn!(
@@ -533,7 +699,9 @@ fn parse_modifier(name: &str) -> Option<Modifier> {
         "shift" | "lshift" | "rshift" => Some(Modifier::Shift),
         "ctrl" | "control" | "lctrl" | "rctrl" => Some(Modifier::Ctrl),
         "alt" | "lalt" | "ralt" => Some(Modifier::Alt),
-        "win" | "super" | "meta" | "cmd" | "command" | "lwin" | "rwin" | "lcmd" | "rcmd" => Some(Modifier::Win),
+        "win" | "super" | "meta" | "cmd" | "command" | "lwin" | "rwin" | "lcmd" | "rcmd" => {
+            Some(Modifier::Win)
+        }
         _ => None,
     }
 }
@@ -650,10 +818,22 @@ mod tests {
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
-        assert!(!layer.mappings.contains_key(&VKey::I), "I는 double_tap_mappings로 이동");
-        assert!(!layer.mappings.contains_key(&VKey::O), "O는 double_tap_mappings로 이동");
-        assert!(layer.double_tap_mappings.contains_key(&VKey::I), "Alt+I 더블탭");
-        assert!(layer.double_tap_mappings.contains_key(&VKey::O), "Alt+O 더블탭");
+        assert!(
+            !layer.mappings.contains_key(&VKey::I),
+            "I는 double_tap_mappings로 이동"
+        );
+        assert!(
+            !layer.mappings.contains_key(&VKey::O),
+            "O는 double_tap_mappings로 이동"
+        );
+        assert!(
+            layer.double_tap_mappings.contains_key(&VKey::I),
+            "Alt+I 더블탭"
+        );
+        assert!(
+            layer.double_tap_mappings.contains_key(&VKey::O),
+            "Alt+O 더블탭"
+        );
         assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
         assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
     }
@@ -677,8 +857,14 @@ mod tests {
 
     #[test]
     fn test_parse_action_simple() {
-        assert!(matches!(parse_action("Home"), Some(BindAction::SendKey(VKey::Home))));
-        assert!(matches!(parse_action("Escape"), Some(BindAction::SendKey(VKey::Escape))));
+        assert!(matches!(
+            parse_action("Home"),
+            Some(BindAction::SendKey(VKey::Home))
+        ));
+        assert!(matches!(
+            parse_action("Escape"),
+            Some(BindAction::SendKey(VKey::Escape))
+        ));
         assert!(parse_action("").is_none());
         assert!(parse_action("nonexistent").is_none());
     }
@@ -730,7 +916,10 @@ mod tests {
         assert_eq!(trigger.modifiers, vec![Modifier::Shift]);
         assert_eq!(trigger.key, VKey::Space);
 
-        assert!(parse_combo_trigger("Space").is_none(), "수정자 없는 트리거는 실패");
+        assert!(
+            parse_combo_trigger("Space").is_none(),
+            "수정자 없는 트리거는 실패"
+        );
     }
 
     #[test]
@@ -754,11 +943,14 @@ mod tests {
         layer.tap_action = Some("Escape".into());
         layer.mappings.insert("H".into(), "Left".into());
         layer.mappings.insert("J".into(), "Down".into());
-        layer.double_taps.insert("I".into(), LayerDoubleTapToml {
-            single: "Ctrl+Left".into(),
-            double: "Home".into(),
-            timeout_ms: Some(300),
-        });
+        layer.double_taps.insert(
+            "I".into(),
+            LayerDoubleTapToml {
+                single: "Ctrl+Left".into(),
+                double: "Home".into(),
+                timeout_ms: Some(300),
+            },
+        );
         keymap.layers.insert("nav".into(), layer);
 
         let config = KeybindConfig::from_config(&keymap).unwrap();

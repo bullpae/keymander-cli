@@ -304,7 +304,7 @@ impl Default for KeymapConfig {
 }
 
 /// TOML 레이어 설정
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LayerToml {
     /// 레이어 활성화 트리거 키 (예: "LAlt")
@@ -317,18 +317,6 @@ pub struct LayerToml {
     pub mappings: HashMap<String, String>,
     /// 레이어 내 더블탭: 키이름 = { single, double, timeout_ms }
     pub double_taps: HashMap<String, LayerDoubleTapToml>,
-}
-
-impl Default for LayerToml {
-    fn default() -> Self {
-        Self {
-            trigger: String::new(),
-            tap_action: None,
-            tap_hold_ms: None,
-            mappings: HashMap::new(),
-            double_taps: HashMap::new(),
-        }
-    }
 }
 
 /// TOML 레이어 내 더블탭 설정

@@ -56,11 +56,7 @@ pub fn save_both(index: &Index, bin_path: &Path, json_path: &Path) {
 
 /// 캐시에서 인덱스 로드 시도 (bincode → JSON fallback).
 /// `expected_version`과 일치해야 반환. JSON 히트 시 bincode 캐시를 자동 생성.
-pub fn try_load_cached(
-    bin_path: &Path,
-    json_path: &Path,
-    expected_version: &str,
-) -> Option<Index> {
+pub fn try_load_cached(bin_path: &Path, json_path: &Path, expected_version: &str) -> Option<Index> {
     if bin_path.exists() {
         match load_index_bin(bin_path) {
             Ok(idx) if idx.version == expected_version => return Some(idx),
@@ -161,7 +157,10 @@ mod tests {
 
         let json_size = std::fs::metadata(&json_path).unwrap().len();
         let bin_size = std::fs::metadata(&bin_path).unwrap().len();
-        assert!(bin_size < json_size, "bincode({bin_size}) >= json({json_size})");
+        assert!(
+            bin_size < json_size,
+            "bincode({bin_size}) >= json({json_size})"
+        );
     }
 
     #[test]

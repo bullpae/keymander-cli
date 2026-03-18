@@ -215,7 +215,12 @@ mod platform {
 
         let mut buf = Vec::new();
         PngEncoder::new(&mut buf)
-            .write_image(resized.as_raw(), target, target, image::ExtendedColorType::Rgba8)
+            .write_image(
+                resized.as_raw(),
+                target,
+                target,
+                image::ExtendedColorType::Rgba8,
+            )
             .ok()?;
         Some(Handle::from_bytes(buf))
     }

@@ -33,21 +33,18 @@ mod platform {
                 .map(|p| format!("{p}\\AppData\\Roaming"))
                 .unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".into())
         });
-        PathBuf::from(appdata)
-            .join("Microsoft\\Windows\\Start Menu\\Programs\\Startup")
+        PathBuf::from(appdata).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup")
     }
 
     pub fn install() -> Result<String, String> {
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
+        let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
         let vbs = format!(
             "Set s = CreateObject(\"WScript.Shell\")\ns.Run \"\"\"{}\"\" start\", 0, False",
             exe.display()
         );
 
         let path = startup_dir().join(SCRIPT_NAME);
-        std::fs::write(&path, vbs)
-            .map_err(|e| format!("시작 프로그램 등록 실패: {e}"))?;
+        std::fs::write(&path, vbs).map_err(|e| format!("시작 프로그램 등록 실패: {e}"))?;
 
         Ok(format!("등록 위치: {}", path.display()))
     }
@@ -55,8 +52,7 @@ mod platform {
     pub fn uninstall() -> Result<(), String> {
         let path = startup_dir().join(SCRIPT_NAME);
         if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|e| format!("시작 프로그램 제거 실패: {e}"))?;
+            std::fs::remove_file(&path).map_err(|e| format!("시작 프로그램 제거 실패: {e}"))?;
         }
         Ok(())
     }
@@ -83,11 +79,10 @@ mod platform {
     }
 
     pub fn install() -> Result<String, String> {
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
+        let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
 
         let plist = format!(
-r#"<?xml version="1.0" encoding="UTF-8"?>
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -159,11 +154,10 @@ mod platform {
     }
 
     pub fn install() -> Result<String, String> {
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
+        let exe = std::env::current_exe().map_err(|e| format!("실행 파일 경로 확인 실패: {e}"))?;
 
         let unit = format!(
-r#"[Unit]
+            r#"[Unit]
 Description=keymander Daemon
 
 [Service]

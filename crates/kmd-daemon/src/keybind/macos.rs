@@ -5,7 +5,10 @@
 //!
 //! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
 
-use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, Modifier, VKey};
+use super::{
+    is_modifier_key, modifier_satisfied, BindAction, KeybindConfig, KeyboardBackend, MacroStep,
+    VKey,
+};
 use std::collections::HashSet;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,8 +78,29 @@ extern "C" {
     fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
 }
 
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        num_values: i64,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> *mut c_void;
+    fn CFStringCreateWithCString(
+        allocator: *const c_void,
+        c_str: *const u8,
+        encoding: u32,
+    ) -> *const c_void;
+    static kCFBooleanTrue: *const c_void;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
     fn CFMachPortCreateRunLoopSource(
         allocator: *const c_void,
         port: CFMachPortRef,
@@ -94,81 +118,180 @@ extern "C" {
 
 fn vkey_to_cg(key: VKey) -> u16 {
     match key {
-        VKey::A => 0x00, VKey::S => 0x01, VKey::D => 0x02, VKey::F => 0x03,
-        VKey::H => 0x04, VKey::G => 0x05, VKey::Z => 0x06, VKey::X => 0x07,
-        VKey::C => 0x08, VKey::V => 0x09, VKey::B => 0x0B, VKey::Q => 0x0C,
-        VKey::W => 0x0D, VKey::E => 0x0E, VKey::R => 0x0F, VKey::Y => 0x10,
-        VKey::T => 0x11, VKey::O => 0x1F, VKey::U => 0x20, VKey::I => 0x22,
-        VKey::P => 0x23, VKey::L => 0x25, VKey::J => 0x26, VKey::K => 0x28,
-        VKey::N => 0x2D, VKey::M => 0x2E,
-        VKey::Num0 => 0x1D, VKey::Num1 => 0x12, VKey::Num2 => 0x13,
-        VKey::Num3 => 0x14, VKey::Num4 => 0x15, VKey::Num5 => 0x17,
-        VKey::Num6 => 0x16, VKey::Num7 => 0x1A, VKey::Num8 => 0x1C,
+        VKey::A => 0x00,
+        VKey::S => 0x01,
+        VKey::D => 0x02,
+        VKey::F => 0x03,
+        VKey::H => 0x04,
+        VKey::G => 0x05,
+        VKey::Z => 0x06,
+        VKey::X => 0x07,
+        VKey::C => 0x08,
+        VKey::V => 0x09,
+        VKey::B => 0x0B,
+        VKey::Q => 0x0C,
+        VKey::W => 0x0D,
+        VKey::E => 0x0E,
+        VKey::R => 0x0F,
+        VKey::Y => 0x10,
+        VKey::T => 0x11,
+        VKey::O => 0x1F,
+        VKey::U => 0x20,
+        VKey::I => 0x22,
+        VKey::P => 0x23,
+        VKey::L => 0x25,
+        VKey::J => 0x26,
+        VKey::K => 0x28,
+        VKey::N => 0x2D,
+        VKey::M => 0x2E,
+        VKey::Num0 => 0x1D,
+        VKey::Num1 => 0x12,
+        VKey::Num2 => 0x13,
+        VKey::Num3 => 0x14,
+        VKey::Num4 => 0x15,
+        VKey::Num5 => 0x17,
+        VKey::Num6 => 0x16,
+        VKey::Num7 => 0x1A,
+        VKey::Num8 => 0x1C,
         VKey::Num9 => 0x19,
-        VKey::F1 => 0x7A, VKey::F2 => 0x78, VKey::F3 => 0x63,
-        VKey::F4 => 0x76, VKey::F5 => 0x60, VKey::F6 => 0x61,
-        VKey::F7 => 0x62, VKey::F8 => 0x64, VKey::F9 => 0x65,
-        VKey::F10 => 0x6D, VKey::F11 => 0x67, VKey::F12 => 0x6F,
-        VKey::Escape => 0x35, VKey::Tab => 0x30,
-        VKey::CapsLock => 0x39, VKey::Space => 0x31,
-        VKey::Enter => 0x24, VKey::Backspace => 0x33,
+        VKey::F1 => 0x7A,
+        VKey::F2 => 0x78,
+        VKey::F3 => 0x63,
+        VKey::F4 => 0x76,
+        VKey::F5 => 0x60,
+        VKey::F6 => 0x61,
+        VKey::F7 => 0x62,
+        VKey::F8 => 0x64,
+        VKey::F9 => 0x65,
+        VKey::F10 => 0x6D,
+        VKey::F11 => 0x67,
+        VKey::F12 => 0x6F,
+        VKey::Escape => 0x35,
+        VKey::Tab => 0x30,
+        VKey::CapsLock => 0x39,
+        VKey::Space => 0x31,
+        VKey::Enter => 0x24,
+        VKey::Backspace => 0x33,
         VKey::Delete => 0x75,
-        VKey::Left => 0x7B, VKey::Right => 0x7C,
-        VKey::Up => 0x7E, VKey::Down => 0x7D,
-        VKey::Home => 0x73, VKey::End => 0x77,
-        VKey::PageUp => 0x74, VKey::PageDown => 0x79,
-        VKey::Insert => 0x72, VKey::PrintScreen => 0x69,
-        VKey::ScrollLock => 0x6B, VKey::Pause => 0x71,
-        VKey::LShift => 0x38, VKey::RShift => 0x3C,
-        VKey::LCtrl => 0x3B, VKey::RCtrl => 0x3E,
-        VKey::LAlt => 0x3A, VKey::RAlt => 0x3D,
-        VKey::LWin => 0x37, VKey::RWin => 0x36,
-        VKey::Semicolon => 0x29, VKey::Quote => 0x27,
-        VKey::Comma => 0x2B, VKey::Period => 0x2F,
-        VKey::Slash => 0x2C, VKey::Backslash => 0x2A,
-        VKey::LBracket => 0x21, VKey::RBracket => 0x1E,
-        VKey::Minus => 0x1B, VKey::Equal => 0x18,
+        VKey::Left => 0x7B,
+        VKey::Right => 0x7C,
+        VKey::Up => 0x7E,
+        VKey::Down => 0x7D,
+        VKey::Home => 0x73,
+        VKey::End => 0x77,
+        VKey::PageUp => 0x74,
+        VKey::PageDown => 0x79,
+        VKey::Insert => 0x72,
+        VKey::PrintScreen => 0x69,
+        VKey::ScrollLock => 0x6B,
+        VKey::Pause => 0x71,
+        VKey::LShift => 0x38,
+        VKey::RShift => 0x3C,
+        VKey::LCtrl => 0x3B,
+        VKey::RCtrl => 0x3E,
+        VKey::LAlt => 0x3A,
+        VKey::RAlt => 0x3D,
+        VKey::LWin => 0x37,
+        VKey::RWin => 0x36,
+        VKey::Semicolon => 0x29,
+        VKey::Quote => 0x27,
+        VKey::Comma => 0x2B,
+        VKey::Period => 0x2F,
+        VKey::Slash => 0x2C,
+        VKey::Backslash => 0x2A,
+        VKey::LBracket => 0x21,
+        VKey::RBracket => 0x1E,
+        VKey::Minus => 0x1B,
+        VKey::Equal => 0x18,
         VKey::Grave => 0x32,
-        VKey::Hangul => 0x68, VKey::Hanja => 0x68,
+        VKey::Hangul => 0x68,
+        VKey::Hanja => 0x68,
     }
 }
 
 fn cg_to_vkey(keycode: u16) -> Option<VKey> {
     match keycode {
-        0x00 => Some(VKey::A), 0x01 => Some(VKey::S), 0x02 => Some(VKey::D),
-        0x03 => Some(VKey::F), 0x04 => Some(VKey::H), 0x05 => Some(VKey::G),
-        0x06 => Some(VKey::Z), 0x07 => Some(VKey::X), 0x08 => Some(VKey::C),
-        0x09 => Some(VKey::V), 0x0B => Some(VKey::B), 0x0C => Some(VKey::Q),
-        0x0D => Some(VKey::W), 0x0E => Some(VKey::E), 0x0F => Some(VKey::R),
-        0x10 => Some(VKey::Y), 0x11 => Some(VKey::T), 0x1F => Some(VKey::O),
-        0x20 => Some(VKey::U), 0x22 => Some(VKey::I), 0x23 => Some(VKey::P),
-        0x25 => Some(VKey::L), 0x26 => Some(VKey::J), 0x28 => Some(VKey::K),
-        0x2D => Some(VKey::N), 0x2E => Some(VKey::M),
-        0x1D => Some(VKey::Num0), 0x12 => Some(VKey::Num1), 0x13 => Some(VKey::Num2),
-        0x14 => Some(VKey::Num3), 0x15 => Some(VKey::Num4), 0x17 => Some(VKey::Num5),
-        0x16 => Some(VKey::Num6), 0x1A => Some(VKey::Num7), 0x1C => Some(VKey::Num8),
+        0x00 => Some(VKey::A),
+        0x01 => Some(VKey::S),
+        0x02 => Some(VKey::D),
+        0x03 => Some(VKey::F),
+        0x04 => Some(VKey::H),
+        0x05 => Some(VKey::G),
+        0x06 => Some(VKey::Z),
+        0x07 => Some(VKey::X),
+        0x08 => Some(VKey::C),
+        0x09 => Some(VKey::V),
+        0x0B => Some(VKey::B),
+        0x0C => Some(VKey::Q),
+        0x0D => Some(VKey::W),
+        0x0E => Some(VKey::E),
+        0x0F => Some(VKey::R),
+        0x10 => Some(VKey::Y),
+        0x11 => Some(VKey::T),
+        0x1F => Some(VKey::O),
+        0x20 => Some(VKey::U),
+        0x22 => Some(VKey::I),
+        0x23 => Some(VKey::P),
+        0x25 => Some(VKey::L),
+        0x26 => Some(VKey::J),
+        0x28 => Some(VKey::K),
+        0x2D => Some(VKey::N),
+        0x2E => Some(VKey::M),
+        0x1D => Some(VKey::Num0),
+        0x12 => Some(VKey::Num1),
+        0x13 => Some(VKey::Num2),
+        0x14 => Some(VKey::Num3),
+        0x15 => Some(VKey::Num4),
+        0x17 => Some(VKey::Num5),
+        0x16 => Some(VKey::Num6),
+        0x1A => Some(VKey::Num7),
+        0x1C => Some(VKey::Num8),
         0x19 => Some(VKey::Num9),
-        0x7A => Some(VKey::F1), 0x78 => Some(VKey::F2), 0x63 => Some(VKey::F3),
-        0x76 => Some(VKey::F4), 0x60 => Some(VKey::F5), 0x61 => Some(VKey::F6),
-        0x62 => Some(VKey::F7), 0x64 => Some(VKey::F8), 0x65 => Some(VKey::F9),
-        0x6D => Some(VKey::F10), 0x67 => Some(VKey::F11), 0x6F => Some(VKey::F12),
-        0x35 => Some(VKey::Escape), 0x30 => Some(VKey::Tab),
-        0x39 => Some(VKey::CapsLock), 0x31 => Some(VKey::Space),
-        0x24 => Some(VKey::Enter), 0x33 => Some(VKey::Backspace),
+        0x7A => Some(VKey::F1),
+        0x78 => Some(VKey::F2),
+        0x63 => Some(VKey::F3),
+        0x76 => Some(VKey::F4),
+        0x60 => Some(VKey::F5),
+        0x61 => Some(VKey::F6),
+        0x62 => Some(VKey::F7),
+        0x64 => Some(VKey::F8),
+        0x65 => Some(VKey::F9),
+        0x6D => Some(VKey::F10),
+        0x67 => Some(VKey::F11),
+        0x6F => Some(VKey::F12),
+        0x35 => Some(VKey::Escape),
+        0x30 => Some(VKey::Tab),
+        0x39 => Some(VKey::CapsLock),
+        0x31 => Some(VKey::Space),
+        0x24 => Some(VKey::Enter),
+        0x33 => Some(VKey::Backspace),
         0x75 => Some(VKey::Delete),
-        0x7B => Some(VKey::Left), 0x7C => Some(VKey::Right),
-        0x7E => Some(VKey::Up), 0x7D => Some(VKey::Down),
-        0x73 => Some(VKey::Home), 0x77 => Some(VKey::End),
-        0x74 => Some(VKey::PageUp), 0x79 => Some(VKey::PageDown),
-        0x38 => Some(VKey::LShift), 0x3C => Some(VKey::RShift),
-        0x3B => Some(VKey::LCtrl), 0x3E => Some(VKey::RCtrl),
-        0x3A => Some(VKey::LAlt), 0x3D => Some(VKey::RAlt),
-        0x37 => Some(VKey::LWin), 0x36 => Some(VKey::RWin),
-        0x29 => Some(VKey::Semicolon), 0x27 => Some(VKey::Quote),
-        0x2B => Some(VKey::Comma), 0x2F => Some(VKey::Period),
-        0x2C => Some(VKey::Slash), 0x2A => Some(VKey::Backslash),
-        0x21 => Some(VKey::LBracket), 0x1E => Some(VKey::RBracket),
-        0x1B => Some(VKey::Minus), 0x18 => Some(VKey::Equal),
+        0x7B => Some(VKey::Left),
+        0x7C => Some(VKey::Right),
+        0x7E => Some(VKey::Up),
+        0x7D => Some(VKey::Down),
+        0x73 => Some(VKey::Home),
+        0x77 => Some(VKey::End),
+        0x74 => Some(VKey::PageUp),
+        0x79 => Some(VKey::PageDown),
+        0x38 => Some(VKey::LShift),
+        0x3C => Some(VKey::RShift),
+        0x3B => Some(VKey::LCtrl),
+        0x3E => Some(VKey::RCtrl),
+        0x3A => Some(VKey::LAlt),
+        0x3D => Some(VKey::RAlt),
+        0x37 => Some(VKey::LWin),
+        0x36 => Some(VKey::RWin),
+        0x29 => Some(VKey::Semicolon),
+        0x27 => Some(VKey::Quote),
+        0x2B => Some(VKey::Comma),
+        0x2F => Some(VKey::Period),
+        0x2C => Some(VKey::Slash),
+        0x2A => Some(VKey::Backslash),
+        0x21 => Some(VKey::LBracket),
+        0x1E => Some(VKey::RBracket),
+        0x1B => Some(VKey::Minus),
+        0x18 => Some(VKey::Equal),
         0x32 => Some(VKey::Grave),
         _ => None,
     }
@@ -193,9 +316,14 @@ fn modifiers_to_flags(mods: &[VKey]) -> u64 {
 fn send_key_event(keycode: u16, key_down: bool, flags: u64) {
     unsafe {
         let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
-        if source.is_null() { return; }
+        if source.is_null() {
+            return;
+        }
         let event = CGEventCreateKeyboardEvent(source, keycode, key_down);
-        if event.is_null() { CFRelease(source); return; }
+        if event.is_null() {
+            CFRelease(source);
+            return;
+        }
         CGEventSetFlags(event, flags);
         CGEventSetIntegerValueField(event, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
         CGEventPost(CG_SESSION_EVENT_TAP, event);
@@ -217,24 +345,6 @@ fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
 }
 
 // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
-
-fn is_modifier_key(vkey: &VKey) -> bool {
-    matches!(vkey,
-        VKey::LShift | VKey::RShift |
-        VKey::LCtrl | VKey::RCtrl |
-        VKey::LAlt | VKey::RAlt |
-        VKey::LWin | VKey::RWin
-    )
-}
-
-fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
-    match m {
-        Modifier::Shift => held.contains(&VKey::LShift) || held.contains(&VKey::RShift),
-        Modifier::Ctrl => held.contains(&VKey::LCtrl) || held.contains(&VKey::RCtrl),
-        Modifier::Alt => held.contains(&VKey::LAlt) || held.contains(&VKey::RAlt),
-        Modifier::Win => held.contains(&VKey::LWin) || held.contains(&VKey::RWin),
-    }
-}
 
 // ── 액션 실행 ────────────────────────────────────────────────────────────────
 
@@ -341,6 +451,7 @@ unsafe extern "C" fn event_tap_callback(
             if vkey == layer.trigger {
                 if is_down {
                     if guard.active_layer.is_none() {
+                        tracing::debug!("레이어 활성: {}", layer.name);
                         guard.active_layer = Some(idx);
                         guard.trigger_down_time = now;
                         guard.layer_key_used = false;
@@ -381,7 +492,10 @@ unsafe extern "C" fn event_tap_callback(
 
         // 더블탭 (RShift 등 수정자 키)
         if is_down {
-            let dt_binding = guard.config.double_taps.iter()
+            let dt_binding = guard
+                .config
+                .double_taps
+                .iter()
                 .find(|dt| dt.key == vkey)
                 .cloned();
             if let Some(dt) = dt_binding {
@@ -462,10 +576,7 @@ unsafe extern "C" fn event_tap_callback(
         }
 
         // 일반 레이어 매핑
-        let action_opt = guard.config.layers[layer_idx]
-            .mappings
-            .get(&vkey)
-            .cloned();
+        let action_opt = guard.config.layers[layer_idx].mappings.get(&vkey).cloned();
 
         if let Some(action) = action_opt {
             if is_down {
@@ -483,10 +594,16 @@ unsafe extern "C" fn event_tap_callback(
 
     // ── 콤보 리맵 확인 ──
     if is_down && !is_modifier_key(&vkey) {
-        let combo_action = guard.config.combos.iter()
+        let combo_action = guard
+            .config
+            .combos
+            .iter()
             .find(|(trigger, _)| {
                 trigger.key == vkey
-                    && trigger.modifiers.iter().all(|m| modifier_satisfied(m, &guard.modifiers_held))
+                    && trigger
+                        .modifiers
+                        .iter()
+                        .all(|m| modifier_satisfied(m, &guard.modifiers_held))
             })
             .map(|(_, action)| action.clone());
 
@@ -500,7 +617,10 @@ unsafe extern "C" fn event_tap_callback(
 
     // ── 더블탭 확인 ──
     if is_down {
-        let dt_binding = guard.config.double_taps.iter()
+        let dt_binding = guard
+            .config
+            .double_taps
+            .iter()
             .find(|dt| dt.key == vkey)
             .cloned();
 
@@ -570,10 +690,48 @@ impl MacOSKeyboardBackend {
     }
 }
 
+/// 접근성(손쉬운 사용) 권한 확인. 권한이 없으면 시스템 다이얼로그를 띄운다.
+fn check_accessibility_permission() -> bool {
+    unsafe {
+        // kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
+        let key_str = CFStringCreateWithCString(
+            std::ptr::null(),
+            b"AXTrustedCheckOptionPrompt\0".as_ptr(),
+            0x0800_0100, // kCFStringEncodingUTF8
+        );
+        if key_str.is_null() {
+            return AXIsProcessTrustedWithOptions(std::ptr::null());
+        }
+        let keys = [key_str];
+        let values = [kCFBooleanTrue];
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const u8 as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const u8 as *const c_void,
+        );
+        let trusted = AXIsProcessTrustedWithOptions(options);
+        if !options.is_null() {
+            CFRelease(options);
+        }
+        CFRelease(key_str as *mut c_void);
+        trusted
+    }
+}
+
 impl KeyboardBackend for MacOSKeyboardBackend {
     fn start(&mut self, config: KeybindConfig) -> Result<(), String> {
         if self.running.load(Ordering::Relaxed) {
             return Err("키 바인딩이 이미 실행 중입니다.".into());
+        }
+
+        if !check_accessibility_permission() {
+            tracing::warn!(
+                "접근성 권한이 없습니다. 시스템 설정 > 개인 정보 보호 및 보안 > \
+                 손쉬운 사용에서 이 앱을 허용해주세요. (권한 요청 다이얼로그가 표시됩니다)"
+            );
         }
 
         let now = Instant::now();
@@ -599,23 +757,40 @@ impl KeyboardBackend for MacOSKeyboardBackend {
 
         let thread = std::thread::spawn(move || {
             unsafe {
-                let events_of_interest: u64 =
-                    (1u64 << CG_EVENT_KEY_DOWN)
+                let trusted = check_accessibility_permission();
+                tracing::info!("AXIsProcessTrusted = {trusted}");
+
+                let events_of_interest: u64 = (1u64 << CG_EVENT_KEY_DOWN)
                     | (1u64 << CG_EVENT_KEY_UP)
                     | (1u64 << CG_EVENT_FLAGS_CHANGED);
 
-                let tap = CGEventTapCreate(
-                    CG_SESSION_EVENT_TAP,
+                // kCGHIDEventTap(0) 먼저 시도, 실패하면 kCGSessionEventTap(1)
+                let mut tap = CGEventTapCreate(
+                    0, // kCGHIDEventTap
                     CG_HEAD_INSERT_EVENT_TAP,
                     CG_EVENT_TAP_OPTION_DEFAULT,
                     events_of_interest,
                     event_tap_callback,
-                    std::ptr::null_mut(), // userInfo는 콜백 내에서 tap이 필요할 때 설정
+                    std::ptr::null_mut(),
                 );
 
                 if tap.is_null() {
+                    tracing::warn!("kCGHIDEventTap 실패, kCGSessionEventTap 재시도...");
+                    tap = CGEventTapCreate(
+                        CG_SESSION_EVENT_TAP,
+                        CG_HEAD_INSERT_EVENT_TAP,
+                        CG_EVENT_TAP_OPTION_DEFAULT,
+                        events_of_interest,
+                        event_tap_callback,
+                        std::ptr::null_mut(),
+                    );
+                }
+
+                if tap.is_null() {
                     tracing::error!(
-                        "CGEventTapCreate 실패 — 접근성(손쉬운 사용) 권한을 확인하세요."
+                        "CGEventTapCreate 실패 — 접근성(손쉬운 사용) 권한을 확인하세요. \
+                         (AXIsProcessTrusted={trusted}, pid={})",
+                        std::process::id()
                     );
                     running.store(false, Ordering::Relaxed);
                     return;
@@ -624,11 +799,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                 // 타임아웃 재활성화를 위해 tap을 userInfo로 재설정
                 // (첫 생성 시에는 tap 포인터를 모르므로, 별도 enable 필요 없음)
 
-                let source = CFMachPortCreateRunLoopSource(
-                    std::ptr::null(),
-                    tap,
-                    0,
-                );
+                let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
                 if source.is_null() {
                     tracing::error!("CFMachPortCreateRunLoopSource 실패");
                     CFRelease(tap);
@@ -664,7 +835,9 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         self.running.store(false, Ordering::Relaxed);
         if let Ok(store) = self.run_loop.lock() {
             if let Some(ref rl) = *store {
-                unsafe { CFRunLoopStop(rl.0); }
+                unsafe {
+                    CFRunLoopStop(rl.0);
+                }
             }
         }
         if let Some(thread) = self.thread.take() {

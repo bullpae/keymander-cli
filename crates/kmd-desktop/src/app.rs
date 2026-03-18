@@ -170,12 +170,12 @@ impl ContextAction {
     #[allow(dead_code)]
     fn icon_char(&self) -> &str {
         match self {
-            Self::Open => "\u{2197}",         // ↗
-            Self::OpenAsAdmin => "\u{26A1}",  // ⚡
-            Self::OpenFolder => "\u{1F4C2}",  // 📂
-            Self::CopyPath => "\u{1F4CB}",    // 📋
-            Self::CopyName => "\u{270D}",     // ✍
-            Self::Uninstall => "\u{1F5D1}",   // 🗑
+            Self::Open => "\u{2197}",        // ↗
+            Self::OpenAsAdmin => "\u{26A1}", // ⚡
+            Self::OpenFolder => "\u{1F4C2}", // 📂
+            Self::CopyPath => "\u{1F4CB}",   // 📋
+            Self::CopyName => "\u{270D}",    // ✍
+            Self::Uninstall => "\u{1F5D1}",  // 🗑
         }
     }
 }
@@ -195,24 +195,11 @@ fn context_actions_for(kind: ItemKind) -> Vec<ContextAction> {
             ContextAction::CopyPath,
             ContextAction::CopyName,
         ],
-        ItemKind::Directory => vec![
-            ContextAction::Open,
-            ContextAction::CopyPath,
-        ],
-        ItemKind::WebSearch => vec![
-            ContextAction::Open,
-            ContextAction::CopyName,
-        ],
-        ItemKind::Shell => vec![
-            ContextAction::Open,
-            ContextAction::CopyName,
-        ],
-        ItemKind::SystemCommand => vec![
-            ContextAction::Open,
-        ],
-        ItemKind::Calculator | ItemKind::Emoji => vec![
-            ContextAction::CopyName,
-        ],
+        ItemKind::Directory => vec![ContextAction::Open, ContextAction::CopyPath],
+        ItemKind::WebSearch => vec![ContextAction::Open, ContextAction::CopyName],
+        ItemKind::Shell => vec![ContextAction::Open, ContextAction::CopyName],
+        ItemKind::SystemCommand => vec![ContextAction::Open],
+        ItemKind::Calculator | ItemKind::Emoji => vec![ContextAction::CopyName],
     }
 }
 
@@ -518,9 +505,7 @@ impl App {
             Message::WindowEvent(_id, event) => {
                 match event {
                     window::Event::Focused => {
-                        return iced::widget::operation::focus::<Message>(
-                            self.input_id.clone(),
-                        );
+                        return iced::widget::operation::focus::<Message>(self.input_id.clone());
                     }
                     window::Event::Moved(point) => {
                         self.window_state.x = Some(point.x);
@@ -646,14 +631,9 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let keyboard_sub = keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                Message::KeyEvent(key, modifiers)
-            }
+            keyboard::Event::KeyPressed { key, modifiers, .. } => Message::KeyEvent(key, modifiers),
             keyboard::Event::KeyReleased { .. } | keyboard::Event::ModifiersChanged(_) => {
-                Message::KeyEvent(
-                    keyboard::Key::Unidentified,
-                    keyboard::Modifiers::default(),
-                )
+                Message::KeyEvent(keyboard::Key::Unidentified, keyboard::Modifiers::default())
             }
         });
 
@@ -1643,8 +1623,16 @@ impl App {
         use kmd_core::web::{self, WEB_SERVICES};
 
         const FALLBACK_IDS: &[&str] = &[
-            "google", "perplexity", "chatgpt", "claude", "gemini",
-            "naver_search", "youtube", "github", "stackoverflow", "wikipedia",
+            "google",
+            "perplexity",
+            "chatgpt",
+            "claude",
+            "gemini",
+            "naver_search",
+            "youtube",
+            "github",
+            "stackoverflow",
+            "wikipedia",
         ];
 
         let emoji = self.use_emoji;
@@ -1657,13 +1645,15 @@ impl App {
             })
             .collect();
 
-        let multi_items = web::multi_llm_result_items(
-            query,
-            &self.selected_llm_providers,
-            emoji,
-        );
+        let multi_items = web::multi_llm_result_items(query, &self.selected_llm_providers, emoji);
         if let Some(multi_item) = multi_items.into_iter().next() {
-            items.insert(5, kmd_core::SearchResult { item: multi_item, score: 0 });
+            items.insert(
+                5,
+                kmd_core::SearchResult {
+                    item: multi_item,
+                    score: 0,
+                },
+            );
         }
 
         items
@@ -1773,7 +1763,10 @@ impl App {
 
         if modifiers.control() && modifiers.shift() {
             if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
-                if available.iter().any(|a| matches!(a, ContextAction::OpenAsAdmin)) {
+                if available
+                    .iter()
+                    .any(|a| matches!(a, ContextAction::OpenAsAdmin))
+                {
                     return Some(ContextAction::OpenAsAdmin);
                 }
             }
@@ -1949,15 +1942,12 @@ impl App {
             ));
             left_col = left_col.push(self.view_results_list());
             let sep_color = t.border;
-            left_col = left_col.push(
-                container(text(""))
-                    .width(Fill)
-                    .height(1)
-                    .style(move |_: &_| container::Style {
-                        background: Some(Background::Color(sep_color)),
-                        ..Default::default()
-                    }),
-            );
+            left_col = left_col.push(container(text("")).width(Fill).height(1).style(
+                move |_: &_| container::Style {
+                    background: Some(Background::Color(sep_color)),
+                    ..Default::default()
+                },
+            ));
             left_col = left_col.push(self.view_status_bar());
             left_col = left_col.push(self.view_accent_bar());
         }
@@ -2062,11 +2052,19 @@ impl App {
             .on_submit(Message::Submit)
             .width(Fill)
             .size(18)
-            .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 2.0 })
+            .padding(Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 2.0,
+            })
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
                 let ph_color = if is_focused {
-                    Color { a: overlay_color.a * 0.5, ..overlay_color }
+                    Color {
+                        a: overlay_color.a * 0.5,
+                        ..overlay_color
+                    }
                 } else {
                     overlay_color
                 };
@@ -2228,10 +2226,7 @@ impl App {
             .size(11)
             .color(t.subtext)
             .wrapping(Wrapping::None);
-        let info = column![title, subtitle]
-            .spacing(2)
-            .width(Fill)
-            .clip(true);
+        let info = column![title, subtitle].spacing(2).width(Fill).clip(true);
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
@@ -2350,7 +2345,10 @@ impl App {
         };
 
         let kind_color = t.kind_color(item.kind);
-        let icon_glow = Color { a: 0.06, ..kind_color };
+        let icon_glow = Color {
+            a: 0.06,
+            ..kind_color
+        };
         let icon_area = container(
             container(big_icon)
                 .width(Fill)
@@ -2370,7 +2368,11 @@ impl App {
             item.name.clone()
         };
         let name_label = container(
-            text(name_str).size(14).color(t.text).wrapping(Wrapping::None).center(),
+            text(name_str)
+                .size(14)
+                .color(t.text)
+                .wrapping(Wrapping::None)
+                .center(),
         )
         .width(Fill)
         .center_x(Fill)
@@ -2378,7 +2380,15 @@ impl App {
 
         // ── "Path" 라벨 + 경로 (왼쪽 정렬, 말줄임) ──
         let path_text = if item.path.chars().count() > 35 {
-            let end: String = item.path.chars().rev().take(32).collect::<Vec<_>>().into_iter().rev().collect();
+            let end: String = item
+                .path
+                .chars()
+                .rev()
+                .take(32)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             format!("...{end}")
         } else {
             item.path.clone()
@@ -2386,7 +2396,10 @@ impl App {
         let path_section = container(
             column![
                 text("Path").size(9).color(t.overlay),
-                text(path_text).size(10).color(t.subtext).wrapping(Wrapping::None),
+                text(path_text)
+                    .size(10)
+                    .color(t.subtext)
+                    .wrapping(Wrapping::None),
             ]
             .spacing(2),
         )
@@ -2395,8 +2408,14 @@ impl App {
 
         // ── 뱃지 행 ──
         let kind_label = item.kind.to_string();
-        let badge_bg = Color { a: 0.12, ..kind_color };
-        let badge_border_c = Color { a: 0.22, ..kind_color };
+        let badge_bg = Color {
+            a: 0.12,
+            ..kind_color
+        };
+        let badge_border_c = Color {
+            a: 0.22,
+            ..kind_color
+        };
         let badge = container(text(kind_label).size(9).color(kind_color))
             .padding(Padding::from([2, 8]))
             .style(move |_: &_| container::Style {
@@ -2408,9 +2427,7 @@ impl App {
                 },
                 ..Default::default()
             });
-        let badge_row = container(badge)
-            .width(Fill)
-            .padding(Padding::from([2, 16]));
+        let badge_row = container(badge).width(Fill).padding(Padding::from([2, 16]));
 
         // ── 구분선 (패딩 있는 정돈된 선) ──
         let sep_color = t.border;
@@ -2461,25 +2478,35 @@ impl App {
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([6, 14]));
 
-            let action_btn = container(action_row).width(Fill).style(
-                move |_: &_| container::Style {
-                    background: if is_primary {
-                        Some(Background::Color(Color { a: 0.10, ..accent_c }))
-                    } else {
-                        Some(Background::Color(Color { a: 0.0, ..surface_c }))
-                    },
-                    border: if is_primary {
-                        Border {
-                            radius: 6.0.into(),
-                            width: 1.0,
-                            color: Color { a: 0.18, ..accent_c },
-                        }
-                    } else {
-                        Border::default()
-                    },
-                    ..Default::default()
-                },
-            );
+            let action_btn =
+                container(action_row)
+                    .width(Fill)
+                    .style(move |_: &_| container::Style {
+                        background: if is_primary {
+                            Some(Background::Color(Color {
+                                a: 0.10,
+                                ..accent_c
+                            }))
+                        } else {
+                            Some(Background::Color(Color {
+                                a: 0.0,
+                                ..surface_c
+                            }))
+                        },
+                        border: if is_primary {
+                            Border {
+                                radius: 6.0.into(),
+                                width: 1.0,
+                                color: Color {
+                                    a: 0.18,
+                                    ..accent_c
+                                },
+                            }
+                        } else {
+                            Border::default()
+                        },
+                        ..Default::default()
+                    });
 
             let wrapped = if is_primary {
                 container(
@@ -2545,7 +2572,10 @@ fn launch_in_terminal(cmd: &str) {
     {
         for term in &["x-terminal-emulator", "gnome-terminal", "xterm"] {
             if std::process::Command::new(term)
-                .args(["-e", &format!("sh -c '{} ; read -p \"Press Enter...\"'", cmd)])
+                .args([
+                    "-e",
+                    &format!("sh -c '{} ; read -p \"Press Enter...\"'", cmd),
+                ])
                 .spawn()
                 .is_ok()
             {

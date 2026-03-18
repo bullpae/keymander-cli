@@ -15,8 +15,7 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -40,7 +39,11 @@ fn main() -> Result<()> {
 }
 
 fn autostart_label() -> &'static str {
-    if autostart::is_installed() { "등록됨" } else { "미등록" }
+    if autostart::is_installed() {
+        "등록됨"
+    } else {
+        "미등록"
+    }
 }
 
 fn send_shutdown() -> Result<()> {

@@ -3,7 +3,10 @@
 //! 저수준 키보드 훅으로 키 이벤트를 가로채고,
 //! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
 
-use super::{BindAction, KeybindConfig, KeyboardBackend, MacroStep, Modifier, VKey};
+use super::{
+    is_modifier_key, modifier_satisfied, BindAction, KeybindConfig, KeyboardBackend, MacroStep,
+    Modifier, VKey,
+};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -45,40 +48,91 @@ struct HookState {
 
 fn vkey_to_vk(key: VKey) -> u16 {
     match key {
-        VKey::A => 0x41, VKey::B => 0x42, VKey::C => 0x43, VKey::D => 0x44,
-        VKey::E => 0x45, VKey::F => 0x46, VKey::G => 0x47, VKey::H => 0x48,
-        VKey::I => 0x49, VKey::J => 0x4A, VKey::K => 0x4B, VKey::L => 0x4C,
-        VKey::M => 0x4D, VKey::N => 0x4E, VKey::O => 0x4F, VKey::P => 0x50,
-        VKey::Q => 0x51, VKey::R => 0x52, VKey::S => 0x53, VKey::T => 0x54,
-        VKey::U => 0x55, VKey::V => 0x56, VKey::W => 0x57, VKey::X => 0x58,
-        VKey::Y => 0x59, VKey::Z => 0x5A,
-        VKey::Num0 => 0x30, VKey::Num1 => 0x31, VKey::Num2 => 0x32,
-        VKey::Num3 => 0x33, VKey::Num4 => 0x34, VKey::Num5 => 0x35,
-        VKey::Num6 => 0x36, VKey::Num7 => 0x37, VKey::Num8 => 0x38,
+        VKey::A => 0x41,
+        VKey::B => 0x42,
+        VKey::C => 0x43,
+        VKey::D => 0x44,
+        VKey::E => 0x45,
+        VKey::F => 0x46,
+        VKey::G => 0x47,
+        VKey::H => 0x48,
+        VKey::I => 0x49,
+        VKey::J => 0x4A,
+        VKey::K => 0x4B,
+        VKey::L => 0x4C,
+        VKey::M => 0x4D,
+        VKey::N => 0x4E,
+        VKey::O => 0x4F,
+        VKey::P => 0x50,
+        VKey::Q => 0x51,
+        VKey::R => 0x52,
+        VKey::S => 0x53,
+        VKey::T => 0x54,
+        VKey::U => 0x55,
+        VKey::V => 0x56,
+        VKey::W => 0x57,
+        VKey::X => 0x58,
+        VKey::Y => 0x59,
+        VKey::Z => 0x5A,
+        VKey::Num0 => 0x30,
+        VKey::Num1 => 0x31,
+        VKey::Num2 => 0x32,
+        VKey::Num3 => 0x33,
+        VKey::Num4 => 0x34,
+        VKey::Num5 => 0x35,
+        VKey::Num6 => 0x36,
+        VKey::Num7 => 0x37,
+        VKey::Num8 => 0x38,
         VKey::Num9 => 0x39,
-        VKey::F1 => VK_F1, VKey::F2 => VK_F2, VKey::F3 => VK_F3,
-        VKey::F4 => VK_F4, VKey::F5 => VK_F5, VKey::F6 => VK_F6,
-        VKey::F7 => VK_F7, VKey::F8 => VK_F8, VKey::F9 => VK_F9,
-        VKey::F10 => VK_F10, VKey::F11 => VK_F11, VKey::F12 => VK_F12,
-        VKey::Escape => VK_ESCAPE, VKey::Tab => VK_TAB,
-        VKey::CapsLock => VK_CAPITAL, VKey::Space => VK_SPACE,
-        VKey::Enter => VK_RETURN, VKey::Backspace => VK_BACK,
+        VKey::F1 => VK_F1,
+        VKey::F2 => VK_F2,
+        VKey::F3 => VK_F3,
+        VKey::F4 => VK_F4,
+        VKey::F5 => VK_F5,
+        VKey::F6 => VK_F6,
+        VKey::F7 => VK_F7,
+        VKey::F8 => VK_F8,
+        VKey::F9 => VK_F9,
+        VKey::F10 => VK_F10,
+        VKey::F11 => VK_F11,
+        VKey::F12 => VK_F12,
+        VKey::Escape => VK_ESCAPE,
+        VKey::Tab => VK_TAB,
+        VKey::CapsLock => VK_CAPITAL,
+        VKey::Space => VK_SPACE,
+        VKey::Enter => VK_RETURN,
+        VKey::Backspace => VK_BACK,
         VKey::Delete => VK_DELETE,
-        VKey::Left => VK_LEFT, VKey::Right => VK_RIGHT,
-        VKey::Up => VK_UP, VKey::Down => VK_DOWN,
-        VKey::Home => VK_HOME, VKey::End => VK_END,
-        VKey::PageUp => VK_PRIOR, VKey::PageDown => VK_NEXT,
-        VKey::Insert => VK_INSERT, VKey::PrintScreen => VK_SNAPSHOT,
-        VKey::ScrollLock => VK_SCROLL, VKey::Pause => VK_PAUSE,
-        VKey::LShift => VK_LSHIFT, VKey::RShift => VK_RSHIFT,
-        VKey::LCtrl => VK_LCONTROL, VKey::RCtrl => VK_RCONTROL,
-        VKey::LAlt => VK_LMENU, VKey::RAlt => VK_RMENU,
-        VKey::LWin => VK_LWIN, VKey::RWin => VK_RWIN,
-        VKey::Semicolon => VK_OEM_1, VKey::Quote => VK_OEM_7,
-        VKey::Comma => VK_OEM_COMMA, VKey::Period => VK_OEM_PERIOD,
-        VKey::Slash => VK_OEM_2, VKey::Backslash => VK_OEM_5,
-        VKey::LBracket => VK_OEM_4, VKey::RBracket => VK_OEM_6,
-        VKey::Minus => VK_OEM_MINUS, VKey::Equal => VK_OEM_PLUS,
+        VKey::Left => VK_LEFT,
+        VKey::Right => VK_RIGHT,
+        VKey::Up => VK_UP,
+        VKey::Down => VK_DOWN,
+        VKey::Home => VK_HOME,
+        VKey::End => VK_END,
+        VKey::PageUp => VK_PRIOR,
+        VKey::PageDown => VK_NEXT,
+        VKey::Insert => VK_INSERT,
+        VKey::PrintScreen => VK_SNAPSHOT,
+        VKey::ScrollLock => VK_SCROLL,
+        VKey::Pause => VK_PAUSE,
+        VKey::LShift => VK_LSHIFT,
+        VKey::RShift => VK_RSHIFT,
+        VKey::LCtrl => VK_LCONTROL,
+        VKey::RCtrl => VK_RCONTROL,
+        VKey::LAlt => VK_LMENU,
+        VKey::RAlt => VK_RMENU,
+        VKey::LWin => VK_LWIN,
+        VKey::RWin => VK_RWIN,
+        VKey::Semicolon => VK_OEM_1,
+        VKey::Quote => VK_OEM_7,
+        VKey::Comma => VK_OEM_COMMA,
+        VKey::Period => VK_OEM_PERIOD,
+        VKey::Slash => VK_OEM_2,
+        VKey::Backslash => VK_OEM_5,
+        VKey::LBracket => VK_OEM_4,
+        VKey::RBracket => VK_OEM_6,
+        VKey::Minus => VK_OEM_MINUS,
+        VKey::Equal => VK_OEM_PLUS,
         VKey::Grave => VK_OEM_3,
         VKey::Hangul => 0x15,
         VKey::Hanja => 0x19,
@@ -88,44 +142,91 @@ fn vkey_to_vk(key: VKey) -> u16 {
 /// Windows VK 코드 → VKey 변환
 fn vk_to_vkey(vk: u16) -> Option<VKey> {
     match vk {
-        0x41 => Some(VKey::A), 0x42 => Some(VKey::B), 0x43 => Some(VKey::C),
-        0x44 => Some(VKey::D), 0x45 => Some(VKey::E), 0x46 => Some(VKey::F),
-        0x47 => Some(VKey::G), 0x48 => Some(VKey::H), 0x49 => Some(VKey::I),
-        0x4A => Some(VKey::J), 0x4B => Some(VKey::K), 0x4C => Some(VKey::L),
-        0x4D => Some(VKey::M), 0x4E => Some(VKey::N), 0x4F => Some(VKey::O),
-        0x50 => Some(VKey::P), 0x51 => Some(VKey::Q), 0x52 => Some(VKey::R),
-        0x53 => Some(VKey::S), 0x54 => Some(VKey::T), 0x55 => Some(VKey::U),
-        0x56 => Some(VKey::V), 0x57 => Some(VKey::W), 0x58 => Some(VKey::X),
-        0x59 => Some(VKey::Y), 0x5A => Some(VKey::Z),
-        0x30 => Some(VKey::Num0), 0x31 => Some(VKey::Num1), 0x32 => Some(VKey::Num2),
-        0x33 => Some(VKey::Num3), 0x34 => Some(VKey::Num4), 0x35 => Some(VKey::Num5),
-        0x36 => Some(VKey::Num6), 0x37 => Some(VKey::Num7), 0x38 => Some(VKey::Num8),
+        0x41 => Some(VKey::A),
+        0x42 => Some(VKey::B),
+        0x43 => Some(VKey::C),
+        0x44 => Some(VKey::D),
+        0x45 => Some(VKey::E),
+        0x46 => Some(VKey::F),
+        0x47 => Some(VKey::G),
+        0x48 => Some(VKey::H),
+        0x49 => Some(VKey::I),
+        0x4A => Some(VKey::J),
+        0x4B => Some(VKey::K),
+        0x4C => Some(VKey::L),
+        0x4D => Some(VKey::M),
+        0x4E => Some(VKey::N),
+        0x4F => Some(VKey::O),
+        0x50 => Some(VKey::P),
+        0x51 => Some(VKey::Q),
+        0x52 => Some(VKey::R),
+        0x53 => Some(VKey::S),
+        0x54 => Some(VKey::T),
+        0x55 => Some(VKey::U),
+        0x56 => Some(VKey::V),
+        0x57 => Some(VKey::W),
+        0x58 => Some(VKey::X),
+        0x59 => Some(VKey::Y),
+        0x5A => Some(VKey::Z),
+        0x30 => Some(VKey::Num0),
+        0x31 => Some(VKey::Num1),
+        0x32 => Some(VKey::Num2),
+        0x33 => Some(VKey::Num3),
+        0x34 => Some(VKey::Num4),
+        0x35 => Some(VKey::Num5),
+        0x36 => Some(VKey::Num6),
+        0x37 => Some(VKey::Num7),
+        0x38 => Some(VKey::Num8),
         0x39 => Some(VKey::Num9),
-        v if v == VK_F1 => Some(VKey::F1), v if v == VK_F2 => Some(VKey::F2),
-        v if v == VK_F3 => Some(VKey::F3), v if v == VK_F4 => Some(VKey::F4),
-        v if v == VK_F5 => Some(VKey::F5), v if v == VK_F6 => Some(VKey::F6),
-        v if v == VK_F7 => Some(VKey::F7), v if v == VK_F8 => Some(VKey::F8),
-        v if v == VK_F9 => Some(VKey::F9), v if v == VK_F10 => Some(VKey::F10),
-        v if v == VK_F11 => Some(VKey::F11), v if v == VK_F12 => Some(VKey::F12),
-        v if v == VK_ESCAPE => Some(VKey::Escape), v if v == VK_TAB => Some(VKey::Tab),
-        v if v == VK_CAPITAL => Some(VKey::CapsLock), v if v == VK_SPACE => Some(VKey::Space),
-        v if v == VK_RETURN => Some(VKey::Enter), v if v == VK_BACK => Some(VKey::Backspace),
+        v if v == VK_F1 => Some(VKey::F1),
+        v if v == VK_F2 => Some(VKey::F2),
+        v if v == VK_F3 => Some(VKey::F3),
+        v if v == VK_F4 => Some(VKey::F4),
+        v if v == VK_F5 => Some(VKey::F5),
+        v if v == VK_F6 => Some(VKey::F6),
+        v if v == VK_F7 => Some(VKey::F7),
+        v if v == VK_F8 => Some(VKey::F8),
+        v if v == VK_F9 => Some(VKey::F9),
+        v if v == VK_F10 => Some(VKey::F10),
+        v if v == VK_F11 => Some(VKey::F11),
+        v if v == VK_F12 => Some(VKey::F12),
+        v if v == VK_ESCAPE => Some(VKey::Escape),
+        v if v == VK_TAB => Some(VKey::Tab),
+        v if v == VK_CAPITAL => Some(VKey::CapsLock),
+        v if v == VK_SPACE => Some(VKey::Space),
+        v if v == VK_RETURN => Some(VKey::Enter),
+        v if v == VK_BACK => Some(VKey::Backspace),
         v if v == VK_DELETE => Some(VKey::Delete),
-        v if v == VK_LEFT => Some(VKey::Left), v if v == VK_RIGHT => Some(VKey::Right),
-        v if v == VK_UP => Some(VKey::Up), v if v == VK_DOWN => Some(VKey::Down),
-        v if v == VK_HOME => Some(VKey::Home), v if v == VK_END => Some(VKey::End),
-        v if v == VK_PRIOR => Some(VKey::PageUp), v if v == VK_NEXT => Some(VKey::PageDown),
-        v if v == VK_INSERT => Some(VKey::Insert), v if v == VK_SNAPSHOT => Some(VKey::PrintScreen),
-        v if v == VK_SCROLL => Some(VKey::ScrollLock), v if v == VK_PAUSE => Some(VKey::Pause),
-        v if v == VK_LSHIFT => Some(VKey::LShift), v if v == VK_RSHIFT => Some(VKey::RShift),
-        v if v == VK_LCONTROL => Some(VKey::LCtrl), v if v == VK_RCONTROL => Some(VKey::RCtrl),
-        v if v == VK_LMENU => Some(VKey::LAlt), v if v == VK_RMENU => Some(VKey::RAlt),
-        v if v == VK_LWIN => Some(VKey::LWin), v if v == VK_RWIN => Some(VKey::RWin),
-        v if v == VK_OEM_1 => Some(VKey::Semicolon), v if v == VK_OEM_7 => Some(VKey::Quote),
-        v if v == VK_OEM_COMMA => Some(VKey::Comma), v if v == VK_OEM_PERIOD => Some(VKey::Period),
-        v if v == VK_OEM_2 => Some(VKey::Slash), v if v == VK_OEM_5 => Some(VKey::Backslash),
-        v if v == VK_OEM_4 => Some(VKey::LBracket), v if v == VK_OEM_6 => Some(VKey::RBracket),
-        v if v == VK_OEM_MINUS => Some(VKey::Minus), v if v == VK_OEM_PLUS => Some(VKey::Equal),
+        v if v == VK_LEFT => Some(VKey::Left),
+        v if v == VK_RIGHT => Some(VKey::Right),
+        v if v == VK_UP => Some(VKey::Up),
+        v if v == VK_DOWN => Some(VKey::Down),
+        v if v == VK_HOME => Some(VKey::Home),
+        v if v == VK_END => Some(VKey::End),
+        v if v == VK_PRIOR => Some(VKey::PageUp),
+        v if v == VK_NEXT => Some(VKey::PageDown),
+        v if v == VK_INSERT => Some(VKey::Insert),
+        v if v == VK_SNAPSHOT => Some(VKey::PrintScreen),
+        v if v == VK_SCROLL => Some(VKey::ScrollLock),
+        v if v == VK_PAUSE => Some(VKey::Pause),
+        v if v == VK_LSHIFT => Some(VKey::LShift),
+        v if v == VK_RSHIFT => Some(VKey::RShift),
+        v if v == VK_LCONTROL => Some(VKey::LCtrl),
+        v if v == VK_RCONTROL => Some(VKey::RCtrl),
+        v if v == VK_LMENU => Some(VKey::LAlt),
+        v if v == VK_RMENU => Some(VKey::RAlt),
+        v if v == VK_LWIN => Some(VKey::LWin),
+        v if v == VK_RWIN => Some(VKey::RWin),
+        v if v == VK_OEM_1 => Some(VKey::Semicolon),
+        v if v == VK_OEM_7 => Some(VKey::Quote),
+        v if v == VK_OEM_COMMA => Some(VKey::Comma),
+        v if v == VK_OEM_PERIOD => Some(VKey::Period),
+        v if v == VK_OEM_2 => Some(VKey::Slash),
+        v if v == VK_OEM_5 => Some(VKey::Backslash),
+        v if v == VK_OEM_4 => Some(VKey::LBracket),
+        v if v == VK_OEM_6 => Some(VKey::RBracket),
+        v if v == VK_OEM_MINUS => Some(VKey::Minus),
+        v if v == VK_OEM_PLUS => Some(VKey::Equal),
         v if v == VK_OEM_3 => Some(VKey::Grave),
         0x15 => Some(VKey::Hangul),
         0x19 => Some(VKey::Hanja),
@@ -142,11 +243,20 @@ const LLKHF_INJECTED: u32 = 0x00000010;
 fn is_extended_vk(vk: u16) -> bool {
     matches!(
         vk,
-        VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT
-            | VK_HOME | VK_END | VK_PRIOR | VK_NEXT
-            | VK_INSERT | VK_DELETE
-            | VK_RCONTROL | VK_RMENU
-            | VK_LWIN | VK_RWIN
+        VK_UP
+            | VK_DOWN
+            | VK_LEFT
+            | VK_RIGHT
+            | VK_HOME
+            | VK_END
+            | VK_PRIOR
+            | VK_NEXT
+            | VK_INSERT
+            | VK_DELETE
+            | VK_RCONTROL
+            | VK_RMENU
+            | VK_LWIN
+            | VK_RWIN
             | VK_SNAPSHOT
     )
 }
@@ -198,24 +308,6 @@ fn send_combo(modifier_vks: &[u16], key_vk: u16) {
 }
 
 // ── 수정자 키 판별 / 콤보 매칭 헬퍼 ─────────────────────────────────────────
-
-fn is_modifier_key(vkey: &VKey) -> bool {
-    matches!(vkey,
-        VKey::LShift | VKey::RShift |
-        VKey::LCtrl | VKey::RCtrl |
-        VKey::LAlt | VKey::RAlt |
-        VKey::LWin | VKey::RWin
-    )
-}
-
-fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
-    match m {
-        Modifier::Shift => held.contains(&VKey::LShift) || held.contains(&VKey::RShift),
-        Modifier::Ctrl => held.contains(&VKey::LCtrl) || held.contains(&VKey::RCtrl),
-        Modifier::Alt => held.contains(&VKey::LAlt) || held.contains(&VKey::RAlt),
-        Modifier::Win => held.contains(&VKey::LWin) || held.contains(&VKey::RWin),
-    }
-}
 
 // ── 바인딩 액션 실행 ────────────────────────────────────────────────────────
 
@@ -337,6 +429,7 @@ unsafe extern "system" fn keyboard_hook_proc(
         if vkey == layer.trigger {
             if is_down {
                 if guard.active_layer.is_none() {
+                    tracing::debug!("레이어 활성: {}", layer.name);
                     guard.active_layer = Some(idx);
                     guard.trigger_down_tick = kb.time;
                     guard.layer_key_used = false;
@@ -397,10 +490,7 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
 
         // 4b. 일반 레이어 매핑
-        let action_opt = guard.config.layers[layer_idx]
-            .mappings
-            .get(&vkey)
-            .cloned();
+        let action_opt = guard.config.layers[layer_idx].mappings.get(&vkey).cloned();
 
         if let Some(action) = action_opt {
             if is_down {
@@ -417,10 +507,16 @@ unsafe extern "system" fn keyboard_hook_proc(
 
     // ── 5. 콤보 리맵 확인 (수정자+키 조합) ──
     if is_down && !is_modifier_key(&vkey) {
-        let combo_action = guard.config.combos.iter()
+        let combo_action = guard
+            .config
+            .combos
+            .iter()
             .find(|(trigger, _)| {
                 trigger.key == vkey
-                    && trigger.modifiers.iter().all(|m| modifier_satisfied(m, &guard.modifiers_held))
+                    && trigger
+                        .modifiers
+                        .iter()
+                        .all(|m| modifier_satisfied(m, &guard.modifiers_held))
             })
             .map(|(_, action)| action.clone());
 
@@ -433,7 +529,10 @@ unsafe extern "system" fn keyboard_hook_proc(
 
     // ── 6. 더블탭 확인 ──
     if is_down {
-        let dt_binding = guard.config.double_taps.iter()
+        let dt_binding = guard
+            .config
+            .double_taps
+            .iter()
             .find(|dt| dt.key == vkey)
             .cloned();
 

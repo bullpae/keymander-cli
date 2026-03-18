@@ -48,7 +48,10 @@ pub fn run() -> color_eyre::Result<()> {
 
     listener.set_nonblocking(true)?;
 
-    println!("kmd-daemon 실행 중 (port={port}, pid={})", std::process::id());
+    println!(
+        "kmd-daemon 실행 중 (port={port}, pid={})",
+        std::process::id()
+    );
 
     // 메인 accept 루프 (non-blocking + poll)
     loop {
@@ -138,7 +141,11 @@ fn process_request(
                     let (_mode, hits) = e.search(&query, limit);
                     hits
                 }
-                Err(_) => return Response::Error { message: "엔진 잠금 실패".into() },
+                Err(_) => {
+                    return Response::Error {
+                        message: "엔진 잠금 실패".into(),
+                    }
+                }
             };
 
             let items: Vec<SearchHit> = results
@@ -165,7 +172,11 @@ fn process_request(
                     e.set_kind_weights(config.launcher.kind_weights.clone());
                     e.load(index.items);
                 }
-                Err(_) => return Response::Error { message: "엔진 잠금 실패".into() },
+                Err(_) => {
+                    return Response::Error {
+                        message: "엔진 잠금 실패".into(),
+                    }
+                }
             }
 
             Response::Ok {
@@ -212,10 +223,8 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let hotkey = &config.keybindings.global_hotkey;
     if !hotkey.is_empty() {
         if let Some(trigger) = keybind::parse_combo_trigger(hotkey) {
-            kb.combos.push((
-                trigger,
-                keybind::BindAction::Launch("kmd-desktop".into()),
-            ));
+            kb.combos
+                .push((trigger, keybind::BindAction::Launch("kmd-desktop".into())));
             tracing::info!("글로벌 핫키 등록: {hotkey} → kmd-desktop 실행");
         }
     }

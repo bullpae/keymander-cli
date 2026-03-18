@@ -215,15 +215,13 @@ pub fn brand_icon_for_item(kind: ItemKind, keywords: &str, path: &str) -> Option
 /// `kmd:settings:{category}:toggle:{service_id}` 형식의 keywords에서
 /// service_id를 추출하여 캐시된 브랜드 아이콘을 반환한다.
 pub fn brand_icon_for_settings(keywords: &str) -> Option<Handle> {
-    let id = keywords
-        .strip_prefix("kmd:settings:")
-        .and_then(|rest| {
-            if rest.contains(":toggle:") {
-                rest.rsplit(':').next()
-            } else {
-                None
-            }
-        })?;
+    let id = keywords.strip_prefix("kmd:settings:").and_then(|rest| {
+        if rest.contains(":toggle:") {
+            rest.rsplit(':').next()
+        } else {
+            None
+        }
+    })?;
     HANDLE_CACHE.get(id).cloned()
 }
 
@@ -370,13 +368,19 @@ mod tests {
     #[test]
     fn settings_llm_toggle_매칭() {
         let h = brand_icon_for_settings("kmd:settings:llm:toggle:chatgpt");
-        assert!(h.is_some(), "chatgpt 프로바이더 토글에 브랜드 아이콘이 있어야 함");
+        assert!(
+            h.is_some(),
+            "chatgpt 프로바이더 토글에 브랜드 아이콘이 있어야 함"
+        );
     }
 
     #[test]
     fn settings_translate_toggle_매칭() {
         let h = brand_icon_for_settings("kmd:settings:translate:toggle:papago");
-        assert!(h.is_some(), "papago 프로바이더 토글에 브랜드 아이콘이 있어야 함");
+        assert!(
+            h.is_some(),
+            "papago 프로바이더 토글에 브랜드 아이콘이 있어야 함"
+        );
     }
 
     #[test]

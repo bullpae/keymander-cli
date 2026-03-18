@@ -105,13 +105,19 @@ fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
     let expected_version = kmd_core::Index::current_version();
 
     if let Some(cached) = store::try_load_cached(&bin_path, &json_path, expected_version) {
-        tracing::info!("Quick index cache hit in {} ms", started.elapsed().as_millis());
+        tracing::info!(
+            "Quick index cache hit in {} ms",
+            started.elapsed().as_millis()
+        );
         return cached;
     }
 
     let index = kmd_core::Index::build_quick(use_emoji);
     store::save_both(&index, &bin_path, &json_path);
-    tracing::info!("Quick index rebuilt from source in {} ms", started.elapsed().as_millis());
+    tracing::info!(
+        "Quick index rebuilt from source in {} ms",
+        started.elapsed().as_millis()
+    );
     index
 }
 
@@ -132,6 +138,9 @@ fn load_or_build_index(config: &kmd_core::Config) -> kmd_core::Index {
 
     let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
     store::save_both(&index, &bin_path, &json_path);
-    tracing::info!("Index built from source in {} ms", started.elapsed().as_millis());
+    tracing::info!(
+        "Index built from source in {} ms",
+        started.elapsed().as_millis()
+    );
     index
 }

@@ -128,6 +128,10 @@ impl SearchEngine {
         self.all_items.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.all_items.is_empty()
+    }
+
     /// Set the kind weights for score boosting
     pub fn set_kind_weights(&mut self, weights: KindWeights) {
         self.kind_weights = weights;
