@@ -1505,6 +1505,27 @@ impl App {
             self.window_state.save();
         }
 
+        // Shell 명령 실행 → 결과를 클립보드에 복사
+        if result.item.kind == ItemKind::Shell {
+            use kmd_core::plugin::Extension;
+            let shell_ext = builtin_shell::ShellExtension;
+            match shell_ext.execute(&result.item) {
+                kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(&output);
+                    }
+                    let first_line = output.lines().next().unwrap_or("(no output)");
+                    tracing::info!("Shell output copied: {first_line}");
+                }
+                kmd_core::plugin::ExtensionAction::Display(msg) => {
+                    tracing::error!("Shell error: {msg}");
+                    return Task::none();
+                }
+                _ => {}
+            }
+            return iced::exit();
+        }
+
         // 웹 검색 결과 — extract_batch_urls 통합 추출
         if result.item.kind == ItemKind::WebSearch {
             if let Some(urls) = web::extract_batch_urls(&result.item) {
