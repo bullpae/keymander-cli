@@ -188,29 +188,26 @@ fn load_config() -> Config {
 }
 
 /// config의 keymap 설정에 따라 KeybindConfig 결정.
-/// "custom"이면 TOML 설정을 파싱, 아니면 프리셋 사용.
+///
+/// - "vim-nav": config 파일에 커스텀 설정이 있으면 그 값을 사용, 없으면 하드코딩 프리셋
+/// - "minimal": config 파일 → 없으면 minimal 프리셋
+/// - "none": 키 바인딩 비활성화
+/// - 기타: TOML 커스텀 설정 시도 → 없으면 vim-nav 프리셋 폴백
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let profile = &config.launcher.keymap.active_profile;
 
-    if profile.contains("custom") {
-        if let Some(custom) = KeybindConfig::from_config(&config.launcher.keymap) {
-            return custom;
-        }
-        tracing::warn!("custom 프로필이지만 설정이 비어있어 vim-nav 프리셋 사용");
-        return KeybindConfig::vim_nav_preset();
+    if profile.contains("none") {
+        return KeybindConfig::empty();
     }
 
-    if profile.contains("vim-nav") {
-        KeybindConfig::vim_nav_preset()
-    } else if profile.contains("minimal") {
-        KeybindConfig::minimal_preset()
-    } else if profile.contains("none") {
-        KeybindConfig::empty()
-    } else {
-        // 프리셋 이름이 아닌 경우 TOML 커스텀 설정을 시도
-        KeybindConfig::from_config(&config.launcher.keymap)
-            .unwrap_or_else(KeybindConfig::vim_nav_preset)
+    if profile.contains("minimal") {
+        return KeybindConfig::from_config(&config.launcher.keymap)
+            .unwrap_or_else(KeybindConfig::minimal_preset);
     }
+
+    // "vim-nav", "custom", 기타 모두: config 파일 값 우선, 없으면 프리셋 폴백
+    KeybindConfig::from_config(&config.launcher.keymap)
+        .unwrap_or_else(KeybindConfig::vim_nav_preset)
 }
 
 fn write_runtime_files(port: u16) -> color_eyre::Result<()> {

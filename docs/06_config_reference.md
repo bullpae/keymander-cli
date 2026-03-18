@@ -158,14 +158,14 @@ flowchart TD
 | backend | String | "kanata" | 키맵 백엔드 (현재 kanata만 지원) |
 | kanata_path | Path? | None | kanata 바이너리 경로 (None = PATH에서 탐색) |
 | profile_dir | Path? | None | 프로파일 디렉토리 (None = `config_dir/keymap`) |
-| active_profile | String | "vim-nav.kbd" | 활성 프로파일 파일명 |
+| active_profile | String | "vim-nav" | 활성 프로파일 이름 |
 
 ```toml
 [launcher.keymap]
 backend = "kanata"
 # kanata_path = "C:\\Users\\you\\bin\\kanata.exe"
 # profile_dir = "C:\\Users\\you\\.config\\kmd\\keymap"
-active_profile = "vim-nav.kbd"
+active_profile = "vim-nav"
 ```
 
 **내장 프리셋**:

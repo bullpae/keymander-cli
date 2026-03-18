@@ -75,8 +75,8 @@ impl VKey {
             "lshift" => Some(Self::LShift), "rshift" => Some(Self::RShift),
             "lctrl" | "lcontrol" => Some(Self::LCtrl), "rctrl" | "rcontrol" => Some(Self::RCtrl),
             "lalt" => Some(Self::LAlt), "ralt" => Some(Self::RAlt),
-            "lwin" | "lsuper" | "lmeta" => Some(Self::LWin),
-            "rwin" | "rsuper" | "rmeta" => Some(Self::RWin),
+            "lwin" | "lsuper" | "lmeta" | "lcmd" | "cmd" => Some(Self::LWin),
+            "rwin" | "rsuper" | "rmeta" | "rcmd" => Some(Self::RWin),
             ";" | "semicolon" => Some(Self::Semicolon),
             "'" | "quote" => Some(Self::Quote),
             "," | "comma" => Some(Self::Comma),
@@ -522,7 +522,7 @@ fn parse_modifier_vkey(name: &str) -> Option<VKey> {
         "ctrl" | "control" => Some(VKey::LCtrl),
         "shift" => Some(VKey::LShift),
         "alt" => Some(VKey::LAlt),
-        "win" | "super" | "meta" => Some(VKey::LWin),
+        "win" | "super" | "meta" | "cmd" | "command" => Some(VKey::LWin),
         _ => VKey::from_name(name),
     }
 }
@@ -533,7 +533,7 @@ fn parse_modifier(name: &str) -> Option<Modifier> {
         "shift" | "lshift" | "rshift" => Some(Modifier::Shift),
         "ctrl" | "control" | "lctrl" | "rctrl" => Some(Modifier::Ctrl),
         "alt" | "lalt" | "ralt" => Some(Modifier::Alt),
-        "win" | "super" | "meta" | "lwin" | "rwin" => Some(Modifier::Win),
+        "win" | "super" | "meta" | "cmd" | "command" | "lwin" | "rwin" | "lcmd" | "rcmd" => Some(Modifier::Win),
         _ => None,
     }
 }

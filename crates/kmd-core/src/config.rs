@@ -294,7 +294,7 @@ impl Default for KeymapConfig {
             backend: "kanata".to_string(),
             kanata_path: None,
             profile_dir: None,
-            active_profile: "vim-nav.kbd".to_string(),
+            active_profile: "vim-nav".to_string(),
             remaps: HashMap::new(),
             layers: HashMap::new(),
             combos: Vec::new(),
@@ -931,7 +931,7 @@ mod tests {
             vec!["@tr", "@trko", "@tren"]
         );
         assert_eq!(config.launcher.keymap.backend, "kanata");
-        assert_eq!(config.launcher.keymap.active_profile, "vim-nav.kbd");
+        assert_eq!(config.launcher.keymap.active_profile, "vim-nav");
     }
 
     #[test]

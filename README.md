@@ -410,7 +410,7 @@ translate_prefixes = ["@tr", "@trko", "@tren"]
 backend = "kanata"
 kanata_path = ""              # optional absolute path
 profile_dir = ""              # optional profile dir (default: config_dir/keymap)
-active_profile = "vim-nav.kbd"
+active_profile = "vim-nav"
 
 # Search priority weights (0-100, higher = ranked higher)
 [launcher.kind_weights]
