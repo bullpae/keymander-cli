@@ -1898,16 +1898,13 @@ impl App {
         }
 
         self.last_window_size = size;
-        let input_id = self.input_id.clone();
-        let resize_task = match self.window_id {
+        match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
                 Some(id) => window::resize(id, size),
                 None => Task::none(),
             }),
-        };
-        let refocus = iced::widget::operation::focus::<Message>(input_id);
-        Task::batch([resize_task, refocus])
+        }
     }
 }
 
