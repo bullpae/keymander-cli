@@ -48,6 +48,7 @@ const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 120;
 const MAX_FOCUS_RETRIES: u8 = 3;
+const EMPTY_QUERY_RESIZE_DEBOUNCE_MS: u64 = 90;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
@@ -99,8 +100,6 @@ pub struct App {
     state_dirty: bool,
     last_window_size: Size,
     window_focused: bool,
-    /// 마지막 키 입력 시각 — IME 전환 중 일시적 Unfocused 판별에 사용
-    last_key_instant: std::time::Instant,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -108,6 +107,7 @@ pub struct App {
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
     warmup_token: u64,
+    resize_token: u64,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -129,6 +129,7 @@ pub enum Message {
     EngineReady,
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
+    DelayedResize(u64),
     ShellDone(Result<String, String>),
     /// 상세 패널의 컨텍스트 액션 실행
     RunAction(ContextAction),
@@ -271,10 +272,10 @@ impl App {
             state_dirty: false,
             last_window_size: Size::new(window_width, SEARCH_BAR_HEIGHT),
             window_focused: true,
-            last_key_instant: std::time::Instant::now(),
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
+            resize_token: 0,
         };
 
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
@@ -299,6 +300,13 @@ impl App {
         Task::future(async move {
             tokio::time::sleep(Duration::from_millis(FOCUS_RETRY_MS)).await;
             Message::EnsureFocus(attempt)
+        })
+    }
+
+    fn schedule_delayed_resize(token: u64) -> Task<Message> {
+        Task::future(async move {
+            tokio::time::sleep(Duration::from_millis(EMPTY_QUERY_RESIZE_DEBOUNCE_MS)).await;
+            Message::DelayedResize(token)
         })
     }
 
@@ -341,7 +349,6 @@ impl App {
             Message::QueryChanged(query) => {
                 self.query = query;
                 self.selected = 0;
-                self.last_key_instant = std::time::Instant::now();
                 let search_task = self.perform_search();
                 if self.full_warmup_started {
                     search_task
@@ -357,7 +364,6 @@ impl App {
                 self.launch_selected()
             }
             Message::KeyEvent(key, modifiers) => {
-                self.last_key_instant = std::time::Instant::now();
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {
                     return self.execute_context_action(action);
                 }
@@ -471,6 +477,18 @@ impl App {
                     return Task::none();
                 }
 
+                // 사용자가 다른 창으로 포커스를 옮긴 상태에서는
+                // 대기 중이던 retry/지연 포커스가 포커스를 다시 빼앗지 않도록 차단한다.
+                if !self.window_focused {
+                    if let Some(raw_id) = self.raw_window_id {
+                        if !crate::platform::is_our_window_foreground(raw_id) {
+                            return Task::none();
+                        }
+                    } else {
+                        return Task::none();
+                    }
+                }
+
                 let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
                 if attempt == MAX_FOCUS_RETRIES {
                     focus_task
@@ -529,10 +547,6 @@ impl App {
                         let focus_now =
                             iced::widget::operation::focus::<Message>(self.input_id.clone());
                         let focus_retry = Self::schedule_focus_retry(1);
-                        // OS 레벨 포그라운드도 확보
-                        if let Some(raw_id) = self.raw_window_id {
-                            crate::platform::force_foreground(raw_id);
-                        }
                         return Task::batch([focus_now, focus_retry]);
                     }
                     window::Event::Moved(point) => {
@@ -555,15 +569,21 @@ impl App {
                     }
                     window::Event::Unfocused => {
                         self.window_focused = false;
-                        let recently_typed =
-                            self.last_key_instant.elapsed() < Duration::from_millis(1200);
-                        let delay = if recently_typed { 800 } else { 400 };
-                        return Task::future(async move {
-                            tokio::time::sleep(Duration::from_millis(delay)).await;
+                        return Task::future(async {
+                            tokio::time::sleep(Duration::from_millis(300)).await;
                             Message::CheckUnfocusedExit
                         });
                     }
                     _ => {}
+                }
+                Task::none()
+            }
+            Message::DelayedResize(token) => {
+                if token != self.resize_token {
+                    return Task::none();
+                }
+                if self.query.trim().is_empty() && self.results.is_empty() {
+                    return self.resize_window();
                 }
                 Task::none()
             }
@@ -591,28 +611,15 @@ impl App {
                 if self.window_focused {
                     return Task::none();
                 }
-
-                // 최근 키 입력이 있었으면 IME 전환 등 일시적 유실로 간주
-                let recently_typed =
-                    self.last_key_instant.elapsed() < Duration::from_millis(1500);
-
                 if let Some(raw_id) = self.raw_window_id {
-                    let is_fg = crate::platform::is_our_window_foreground(raw_id);
-
-                    if is_fg || recently_typed {
+                    if crate::platform::is_our_window_foreground(raw_id) {
                         self.window_focused = true;
-                        crate::platform::force_foreground(raw_id);
                         let focus_now = iced::widget::operation::focus::<Message>(
                             self.input_id.clone(),
                         );
                         let focus_retry = Self::schedule_focus_retry(1);
                         return Task::batch([focus_now, focus_retry]);
                     }
-                } else if recently_typed {
-                    self.window_focused = true;
-                    return iced::widget::operation::focus::<Message>(
-                        self.input_id.clone(),
-                    );
                 }
 
                 if self.state_dirty {
@@ -769,10 +776,15 @@ impl App {
     fn perform_search(&mut self) -> Task<Message> {
         let query = self.query.clone();
         let trimmed = query.trim();
+        self.resize_token = self.resize_token.wrapping_add(1);
+        let resize_token = self.resize_token;
 
         if trimmed.is_empty() {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
+            // 마지막 글자 삭제 시 즉시 리사이즈를 피해서
+            // Windows에서 발생하는 깜빡임/깨짐을 줄인다.
+            return Self::schedule_delayed_resize(resize_token);
         } else {
             match prefix_of(trimmed) {
                 Prefix::Web => self.handle_web_query(trimmed),
@@ -1702,6 +1714,20 @@ impl App {
         }
 
         if results.is_empty() && !query.is_empty() {
+            if let Some(relaxed) = relaxed_hangul_query(query) {
+                let relaxed_results = self.engine.search_with_mode(
+                    kmd_core::SearchMode::Contains,
+                    &relaxed,
+                    SEARCH_LIMIT,
+                );
+                if !relaxed_results.is_empty() {
+                    results = relaxed_results;
+                    self.search_mode = kmd_core::SearchMode::Contains;
+                }
+            }
+        }
+
+        if results.is_empty() && !query.is_empty() {
             results = self.build_fallback_suggestions(query);
             self.search_mode = kmd_core::SearchMode::Contains;
         }
@@ -2124,40 +2150,43 @@ impl App {
         let has_results = !self.results.is_empty();
 
         let bar_surface = Color {
-            r: (surface.r + 0.03).min(1.0),
-            g: (surface.g + 0.03).min(1.0),
-            b: (surface.b + 0.03).min(1.0),
+            r: (surface.r + 0.02).min(1.0),
+            g: (surface.g + 0.02).min(1.0),
+            b: (surface.b + 0.02).min(1.0),
             a: surface.a,
         };
 
         let radius = t.corner_radius;
-        let bar_border_width: f32 = if has_results { 0.0 } else { 1.5 };
-        let bar_shadow_blur: f32 = if has_results { 0.0 } else { 8.0 };
+        let bar_border_width: f32 = if has_results { 1.0 } else { 1.2 };
+        let bar_shadow_blur: f32 = if has_results { 4.0 } else { 10.0 };
 
         let brand = mouse_area(
-            container(text("\u{00BB}").size(24).color(t.peach)).padding(Padding::from([0, 4])),
+            container(text("\u{00BB}").size(23).color(t.peach))
+                .padding(Padding {
+                    top: 0.0,
+                    right: 6.0,
+                    bottom: 0.0,
+                    left: 2.0,
+                }),
         )
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
         .interaction(iced::mouse::Interaction::Pointer);
 
-        let placeholder = if self.loading {
-            "Loading..."
-        } else {
-            "Search anything...  (:help for commands)"
-        };
+        // placeholder는 고정 문자열로 유지해 깜빡임을 방지한다.
+        let placeholder = "Search anything...  (:help for commands)";
 
         let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
             .width(Fill)
-            .size(18)
+            .size(19)
             .padding(Padding {
                 top: 0.0,
                 right: 0.0,
                 bottom: 0.0,
-                left: 2.0,
+                left: 4.0,
             })
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
@@ -2170,7 +2199,7 @@ impl App {
                     overlay_color
                 };
                 text_input::Style {
-                    background: Background::Color(bar_surface),
+                    background: Background::Color(Color::TRANSPARENT),
                     border: Border::default(),
                     icon: overlay_color,
                     placeholder: ph_color,
@@ -2182,54 +2211,54 @@ impl App {
                 }
             });
 
-        let mode_text = if self.query.is_empty() {
-            ""
+        let status_text = if self.loading {
+            "INDEX"
+        } else if self.query.is_empty() {
+            "READY"
         } else {
             self.search_mode.label()
         };
-        let badge = text(mode_text).size(11).color(t.overlay);
-
-        let bar_content = row![brand, input, badge]
-            .spacing(12)
-            .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 16]));
-
-        // Depth layering (raised card 3D effect)
-        let highlight_color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
-        let shadow_line_color = Color::from_rgba(0.0, 0.0, 0.0, 0.3);
-        let border_glow = Color {
-            a: 0.30,
-            ..accent_color
-        };
-
-        // Full-width drag strip so users can move window naturally.
-        let top_drag_strip = mouse_area(container(text("")).width(Fill).height(12).style(
-            move |_: &_| container::Style {
-                background: Some(Background::Color(highlight_color)),
-                ..Default::default()
-            },
-        ))
-        .on_press(Message::StartWindowDrag)
-        .interaction(iced::mouse::Interaction::Grab);
-
-        let main_bar = container(bar_content)
-            .width(Fill)
-            .height(SEARCH_BAR_HEIGHT - 13.0)
-            .center_y(Fill);
-
-        let bottom_shadow = container(text(""))
-            .width(Fill)
-            .height(1)
+        let badge_text = text(status_text).size(11).color(t.overlay);
+        let chip_surface = Color::from_rgba(
+            (bar_surface.r + 0.03).min(1.0),
+            (bar_surface.g + 0.03).min(1.0),
+            (bar_surface.b + 0.03).min(1.0),
+            1.0,
+        );
+        let badge = container(badge_text)
+            .padding(Padding::from([4, 8]))
             .style(move |_: &_| container::Style {
-                background: Some(Background::Color(if has_results {
-                    shadow_line_color
-                } else {
-                    Color::TRANSPARENT
-                })),
+                background: Some(Background::Color(chip_surface)),
+                border: Border {
+                    radius: 999.0.into(),
+                    width: 1.0,
+                    color: Color::from_rgba(accent_color.r, accent_color.g, accent_color.b, 0.22),
+                },
                 ..Default::default()
             });
 
-        let layered = column![top_drag_strip, main_bar, bottom_shadow];
+        let bar_content = row![brand, input, badge]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .padding(Padding::from([0, 14]));
+
+        let border_glow = Color {
+            a: if has_results { 0.18 } else { 0.28 },
+            ..accent_color
+        };
+        let top_drag_strip = mouse_area(container(text("")).width(Fill).height(8))
+            .on_press(Message::StartWindowDrag)
+            .interaction(iced::mouse::Interaction::Grab);
+
+        let main_bar = container(bar_content).style(move |_: &_| container::Style {
+            background: Some(Background::Color(bar_surface)),
+            ..Default::default()
+        })
+            .width(Fill)
+            .height(SEARCH_BAR_HEIGHT - 8.0)
+            .center_y(Fill);
+
+        let layered = column![top_drag_strip, main_bar];
 
         container(layered)
             .width(Fill)
@@ -2243,7 +2272,7 @@ impl App {
                 },
                 shadow: Shadow {
                     color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-                    offset: Vector::new(0.0, 2.0),
+                    offset: Vector::new(0.0, 3.0),
                     blur_radius: bar_shadow_blur,
                 },
                 text_color: None,
@@ -2698,6 +2727,39 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars).collect();
         format!("{truncated}...")
     }
+}
+
+/// IME 조합 중 생성되는 trailing 자모를 완화해 즉시 검색 반응성을 높인다.
+///
+/// 예: `하ㄴ` -> `하`, `한ㄱ` -> `한`
+fn relaxed_hangul_query(query: &str) -> Option<String> {
+    if query.is_empty() {
+        return None;
+    }
+
+    let mut chars: Vec<char> = query.chars().collect();
+    let original_len = chars.len();
+    while let Some(last) = chars.last() {
+        if is_hangul_jamo(*last) {
+            chars.pop();
+        } else {
+            break;
+        }
+    }
+
+    if chars.is_empty() || chars.len() == original_len {
+        return None;
+    }
+
+    Some(chars.into_iter().collect())
+}
+
+fn is_hangul_jamo(ch: char) -> bool {
+    let code = ch as u32;
+    (0x1100..=0x11FF).contains(&code)
+        || (0x3131..=0x318E).contains(&code)
+        || (0xA960..=0xA97F).contains(&code)
+        || (0xD7B0..=0xD7FF).contains(&code)
 }
 
 fn items_to_results(

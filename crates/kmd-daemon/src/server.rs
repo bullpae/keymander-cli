@@ -208,16 +208,25 @@ fn load_config() -> Config {
 /// `keybindings.global_hotkey`는 프로필과 무관하게 항상 적용됨.
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let profile = &config.launcher.keymap.active_profile;
+    let keymap_disabled = profile.contains("none");
 
-    let mut kb = if profile.contains("none") {
+    let base = if keymap_disabled {
         KeybindConfig::empty()
     } else if profile.contains("minimal") {
-        KeybindConfig::from_config(&config.launcher.keymap)
-            .unwrap_or_else(KeybindConfig::minimal_preset)
+        KeybindConfig::minimal_preset()
     } else {
-        KeybindConfig::from_config(&config.launcher.keymap)
-            .unwrap_or_else(KeybindConfig::vim_nav_preset)
+        KeybindConfig::vim_nav_preset()
     };
+
+    let mut kb = if let Some(custom) = KeybindConfig::from_config(&config.launcher.keymap) {
+        merge_keybind_config(base, custom)
+    } else {
+        base
+    };
+
+    if !keymap_disabled {
+        ensure_hangul_fallback(&mut kb);
+    }
 
     // global_hotkey → kmd-desktop 실행 콤보 (프로필과 무관하게 항상 등록)
     let hotkey = &config.keybindings.global_hotkey;
@@ -232,6 +241,80 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     kb
 }
 
+/// 프리셋(base) + 사용자 TOML(custom) 병합.
+///
+/// - remaps: 같은 키는 custom이 덮어씀
+/// - layers: 같은 name은 custom이 덮어씀, 새 name은 추가
+/// - combos: 같은 trigger(modifiers+key)는 custom이 덮어씀
+/// - double_taps: 같은 key는 custom이 덮어씀
+fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> KeybindConfig {
+    for (k, v) in custom.remaps {
+        base.remaps.insert(k, v);
+    }
+
+    for custom_layer in custom.layers {
+        if let Some(pos) = base.layers.iter().position(|layer| layer.name == custom_layer.name) {
+            base.layers[pos] = custom_layer;
+        } else {
+            base.layers.push(custom_layer);
+        }
+    }
+
+    for (trigger, action) in custom.combos {
+        if let Some(pos) = base.combos.iter().position(|(t, _)| {
+            t.key == trigger.key && t.modifiers == trigger.modifiers
+        }) {
+            base.combos[pos] = (trigger, action);
+        } else {
+            base.combos.push((trigger, action));
+        }
+    }
+
+    for dt in custom.double_taps {
+        if let Some(pos) = base.double_taps.iter().position(|x| x.key == dt.key) {
+            base.double_taps[pos] = dt;
+        } else {
+            base.double_taps.push(dt);
+        }
+    }
+
+    base
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
+    let has_shift_space = kb.combos.iter().any(|(trigger, _)| {
+        trigger.key == keybind::VKey::Space
+            && trigger.modifiers.len() == 1
+            && trigger.modifiers[0] == keybind::Modifier::Shift
+    });
+
+    if !has_shift_space {
+        kb.combos.push((
+            keybind::ComboTrigger {
+                modifiers: vec![keybind::Modifier::Shift],
+                key: keybind::VKey::Space,
+            },
+            keybind::BindAction::SendKey(keybind::VKey::Hangul),
+        ));
+    }
+
+    let has_rshift_dt = kb
+        .double_taps
+        .iter()
+        .any(|dt| dt.key == keybind::VKey::RShift);
+    if !has_rshift_dt {
+        kb.double_taps.push(keybind::DoubleTapBinding {
+            key: keybind::VKey::RShift,
+            action: keybind::BindAction::SendKey(keybind::VKey::Hangul),
+            timeout_ms: 300,
+        });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_hangul_fallback(_kb: &mut KeybindConfig) {}
+
 fn write_runtime_files(port: u16) -> color_eyre::Result<()> {
     let data_dir = Config::default_data_dir();
     std::fs::create_dir_all(&data_dir)?;
@@ -243,4 +326,55 @@ fn write_runtime_files(port: u16) -> color_eyre::Result<()> {
 
 fn cleanup_runtime_files() {
     ipc::cleanup_stale_files();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_keybind_keeps_base_combos_when_custom_has_none() {
+        let base = KeybindConfig::minimal_preset();
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![],
+            combos: vec![],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        assert!(
+            !merged.combos.is_empty(),
+            "custom 설정이 비어있어도 base 콤보는 유지되어야 함"
+        );
+    }
+
+    #[test]
+    fn merge_keybind_overrides_same_combo_trigger() {
+        let base = KeybindConfig::minimal_preset();
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![],
+            combos: vec![(
+                keybind::ComboTrigger {
+                    modifiers: vec![keybind::Modifier::Shift],
+                    key: keybind::VKey::Space,
+                },
+                keybind::BindAction::SendKey(keybind::VKey::Hanja),
+            )],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        let mut matched = false;
+        for (trigger, action) in merged.combos {
+            if trigger.key == keybind::VKey::Space
+                && trigger.modifiers.len() == 1
+                && trigger.modifiers[0] == keybind::Modifier::Shift
+            {
+                matched = matches!(action, keybind::BindAction::SendKey(keybind::VKey::Hanja));
+            }
+        }
+        assert!(matched, "동일 트리거 콤보는 custom 액션으로 덮어써야 함");
+    }
 }

@@ -505,8 +505,8 @@ impl KeybindConfig {
                 mappings,
                 double_tap_mappings,
             }],
-            combos: vec![],
-            double_taps: vec![],
+            combos: default_hangul_combos(),
+            double_taps: default_hangul_double_taps(),
         }
     }
 
@@ -531,6 +531,36 @@ impl KeybindConfig {
             }],
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
+    vec![(
+        ComboTrigger {
+            modifiers: vec![Modifier::Shift],
+            key: VKey::Space,
+        },
+        BindAction::SendKey(VKey::Hangul),
+    )]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn default_hangul_double_taps() -> Vec<DoubleTapBinding> {
+    vec![DoubleTapBinding {
+        key: VKey::RShift,
+        action: BindAction::SendKey(VKey::Hangul),
+        timeout_ms: 300,
+    }]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_hangul_double_taps() -> Vec<DoubleTapBinding> {
+    Vec::new()
 }
 
 // ── TOML 설정 → KeybindConfig 변환 ───────────────────────────────────────────
@@ -865,8 +895,16 @@ mod tests {
             layer.double_tap_mappings.contains_key(&VKey::O),
             "Alt+O 더블탭"
         );
-        assert!(config.combos.is_empty(), "콤보는 시스템 입력소스 전환에 위임");
-        assert!(config.double_taps.is_empty());
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
+            assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(config.combos.is_empty(), "콤보는 시스템 입력소스 전환에 위임");
+            assert!(config.double_taps.is_empty());
+        }
     }
 
     #[test]
