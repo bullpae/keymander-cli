@@ -253,7 +253,11 @@ fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> Keybi
     }
 
     for custom_layer in custom.layers {
-        if let Some(pos) = base.layers.iter().position(|layer| layer.name == custom_layer.name) {
+        if let Some(pos) = base
+            .layers
+            .iter()
+            .position(|layer| layer.name == custom_layer.name)
+        {
             base.layers[pos] = custom_layer;
         } else {
             base.layers.push(custom_layer);
@@ -261,9 +265,11 @@ fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> Keybi
     }
 
     for (trigger, action) in custom.combos {
-        if let Some(pos) = base.combos.iter().position(|(t, _)| {
-            t.key == trigger.key && t.modifiers == trigger.modifiers
-        }) {
+        if let Some(pos) = base
+            .combos
+            .iter()
+            .position(|(t, _)| t.key == trigger.key && t.modifiers == trigger.modifiers)
+        {
             base.combos[pos] = (trigger, action);
         } else {
             base.combos.push((trigger, action));

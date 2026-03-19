@@ -275,6 +275,38 @@ fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
         },
     ]
 }
+
+/// 줄 전체 삭제 액션
+/// macOS: Ctrl+A → Shift+Ctrl+E → Delete
+/// Windows/Linux: Home → Shift+End → Delete
+#[cfg(target_os = "macos")]
+fn platform_line_delete_action() -> BindAction {
+    BindAction::Macro(vec![
+        MacroStep::Combo {
+            modifiers: vec![VKey::LCtrl],
+            key: VKey::A,
+        },
+        MacroStep::Combo {
+            modifiers: vec![VKey::LShift, VKey::LCtrl],
+            key: VKey::E,
+        },
+        MacroStep::KeyPress(VKey::Delete),
+        MacroStep::KeyRelease(VKey::Delete),
+    ])
+}
+#[cfg(not(target_os = "macos"))]
+fn platform_line_delete_action() -> BindAction {
+    BindAction::Macro(vec![
+        MacroStep::KeyPress(VKey::Home),
+        MacroStep::KeyRelease(VKey::Home),
+        MacroStep::Combo {
+            modifiers: vec![VKey::LShift],
+            key: VKey::End,
+        },
+        MacroStep::KeyPress(VKey::Delete),
+        MacroStep::KeyRelease(VKey::Delete),
+    ])
+}
 #[cfg(not(target_os = "macos"))]
 fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
     vec![
@@ -452,7 +484,7 @@ impl KeybindConfig {
         mappings.insert(VKey::J, BindAction::SendKey(VKey::Down));
         mappings.insert(VKey::K, BindAction::SendKey(VKey::Up));
         mappings.insert(VKey::L, BindAction::SendKey(VKey::Right));
-        mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
+        mappings.insert(VKey::U, BindAction::SendKey(VKey::PageUp));
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
         mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
@@ -466,9 +498,6 @@ impl KeybindConfig {
                 key: VKey::V,
             },
         );
-        // / → Delete
-        mappings.insert(VKey::Slash, BindAction::SendKey(VKey::Delete));
-
         let mut double_tap_mappings = HashMap::new();
         // I: 탭 → 단어 왼쪽, 더블탭 → 줄 시작
         double_tap_mappings.insert(
@@ -491,6 +520,15 @@ impl KeybindConfig {
                     key: VKey::Right,
                 },
                 double_action: platform_end_action(),
+                timeout_ms: 300,
+            },
+        );
+        // /: 탭 → Delete, 더블탭 → 현재 줄 삭제
+        double_tap_mappings.insert(
+            VKey::Slash,
+            LayerDoubleTap {
+                single_action: BindAction::SendKey(VKey::Delete),
+                double_action: platform_line_delete_action(),
                 timeout_ms: 300,
             },
         );
@@ -869,6 +907,11 @@ mod tests {
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
+        assert!(layer.mappings.contains_key(&VKey::U), "Alt+U는 PageUp 매핑");
+        assert!(
+            !layer.mappings.contains_key(&VKey::Slash),
+            "/는 double_tap_mappings로 이동"
+        );
         assert!(
             !layer.mappings.contains_key(&VKey::I),
             "I는 double_tap_mappings로 이동"
@@ -885,6 +928,10 @@ mod tests {
             layer.double_tap_mappings.contains_key(&VKey::O),
             "Alt+O 더블탭"
         );
+        assert!(
+            layer.double_tap_mappings.contains_key(&VKey::Slash),
+            "Alt+/ 더블탭"
+        );
         #[cfg(target_os = "windows")]
         {
             assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
@@ -892,7 +939,10 @@ mod tests {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            assert!(config.combos.is_empty(), "콤보는 시스템 입력소스 전환에 위임");
+            assert!(
+                config.combos.is_empty(),
+                "콤보는 시스템 입력소스 전환에 위임"
+            );
             assert!(config.double_taps.is_empty());
         }
     }

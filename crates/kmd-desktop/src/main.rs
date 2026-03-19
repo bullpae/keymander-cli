@@ -100,12 +100,8 @@ fn main() -> iced::Result {
 
     iced::application(
         move || {
-            let mut lock = boot_data
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let (guard, config, ws) = lock
-                .take()
-                .expect("boot called more than once");
+            let mut lock = boot_data.lock().unwrap_or_else(|e| e.into_inner());
+            let (guard, config, ws) = lock.take().expect("boot called more than once");
             app::App::new(guard, config, ws)
         },
         app::App::update,

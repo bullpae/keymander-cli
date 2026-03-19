@@ -111,6 +111,7 @@ pub struct App {
 
     /// 프로그래밍적 resize 후 Resized 이벤트에서 window_width 갱신을 방지
     expected_resize: Option<Size>,
+    last_programmatic_resize_at: Option<std::time::Instant>,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -280,6 +281,7 @@ impl App {
             warmup_token: 0,
             resize_token: 0,
             expected_resize: None,
+            last_programmatic_resize_at: None,
         };
 
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
@@ -575,13 +577,12 @@ impl App {
                             }
                         }
                         // 사용자가 직접 드래그로 리사이즈한 경우만 window_width 갱신
-                        let base_width = if size.width
-                            > self.window_width + DETAIL_PANEL_WIDTH / 2.0
-                        {
-                            (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
-                        } else {
-                            size.width
-                        };
+                        let base_width =
+                            if size.width > self.window_width + DETAIL_PANEL_WIDTH / 2.0 {
+                                (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
+                            } else {
+                                size.width
+                            };
                         if (base_width - self.window_width).abs() > 1.0 {
                             self.window_width = base_width;
                             self.window_state.width = Some(base_width);
@@ -635,9 +636,19 @@ impl App {
                 if let Some(raw_id) = self.raw_window_id {
                     if crate::platform::is_our_window_foreground(raw_id) {
                         self.window_focused = true;
-                        let focus_now = iced::widget::operation::focus::<Message>(
-                            self.input_id.clone(),
-                        );
+                        let focus_now =
+                            iced::widget::operation::focus::<Message>(self.input_id.clone());
+                        let focus_retry = Self::schedule_focus_retry(1);
+                        return Task::batch([focus_now, focus_retry]);
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                if let Some(ts) = self.last_programmatic_resize_at {
+                    if ts.elapsed() < Duration::from_millis(220) {
+                        // macOS에서 드물게 리사이즈 직후 Unfocused가 스푸리어스하게 들어올 수 있음.
+                        self.window_focused = true;
+                        let focus_now =
+                            iced::widget::operation::focus::<Message>(self.input_id.clone());
                         let focus_retry = Self::schedule_focus_retry(1);
                         return Task::batch([focus_now, focus_retry]);
                     }
@@ -803,8 +814,6 @@ impl App {
         if trimmed.is_empty() {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
-            // 마지막 글자 삭제 시 즉시 리사이즈를 피해서
-            // Windows에서 발생하는 깜빡임/깨짐을 줄인다.
             return Self::schedule_delayed_resize(resize_token);
         } else {
             match prefix_of(trimmed) {
@@ -822,7 +831,9 @@ impl App {
             }
         }
 
-        self.resize_window()
+        // 결과 변화가 빠르게 연속 발생할 수 있으므로 resize를 coalescing 처리
+        // (마지막 토큰만 유효)해서 macOS 깜빡임과 포커스 튐을 줄인다.
+        Self::schedule_delayed_resize(resize_token)
     }
 
     /// classify_web_query 통합 분류기 사용
@@ -1983,15 +1994,15 @@ impl App {
     }
 
     fn resize_window(&mut self) -> Task<Message> {
-        let has_results = !self.results.is_empty();
-        // 결과가 있을 때 항상 MAX_VISIBLE_ROWS 높이를 사용하여
-        // 키 입력마다 높이가 바뀌는 깜빡임/노이즈 방지
-        let height = if has_results {
+        // query가 존재하는 동안 결과 껍데기(리스트/상세 영역)를 유지해
+        // 결과 0↔N 전환 시 레이아웃 점프와 깜빡임을 줄인다.
+        let show_results_shell = !self.query.trim().is_empty();
+        let height = if show_results_shell {
             SEARCH_BAR_HEIGHT + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT
         } else {
             SEARCH_BAR_HEIGHT
         };
-        let width = if has_results {
+        let width = if show_results_shell {
             self.window_width + DETAIL_PANEL_WIDTH + 1.0
         } else {
             self.window_width
@@ -2007,12 +2018,22 @@ impl App {
 
         self.last_window_size = size;
         self.expected_resize = Some(size);
-        match self.window_id {
+        self.last_programmatic_resize_at = Some(std::time::Instant::now());
+        let resize_task = match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
                 Some(id) => window::resize(id, size),
                 None => Task::none(),
             }),
+        };
+
+        // 리사이즈 직후 text_input 포커스가 떨어지는 회귀를 방지한다.
+        // (window_focused=false일 때는 포커스를 되찾지 않음)
+        if self.window_focused {
+            let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
+            Task::batch([resize_task, focus_task])
+        } else {
+            resize_task
         }
     }
 }
@@ -2068,12 +2089,12 @@ fn prefix_of(query: &str) -> Prefix {
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let t = &self.theme;
-        let has_results = !self.results.is_empty();
+        let show_results_shell = !self.query.trim().is_empty();
 
         let search_bar = self.view_search_bar();
         let mut left_col = Column::new().push(search_bar);
 
-        if has_results {
+        if show_results_shell {
             let border_color = t.border;
             left_col = left_col.push(container(text("")).width(Fill).height(1).style(
                 move |_: &_| container::Style {
@@ -2093,7 +2114,7 @@ impl App {
             left_col = left_col.push(self.view_accent_bar());
         }
 
-        let content: Element<'_, Message> = if has_results {
+        let content: Element<'_, Message> = if show_results_shell {
             let divider_color = t.border;
             let divider = container(text(""))
                 .width(1)
@@ -2174,15 +2195,14 @@ impl App {
         let bar_border_width: f32 = if has_results { 1.0 } else { 1.2 };
         let bar_shadow_blur: f32 = if has_results { 4.0 } else { 10.0 };
 
-        let brand = mouse_area(
-            container(text("\u{00BB}").size(23).color(t.peach))
-                .padding(Padding {
-                    top: 0.0,
-                    right: 6.0,
-                    bottom: 0.0,
-                    left: 2.0,
-                }),
-        )
+        let brand = mouse_area(container(text("\u{00BB}").size(23).color(t.peach)).padding(
+            Padding {
+                top: 0.0,
+                right: 6.0,
+                bottom: 0.0,
+                left: 2.0,
+            },
+        ))
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
         .interaction(iced::mouse::Interaction::Pointer);
@@ -2264,10 +2284,11 @@ impl App {
             .on_press(Message::StartWindowDrag)
             .interaction(iced::mouse::Interaction::Grab);
 
-        let main_bar = container(bar_content).style(move |_: &_| container::Style {
-            background: Some(Background::Color(bar_surface)),
-            ..Default::default()
-        })
+        let main_bar = container(bar_content)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(bar_surface)),
+                ..Default::default()
+            })
             .width(Fill)
             .height(SEARCH_BAR_HEIGHT - 8.0)
             .center_y(Fill);
@@ -2703,10 +2724,7 @@ fn launch_in_terminal(cmd: &str) {
     #[cfg(target_os = "macos")]
     {
         let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!(
-            "tell application \"Terminal\" to do script \"{}\"",
-            escaped
-        );
+        let script = format!("tell application \"Terminal\" to do script \"{}\"", escaped);
         if let Err(e) = std::process::Command::new("osascript")
             .args(["-e", &script])
             .spawn()
@@ -2719,7 +2737,10 @@ fn launch_in_terminal(cmd: &str) {
         let escaped = cmd.replace('\'', "'\\''");
         for term in &["x-terminal-emulator", "gnome-terminal", "xterm"] {
             if std::process::Command::new(term)
-                .args(["-e", &format!("sh -c '{escaped} ; read -p \"Press Enter...\"'")])
+                .args([
+                    "-e",
+                    &format!("sh -c '{escaped} ; read -p \"Press Enter...\"'"),
+                ])
                 .spawn()
                 .is_ok()
             {
