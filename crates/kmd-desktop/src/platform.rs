@@ -124,8 +124,27 @@ pub fn force_foreground(raw_id: u64) {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn force_foreground(_raw_id: u64) {
-    // No-op on non-Windows platforms.
+pub fn force_foreground(_raw_id: u64) {}
+
+/// 현재 포그라운드 윈도우가 우리 윈도우인지 확인
+#[cfg(target_os = "windows")]
+pub fn is_our_window_foreground(raw_id: u64) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    unsafe {
+        let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
+        if hwnd.0.is_null() {
+            return false;
+        }
+        let fg = GetForegroundWindow();
+        fg == hwnd
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_our_window_foreground(_raw_id: u64) -> bool {
+    true
 }
 
 #[cfg(test)]

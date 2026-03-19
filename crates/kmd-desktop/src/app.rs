@@ -521,7 +521,10 @@ impl App {
                 match event {
                     window::Event::Focused => {
                         self.window_focused = true;
-                        return iced::widget::operation::focus::<Message>(self.input_id.clone());
+                        let focus_now =
+                            iced::widget::operation::focus::<Message>(self.input_id.clone());
+                        let focus_retry = Self::schedule_focus_retry(1);
+                        return Task::batch([focus_now, focus_retry]);
                     }
                     window::Event::Moved(point) => {
                         self.window_state.x = Some(point.x);
@@ -544,7 +547,7 @@ impl App {
                     window::Event::Unfocused => {
                         self.window_focused = false;
                         return Task::future(async {
-                            tokio::time::sleep(Duration::from_millis(150)).await;
+                            tokio::time::sleep(Duration::from_millis(400)).await;
                             Message::CheckUnfocusedExit
                         });
                     }
@@ -573,13 +576,22 @@ impl App {
                 return self.execute_context_action(action);
             }
             Message::CheckUnfocusedExit => {
-                if !self.window_focused {
-                    if self.state_dirty {
-                        self.window_state.save();
-                    }
-                    return iced::exit();
+                if self.window_focused {
+                    return Task::none();
                 }
-                return Task::none();
+                // OS 레벨에서 실제 포그라운드 윈도우 확인 (IME 전환 등 일시적 유실 방지)
+                if let Some(raw_id) = self.raw_window_id {
+                    if crate::platform::is_our_window_foreground(raw_id) {
+                        self.window_focused = true;
+                        return iced::widget::operation::focus::<Message>(
+                            self.input_id.clone(),
+                        );
+                    }
+                }
+                if self.state_dirty {
+                    self.window_state.save();
+                }
+                return iced::exit();
             }
         }
     }
