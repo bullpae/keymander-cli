@@ -517,18 +517,8 @@ impl KeybindConfig {
         Self {
             remaps,
             layers: vec![],
-            combos: vec![(
-                ComboTrigger {
-                    modifiers: vec![Modifier::Shift],
-                    key: VKey::Space,
-                },
-                BindAction::SendKey(VKey::Hangul),
-            )],
-            double_taps: vec![DoubleTapBinding {
-                key: VKey::RShift,
-                action: BindAction::SendKey(VKey::Hangul),
-                timeout_ms: 300,
-            }],
+            combos: default_hangul_combos(),
+            double_taps: default_hangul_double_taps(),
         }
     }
 }
@@ -912,8 +902,19 @@ mod tests {
         let config = KeybindConfig::minimal_preset();
         assert!(config.remaps.contains_key(&VKey::CapsLock));
         assert!(config.layers.is_empty());
-        assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
-        assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(config.combos.len(), 1, "Shift+Space 콤보 (Windows)");
+            assert_eq!(config.double_taps.len(), 1, "RShift 더블탭 (Windows)");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(
+                config.combos.is_empty(),
+                "macOS/Linux: 콤보는 시스템 입력소스 전환에 위임"
+            );
+            assert!(config.double_taps.is_empty());
+        }
     }
 
     #[test]

@@ -144,6 +144,8 @@ pub fn is_our_window_foreground(raw_id: u64) -> bool {
 
 #[cfg(not(target_os = "windows"))]
 pub fn is_our_window_foreground(_raw_id: u64) -> bool {
+    // macOS/Linux: 앱 내부에서 window::Event::Focused/Unfocused로 추적.
+    // 포그라운드 확인이 필요하면 앱의 window_focused 플래그 사용.
     true
 }
 

@@ -332,6 +332,7 @@ fn cleanup_runtime_files() {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn merge_keybind_keeps_base_combos_when_custom_has_none() {
         let base = KeybindConfig::minimal_preset();
@@ -345,10 +346,29 @@ mod tests {
         let merged = merge_keybind_config(base, custom);
         assert!(
             !merged.combos.is_empty(),
-            "custom 설정이 비어있어도 base 콤보는 유지되어야 함"
+            "Windows: custom 설정이 비어있어도 base 콤보(Hangul)는 유지되어야 함"
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn merge_keybind_empty_combos_on_non_windows() {
+        let base = KeybindConfig::minimal_preset();
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![],
+            combos: vec![],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        assert!(
+            merged.combos.is_empty(),
+            "macOS/Linux: Hangul 콤보는 시스템 입력소스 전환에 위임"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn merge_keybind_overrides_same_combo_trigger() {
         let base = KeybindConfig::minimal_preset();
