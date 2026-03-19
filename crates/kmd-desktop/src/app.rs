@@ -216,6 +216,48 @@ fn context_actions_for(kind: ItemKind) -> Vec<ContextAction> {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
+    fn build_initial_engine(config: &kmd_core::Config) -> (kmd_core::SearchEngine, bool) {
+        let cache_fresh = crate::engine::is_full_index_cache_fresh();
+        let engine = if cache_fresh {
+            tracing::info!("Full index cache is fresh — loading directly");
+            crate::engine::create_search_engine(config)
+        } else {
+            tracing::info!("Full index cache stale/missing — using quick index");
+            crate::engine::create_quick_search_engine(config)
+        };
+        (engine, cache_fresh)
+    }
+
+    fn initial_boot_tasks(input_id: iced::widget::Id, skip_warmup: bool) -> Task<Message> {
+        let focus_task = iced::widget::operation::focus::<Message>(input_id);
+        let id_task = window::oldest().map(Message::GotWindowId);
+        if skip_warmup {
+            Task::batch([focus_task, id_task])
+        } else {
+            let warmup_task = Self::schedule_warmup_tick(0);
+            Task::batch([focus_task, id_task, warmup_task])
+        }
+    }
+
+    fn with_activity_warmup(&mut self, base_task: Task<Message>) -> Task<Message> {
+        if self.full_warmup_started {
+            base_task
+        } else {
+            self.warmup_token = self.warmup_token.wrapping_add(1);
+            let warmup_task = Self::schedule_warmup_tick(self.warmup_token);
+            Task::batch([base_task, warmup_task])
+        }
+    }
+
+    fn apply_contains_items<I>(&mut self, items: I)
+    where
+        I: IntoIterator<Item = IndexItem>,
+    {
+        self.results = items_to_results(items);
+        self.search_mode = kmd_core::SearchMode::Contains;
+        self.selected = 0;
+    }
+
     pub fn new(
         guard: Guard,
         config: kmd_core::Config,
@@ -223,14 +265,7 @@ impl App {
     ) -> (Self, Task<Message>) {
         // 캐시된 full index가 24시간 이내 → 직접 로드 (2-stage 불필요)
         // 캐시 없거나 오래됨 → quick index로 즉시 표시 후 full index를 비동기 빌드
-        let cache_fresh = crate::engine::is_full_index_cache_fresh();
-        let engine = if cache_fresh {
-            tracing::info!("Full index cache is fresh — loading directly");
-            crate::engine::create_search_engine(&config)
-        } else {
-            tracing::info!("Full index cache stale/missing — using quick index");
-            crate::engine::create_quick_search_engine(&config)
-        };
+        let (engine, cache_fresh) = Self::build_initial_engine(&config);
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
         let selected_llm_providers = config.launcher.multi_llm_providers.clone();
@@ -284,15 +319,8 @@ impl App {
             last_programmatic_resize_at: None,
         };
 
-        let focus_task = iced::widget::operation::focus::<Message>(input_id);
-        let id_task = window::oldest().map(Message::GotWindowId);
-
-        if cache_fresh {
-            (app, Task::batch([focus_task, id_task]))
-        } else {
-            let warmup_task = Self::schedule_warmup_tick(0);
-            (app, Task::batch([focus_task, id_task, warmup_task]))
-        }
+        let tasks = Self::initial_boot_tasks(input_id, cache_fresh);
+        (app, tasks)
     }
 
     fn schedule_warmup_tick(token: u64) -> Task<Message> {
@@ -356,13 +384,7 @@ impl App {
                 self.query = query;
                 self.selected = 0;
                 let search_task = self.perform_search();
-                if self.full_warmup_started {
-                    search_task
-                } else {
-                    self.warmup_token = self.warmup_token.wrapping_add(1);
-                    let warmup_task = Self::schedule_warmup_tick(self.warmup_token);
-                    Task::batch([search_task, warmup_task])
-                }
+                self.with_activity_warmup(search_task)
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
@@ -374,13 +396,7 @@ impl App {
                     return self.execute_context_action(action);
                 }
                 let key_task = self.handle_key(key);
-                if self.full_warmup_started {
-                    key_task
-                } else {
-                    self.warmup_token = self.warmup_token.wrapping_add(1);
-                    let warmup_task = Self::schedule_warmup_tick(self.warmup_token);
-                    Task::batch([key_task, warmup_task])
-                }
+                self.with_activity_warmup(key_task)
             }
             Message::BrandClicked => {
                 // Toggle quick help.
@@ -925,9 +941,7 @@ impl App {
                 keywords: "kmd:settings:noop".to_string(),
             },
         ];
-        self.results = items_to_results(version_items);
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(version_items);
     }
 
     /// :t / :transform 쿼리 처리 (클립보드 변환)
@@ -1125,9 +1139,7 @@ impl App {
     fn handle_calc_query(&mut self, query: &str) {
         let expr = query.strip_prefix(":calc").unwrap_or("").trim();
         let calc = builtin_calc::CalcExtension;
-        self.results = items_to_results(calc.search_with_emoji(expr, self.use_emoji));
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(calc.search_with_emoji(expr, self.use_emoji));
     }
 
     fn handle_emoji_query(&mut self, query: &str) {
@@ -1137,17 +1149,13 @@ impl App {
             .unwrap_or("")
             .trim();
         let emoji_ext = builtin_emoji::EmojiExtension;
-        self.results = items_to_results(emoji_ext.search_emoji(search_query));
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(emoji_ext.search_emoji(search_query));
     }
 
     fn handle_shell_query(&mut self, query: &str) {
         let shell_query = query.strip_prefix('!').unwrap_or("").trim();
         let shell_ext = builtin_shell::ShellExtension;
-        self.results = items_to_results(shell_ext.search(shell_query));
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(shell_ext.search(shell_query));
     }
 
     /// :keymap / :km 쿼리 처리
@@ -1159,9 +1167,7 @@ impl App {
             .trim();
         let config = crate::engine::load_config();
         let items = kmd_core::keymap::keymap_items(&config, sub, self.use_emoji);
-        self.results = items_to_results(items);
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(items);
     }
 
     fn handle_keymap_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
@@ -1173,7 +1179,8 @@ impl App {
         if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, keywords) {
             tracing::info!("keymap action: {msg}");
         }
-        self.handle_keymap_query(&self.query.clone());
+        let current_query = self.query.clone();
+        self.handle_keymap_query(&current_query);
         Task::none()
     }
 

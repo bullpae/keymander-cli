@@ -75,18 +75,11 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-        // shell:appsFolder URIs (UWP/Store apps) must be opened via explorer.exe
-        if target.starts_with("shell:") {
-            Command::new("explorer.exe")
-                .arg(target)
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-        } else {
-            Command::new("cmd")
-                .args(["/c", "start", "", target])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-        }
+        // Use a single shell-open path to avoid extra cmd parsing.
+        Command::new("explorer.exe")
+            .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
     }
 
     #[cfg(target_os = "macos")]
