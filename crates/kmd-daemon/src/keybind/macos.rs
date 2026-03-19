@@ -765,11 +765,10 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                     | (1u64 << CG_EVENT_KEY_UP)
                     | (1u64 << CG_EVENT_FLAGS_CHANGED);
 
-                // kCGSessionEventTap(1) 사용 — 시스템 단축키(한영전환 등) 보존
-                // 시스템 단축키는 HID 레벨에서 먼저 처리되고,
-                // 세션 레벨에서 앱 전달 전에 키 리맵핑을 수행함
+                // kCGHIDEventTap(0) — Alt(Option) 키를 시스템 처리 전에 억제해야
+                // 특수문자(˙∆˚¬) 생성을 방지할 수 있음
                 let mut tap = CGEventTapCreate(
-                    CG_SESSION_EVENT_TAP,
+                    0, // kCGHIDEventTap
                     CG_HEAD_INSERT_EVENT_TAP,
                     CG_EVENT_TAP_OPTION_DEFAULT,
                     events_of_interest,
@@ -778,9 +777,9 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                 );
 
                 if tap.is_null() {
-                    tracing::warn!("kCGSessionEventTap 실패, kCGHIDEventTap 재시도...");
+                    tracing::warn!("kCGHIDEventTap 실패, kCGSessionEventTap 재시도...");
                     tap = CGEventTapCreate(
-                        0, // kCGHIDEventTap
+                        CG_SESSION_EVENT_TAP,
                         CG_HEAD_INSERT_EVENT_TAP,
                         CG_EVENT_TAP_OPTION_DEFAULT,
                         events_of_interest,
