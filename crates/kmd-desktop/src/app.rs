@@ -46,8 +46,8 @@ const DETAIL_PANEL_WIDTH: f32 = 260.0;
 /// Interval between quit-signal polls (ms). Also used to flush state to disk.
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
-const FOCUS_RETRY_MS: u64 = 150;
-const MAX_FOCUS_RETRIES: u8 = 1;
+const FOCUS_RETRY_MS: u64 = 120;
+const MAX_FOCUS_RETRIES: u8 = 3;
 
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
@@ -99,6 +99,8 @@ pub struct App {
     state_dirty: bool,
     last_window_size: Size,
     window_focused: bool,
+    /// 마지막 키 입력 시각 — IME 전환 중 일시적 Unfocused 판별에 사용
+    last_key_instant: std::time::Instant,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -269,6 +271,7 @@ impl App {
             state_dirty: false,
             last_window_size: Size::new(window_width, SEARCH_BAR_HEIGHT),
             window_focused: true,
+            last_key_instant: std::time::Instant::now(),
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
@@ -338,6 +341,7 @@ impl App {
             Message::QueryChanged(query) => {
                 self.query = query;
                 self.selected = 0;
+                self.last_key_instant = std::time::Instant::now();
                 let search_task = self.perform_search();
                 if self.full_warmup_started {
                     search_task
@@ -353,6 +357,7 @@ impl App {
                 self.launch_selected()
             }
             Message::KeyEvent(key, modifiers) => {
+                self.last_key_instant = std::time::Instant::now();
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {
                     return self.execute_context_action(action);
                 }
@@ -524,6 +529,10 @@ impl App {
                         let focus_now =
                             iced::widget::operation::focus::<Message>(self.input_id.clone());
                         let focus_retry = Self::schedule_focus_retry(1);
+                        // OS 레벨 포그라운드도 확보
+                        if let Some(raw_id) = self.raw_window_id {
+                            crate::platform::force_foreground(raw_id);
+                        }
                         return Task::batch([focus_now, focus_retry]);
                     }
                     window::Event::Moved(point) => {
@@ -546,8 +555,11 @@ impl App {
                     }
                     window::Event::Unfocused => {
                         self.window_focused = false;
-                        return Task::future(async {
-                            tokio::time::sleep(Duration::from_millis(400)).await;
+                        let recently_typed =
+                            self.last_key_instant.elapsed() < Duration::from_millis(1200);
+                        let delay = if recently_typed { 800 } else { 400 };
+                        return Task::future(async move {
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
                             Message::CheckUnfocusedExit
                         });
                     }
@@ -579,15 +591,30 @@ impl App {
                 if self.window_focused {
                     return Task::none();
                 }
-                // OS 레벨에서 실제 포그라운드 윈도우 확인 (IME 전환 등 일시적 유실 방지)
+
+                // 최근 키 입력이 있었으면 IME 전환 등 일시적 유실로 간주
+                let recently_typed =
+                    self.last_key_instant.elapsed() < Duration::from_millis(1500);
+
                 if let Some(raw_id) = self.raw_window_id {
-                    if crate::platform::is_our_window_foreground(raw_id) {
+                    let is_fg = crate::platform::is_our_window_foreground(raw_id);
+
+                    if is_fg || recently_typed {
                         self.window_focused = true;
-                        return iced::widget::operation::focus::<Message>(
+                        crate::platform::force_foreground(raw_id);
+                        let focus_now = iced::widget::operation::focus::<Message>(
                             self.input_id.clone(),
                         );
+                        let focus_retry = Self::schedule_focus_retry(1);
+                        return Task::batch([focus_now, focus_retry]);
                     }
+                } else if recently_typed {
+                    self.window_focused = true;
+                    return iced::widget::operation::focus::<Message>(
+                        self.input_id.clone(),
+                    );
                 }
+
                 if self.state_dirty {
                     self.window_state.save();
                 }
@@ -1923,20 +1950,30 @@ impl App {
         };
         let size = Size::new(width, height);
 
-        if (size.width - self.last_window_size.width).abs() < 1.0
-            && (size.height - self.last_window_size.height).abs() < 1.0
-        {
+        let width_changed = (size.width - self.last_window_size.width).abs() >= 1.0;
+        let height_changed = (size.height - self.last_window_size.height).abs() >= 1.0;
+
+        if !width_changed && !height_changed {
             return Task::none();
         }
 
         self.last_window_size = size;
-        match self.window_id {
+        let resize_task = match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
                 Some(id) => window::resize(id, size),
                 None => Task::none(),
             }),
-        }
+        };
+
+        // 윈도우 크기 변경 후 iced가 위젯 트리를 재구성하면서
+        // text_input 포커스를 잃을 수 있으므로 지연 refocus (IME 간섭 방지)
+        let delayed_refocus = Task::future(async {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            Message::EnsureFocus(0)
+        });
+
+        Task::batch([resize_task, delayed_refocus])
     }
 }
 
