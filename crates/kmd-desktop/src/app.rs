@@ -108,6 +108,9 @@ pub struct App {
     full_warmup_started: bool,
     warmup_token: u64,
     resize_token: u64,
+
+    /// 프로그래밍적 resize 후 Resized 이벤트에서 window_width 갱신을 방지
+    expected_resize: Option<Size>,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -276,6 +279,7 @@ impl App {
             full_warmup_started: cache_fresh,
             warmup_token: 0,
             resize_token: 0,
+            expected_resize: None,
         };
 
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
@@ -477,16 +481,21 @@ impl App {
                     return Task::none();
                 }
 
-                // 사용자가 다른 창으로 포커스를 옮긴 상태에서는
-                // 대기 중이던 retry/지연 포커스가 포커스를 다시 빼앗지 않도록 차단한다.
                 if !self.window_focused {
-                    if let Some(raw_id) = self.raw_window_id {
-                        if !crate::platform::is_our_window_foreground(raw_id) {
+                    // Windows: GetForegroundWindow로 실제 포그라운드 확인 가능
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Some(raw_id) = self.raw_window_id {
+                            if !crate::platform::is_our_window_foreground(raw_id) {
+                                return Task::none();
+                            }
+                        } else {
                             return Task::none();
                         }
-                    } else {
-                        return Task::none();
                     }
+                    // macOS/Linux: window_focused 플래그가 정확하므로 직접 신뢰
+                    #[cfg(not(target_os = "windows"))]
+                    return Task::none();
                 }
 
                 let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
@@ -556,7 +565,19 @@ impl App {
                     }
                     window::Event::Resized(size) => {
                         self.last_window_size = size;
-                        let base_width = if !self.results.is_empty() {
+                        // 프로그래밍적 resize의 결과 이벤트인지 확인.
+                        // 일치하면 window_width를 갱신하지 않아야 누적 증가 방지.
+                        if let Some(expected) = self.expected_resize.take() {
+                            if (size.width - expected.width).abs() < 2.0
+                                && (size.height - expected.height).abs() < 2.0
+                            {
+                                return Task::none();
+                            }
+                        }
+                        // 사용자가 직접 드래그로 리사이즈한 경우만 window_width 갱신
+                        let base_width = if size.width
+                            > self.window_width + DETAIL_PANEL_WIDTH / 2.0
+                        {
                             (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
                         } else {
                             size.width
@@ -582,10 +603,7 @@ impl App {
                 if token != self.resize_token {
                     return Task::none();
                 }
-                if self.query.trim().is_empty() && self.results.is_empty() {
-                    return self.resize_window();
-                }
-                Task::none()
+                self.resize_window()
             }
             Message::ShellDone(result) => {
                 match result {
@@ -611,6 +629,9 @@ impl App {
                 if self.window_focused {
                     return Task::none();
                 }
+                // Windows에서는 GetForegroundWindow로 정확히 확인 가능.
+                // macOS/Linux에서는 항상 true를 반환하므로 window_focused만 신뢰.
+                #[cfg(target_os = "windows")]
                 if let Some(raw_id) = self.raw_window_id {
                     if crate::platform::is_our_window_foreground(raw_id) {
                         self.window_focused = true;
@@ -1963,9 +1984,10 @@ impl App {
 
     fn resize_window(&mut self) -> Task<Message> {
         let has_results = !self.results.is_empty();
+        // 결과가 있을 때 항상 MAX_VISIBLE_ROWS 높이를 사용하여
+        // 키 입력마다 높이가 바뀌는 깜빡임/노이즈 방지
         let height = if has_results {
-            let rows = self.results.len().min(MAX_VISIBLE_ROWS) as f32;
-            SEARCH_BAR_HEIGHT + (rows * ROW_HEIGHT) + STATUS_BAR_HEIGHT
+            SEARCH_BAR_HEIGHT + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT
         } else {
             SEARCH_BAR_HEIGHT
         };
@@ -1984,22 +2006,14 @@ impl App {
         }
 
         self.last_window_size = size;
-        let resize_task = match self.window_id {
+        self.expected_resize = Some(size);
+        match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
                 Some(id) => window::resize(id, size),
                 None => Task::none(),
             }),
-        };
-
-        // 윈도우 크기 변경 후 iced가 위젯 트리를 재구성하면서
-        // text_input 포커스를 잃을 수 있으므로 지연 refocus (IME 간섭 방지)
-        let delayed_refocus = Task::future(async {
-            tokio::time::sleep(Duration::from_millis(80)).await;
-            Message::EnsureFocus(0)
-        });
-
-        Task::batch([resize_task, delayed_refocus])
+        }
     }
 }
 
@@ -2288,8 +2302,7 @@ impl App {
             list = list.push(self.view_result_row(i, result));
         }
 
-        let rows_count = self.results.len().min(MAX_VISIBLE_ROWS);
-        let list_height = rows_count as f32 * ROW_HEIGHT;
+        let list_height = MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT;
         let bg = t.background_with_opacity();
 
         scrollable(

@@ -405,7 +405,7 @@ unsafe extern "C" fn event_tap_callback(
     _proxy: CGEventTapProxy,
     type_: u32,
     event: CGEventRef,
-    user_info: *mut c_void,
+    _user_info: *mut c_void,
 ) -> CGEventRef {
     // 타임아웃으로 비활성화된 경우 재활성화
     if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
