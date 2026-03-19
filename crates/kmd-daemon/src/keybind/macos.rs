@@ -381,6 +381,10 @@ fn execute_action(action: &BindAction) {
 
 static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
 
+/// CGEventTap 포인터 — 타임아웃 후 재활성화에 사용
+static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
 struct HookState {
     config: KeybindConfig,
     active_layer: Option<usize>,
@@ -405,8 +409,9 @@ unsafe extern "C" fn event_tap_callback(
 ) -> CGEventRef {
     // 타임아웃으로 비활성화된 경우 재활성화
     if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
-        let tap = user_info as CFMachPortRef;
+        let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);
         if !tap.is_null() {
+            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화");
             CGEventTapEnable(tap, true);
         }
         return event;
@@ -429,7 +434,10 @@ unsafe extern "C" fn event_tap_callback(
 
     let state = match HOOK_STATE.get() {
         Some(s) => s,
-        None => return event,
+        None => {
+            tracing::warn!("HOOK_STATE 미초기화 — 이벤트 패스스루 (keycode={keycode:#x})");
+            return event;
+        }
     };
     let mut guard = match state.lock() {
         Ok(g) => g,
@@ -798,8 +806,8 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                     return;
                 }
 
-                // 타임아웃 재활성화를 위해 tap을 userInfo로 재설정
-                // (첫 생성 시에는 tap 포인터를 모르므로, 별도 enable 필요 없음)
+                // 타임아웃 후 재활성화를 위해 tap 포인터 저장
+                EVENT_TAP_PTR.store(tap, Ordering::Relaxed);
 
                 let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
                 if source.is_null() {
@@ -835,6 +843,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
 
     fn stop(&mut self) -> Result<(), String> {
         self.running.store(false, Ordering::Relaxed);
+        EVENT_TAP_PTR.store(std::ptr::null_mut(), Ordering::Relaxed);
         if let Ok(store) = self.run_loop.lock() {
             if let Some(ref rl) = *store {
                 unsafe {
