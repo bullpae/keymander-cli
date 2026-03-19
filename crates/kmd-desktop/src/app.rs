@@ -98,6 +98,7 @@ pub struct App {
     window_state: WindowState,
     state_dirty: bool,
     last_window_size: Size,
+    window_focused: bool,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -129,6 +130,8 @@ pub enum Message {
     ShellDone(Result<String, String>),
     /// 상세 패널의 컨텍스트 액션 실행
     RunAction(ContextAction),
+    /// 포커스 잃은 후 debounce 확인 → 여전히 포커스 없으면 종료
+    CheckUnfocusedExit,
 }
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
@@ -265,6 +268,7 @@ impl App {
             window_state,
             state_dirty: false,
             last_window_size: Size::new(window_width, SEARCH_BAR_HEIGHT),
+            window_focused: true,
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
@@ -516,6 +520,7 @@ impl App {
             Message::WindowEvent(_id, event) => {
                 match event {
                     window::Event::Focused => {
+                        self.window_focused = true;
                         return iced::widget::operation::focus::<Message>(self.input_id.clone());
                     }
                     window::Event::Moved(point) => {
@@ -537,10 +542,11 @@ impl App {
                         }
                     }
                     window::Event::Unfocused => {
-                        if self.state_dirty {
-                            self.window_state.save();
-                        }
-                        return iced::exit();
+                        self.window_focused = false;
+                        return Task::future(async {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                            Message::CheckUnfocusedExit
+                        });
                     }
                     _ => {}
                 }
@@ -565,6 +571,15 @@ impl App {
             }
             Message::RunAction(action) => {
                 return self.execute_context_action(action);
+            }
+            Message::CheckUnfocusedExit => {
+                if !self.window_focused {
+                    if self.state_dirty {
+                        self.window_state.save();
+                    }
+                    return iced::exit();
+                }
+                return Task::none();
             }
         }
     }

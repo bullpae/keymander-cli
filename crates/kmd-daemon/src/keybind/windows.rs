@@ -5,7 +5,7 @@
 
 use super::{
     is_modifier_key, modifier_satisfied, resolve_launch_cmd, BindAction, KeybindConfig,
-    KeyboardBackend, MacroStep, Modifier, VKey,
+    KeyboardBackend, MacroStep, VKey,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
