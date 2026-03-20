@@ -19,7 +19,7 @@ mod window_state;
 use iced::{window, Color, Point, Size};
 use std::sync::Mutex;
 
-use crate::app::{DEFAULT_WIDTH, SEARCH_BAR_HEIGHT};
+use crate::app::{DEFAULT_WIDTH, FULL_WINDOW_HEIGHT};
 use crate::window_state::WindowState;
 
 fn should_print_version() -> bool {
@@ -83,11 +83,11 @@ fn main() -> iced::Result {
     let config = engine::load_config();
     let window_state = WindowState::load();
 
-    let width = window_state
+    let base_width = window_state
         .width
         .unwrap_or(DEFAULT_WIDTH)
         .clamp(420.0, 1200.0);
-    let initial_size = Size::new(width, SEARCH_BAR_HEIGHT);
+    let initial_size = Size::new(base_width, FULL_WINDOW_HEIGHT);
 
     let position = match (window_state.x, window_state.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
@@ -116,8 +116,8 @@ fn main() -> iced::Result {
         resizable: true,
         visible: true,
         exit_on_close_request: true,
-        min_size: Some(Size::new(420.0, SEARCH_BAR_HEIGHT)),
-        max_size: Some(Size::new(1200.0, 800.0)),
+        min_size: Some(Size::new(420.0, FULL_WINDOW_HEIGHT)),
+        max_size: Some(Size::new(1600.0, FULL_WINDOW_HEIGHT)),
         icon,
         ..Default::default()
     })

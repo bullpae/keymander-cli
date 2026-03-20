@@ -42,8 +42,14 @@ const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 const DETAIL_PANEL_WIDTH: f32 = 260.0;
+const ACCENT_BAR_HEIGHT: f32 = 2.0;
 
-/// Interval between quit-signal polls (ms). Also used to flush state to disk.
+/// 창은 처음부터 전체 높이로 열린다 — 런타임 resize 없이 콘텐츠만 전환.
+pub const FULL_WINDOW_HEIGHT: f32 = SEARCH_BAR_HEIGHT
+    + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT)
+    + STATUS_BAR_HEIGHT
+    + ACCENT_BAR_HEIGHT;
+
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 120;
@@ -96,7 +102,6 @@ pub struct App {
     window_width: f32,
     window_state: WindowState,
     state_dirty: bool,
-    last_window_size: Size,
     window_focused: bool,
 
     // ── IME ───────────────────────────────────────────────────────────
@@ -105,9 +110,6 @@ pub struct App {
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
     warmup_token: u64,
-
-    /// 프로그래밍적 resize 직후 macOS spurious Unfocused/Resized 이벤트를 무시하기 위한 타임스탬프
-    last_programmatic_resize_at: Option<std::time::Instant>,
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -304,12 +306,10 @@ impl App {
             window_width,
             window_state,
             state_dirty: false,
-            last_window_size: Size::new(window_width, SEARCH_BAR_HEIGHT),
             window_focused: true,
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
-            last_programmatic_resize_at: None,
         };
 
         let tasks = Self::initial_boot_tasks(input_id, cache_fresh);
@@ -367,22 +367,10 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::QueryChanged(query) => {
-                let was_empty = self.query.trim().is_empty();
                 self.query = query;
-                let now_empty = self.query.trim().is_empty();
                 self.selected = 0;
-
                 let search_task = self.perform_search();
-
-                // empty↔non-empty 전환 시에만 즉시 resize (한 세션에 최대 2회).
-                // 연속 타이핑 중에는 resize가 발생하지 않아 깜빡임·포커스 유실 방지.
-                let resize_task = if was_empty != now_empty {
-                    self.resize_window()
-                } else {
-                    Task::none()
-                };
-
-                self.with_activity_warmup(Task::batch([search_task, resize_task]))
+                self.with_activity_warmup(search_task)
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
@@ -400,30 +388,16 @@ impl App {
                 if self.query.starts_with(":help") {
                     self.clear_query_and_refocus()
                 } else {
-                    let was_empty = self.query.trim().is_empty();
                     self.query = ":help".to_string();
-                    let search = self.perform_search();
-                    let resize = if was_empty {
-                        self.resize_window()
-                    } else {
-                        Task::none()
-                    };
-                    Task::batch([search, resize])
+                    self.perform_search()
                 }
             }
             Message::BrandRightClicked => {
                 if self.query.starts_with(":set") {
                     self.clear_query_and_refocus()
                 } else {
-                    let was_empty = self.query.trim().is_empty();
                     self.query = ":set".to_string();
-                    let search = self.perform_search();
-                    let resize = if was_empty {
-                        self.resize_window()
-                    } else {
-                        Task::none()
-                    };
-                    Task::batch([search, resize])
+                    self.perform_search()
                 }
             }
             Message::StartWindowDrag => match self.window_id {
@@ -456,7 +430,7 @@ impl App {
                             // If restored geometry is likely out of visible monitor bounds,
                             // recenter to keep the launcher discoverable.
                             let w = width.clamp(420.0, 1200.0);
-                            let h = SEARCH_BAR_HEIGHT;
+                            let h = FULL_WINDOW_HEIGHT;
                             let outside = x + w < 40.0
                                 || x > mon.width - 40.0
                                 || y + h < 20.0
@@ -510,28 +484,18 @@ impl App {
                 }
 
                 if !self.window_focused {
-                    // macOS: resize 직후 spurious Unfocused로 false가 된 경우 보정
-                    #[cfg(not(target_os = "windows"))]
-                    if let Some(ts) = self.last_programmatic_resize_at {
-                        if ts.elapsed() < Duration::from_millis(500) {
-                            self.window_focused = true;
-                        }
-                    }
-
-                    if !self.window_focused {
-                        #[cfg(target_os = "windows")]
-                        {
-                            if let Some(raw_id) = self.raw_window_id {
-                                if !crate::platform::is_our_window_foreground(raw_id) {
-                                    return Task::none();
-                                }
-                            } else {
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Some(raw_id) = self.raw_window_id {
+                            if !crate::platform::is_our_window_foreground(raw_id) {
                                 return Task::none();
                             }
+                        } else {
+                            return Task::none();
                         }
-                        #[cfg(not(target_os = "windows"))]
-                        return Task::none();
                     }
+                    #[cfg(not(target_os = "windows"))]
+                    return Task::none();
                 }
 
                 let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
@@ -600,40 +564,15 @@ impl App {
                         self.state_dirty = true;
                     }
                     window::Event::Resized(size) => {
-                        self.last_window_size = size;
-                        // 프로그래밍적 resize 후 500ms 이내의 Resized 이벤트는
-                        // window_width 갱신을 건너뛰어 너비 누적 증가를 원천 방지한다.
-                        if let Some(ts) = self.last_programmatic_resize_at {
-                            if ts.elapsed() < Duration::from_millis(500) {
-                                return Task::none();
-                            }
-                        }
-                        // 사용자가 직접 드래그로 리사이즈한 경우만 window_width 갱신
-                        let base_width =
-                            if size.width > self.window_width + DETAIL_PANEL_WIDTH / 2.0 {
-                                (size.width - DETAIL_PANEL_WIDTH - 1.0).max(420.0)
-                            } else {
-                                size.width
-                            };
-                        if (base_width - self.window_width).abs() > 1.0 {
-                            self.window_width = base_width;
-                            self.window_state.width = Some(base_width);
+                        // 사용자 드래그 리사이즈 시 base width 저장
+                        let w = size.width.max(420.0);
+                        if (w - self.window_width).abs() > 1.0 {
+                            self.window_width = w;
+                            self.window_state.width = Some(w);
                             self.state_dirty = true;
                         }
                     }
                     window::Event::Unfocused => {
-                        // macOS: resize 직후 발생하는 spurious Unfocused를 소스에서 차단.
-                        // 500ms 이내이면 OS가 resize로 인해 일시적으로 unfocus 한 것으로 간주,
-                        // window_focused를 true 로 유지하고 exit 타이머를 시작하지 않는다.
-                        #[cfg(not(target_os = "windows"))]
-                        if let Some(ts) = self.last_programmatic_resize_at {
-                            if ts.elapsed() < Duration::from_millis(500) {
-                                return iced::widget::operation::focus::<Message>(
-                                    self.input_id.clone(),
-                                );
-                            }
-                        }
-
                         self.window_focused = false;
                         return Task::future(async {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1595,7 +1534,7 @@ impl App {
                 self.query.clear();
                 self.results.clear();
                 self.selected = 0;
-                return Task::batch([self.resize_window(), task]);
+                return task;
             }
             "toggle_ime_reset" => {
                 self.reset_ime_on_launch = !self.reset_ime_on_launch;
@@ -1606,7 +1545,7 @@ impl App {
                 // Re-open settings so the user sees the updated [ON/OFF] label.
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.resize_window();
+                return Task::none();
             }
             llm_toggle if llm_toggle.starts_with("llm:toggle:") => {
                 let target = llm_toggle.strip_prefix("llm:toggle:").unwrap_or("");
@@ -1639,7 +1578,7 @@ impl App {
 
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.resize_window();
+                return Task::none();
             }
             mweb_toggle if mweb_toggle.starts_with("mweb:toggle:") => {
                 let target = mweb_toggle.strip_prefix("mweb:toggle:").unwrap_or("");
@@ -1669,7 +1608,7 @@ impl App {
 
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.resize_window();
+                return Task::none();
             }
             spell_toggle if spell_toggle.starts_with("spell:toggle:") => {
                 let target = spell_toggle.strip_prefix("spell:toggle:").unwrap_or("");
@@ -1693,7 +1632,7 @@ impl App {
                 }
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.resize_window();
+                return Task::none();
             }
             translate_toggle if translate_toggle.starts_with("translate:toggle:") => {
                 let target = translate_toggle
@@ -1722,7 +1661,7 @@ impl App {
                 }
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.resize_window();
+                return Task::none();
             }
             theme_action if theme_action.starts_with("theme:") => {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
@@ -1740,7 +1679,7 @@ impl App {
         self.query.clear();
         self.results.clear();
         self.selected = 0;
-        self.resize_window()
+        Task::none()
     }
 
     fn handle_main_search(&mut self, query: &str) {
@@ -2003,60 +1942,7 @@ impl App {
         self.query.clear();
         self.results.clear();
         self.selected = 0;
-        let resize = self.resize_window();
-        let refocus = iced::widget::operation::focus::<Message>(self.input_id.clone());
-        Task::batch([resize, refocus])
-    }
-
-    fn resize_window(&mut self) -> Task<Message> {
-        let show_results_shell = !self.query.trim().is_empty();
-        let height = if show_results_shell {
-            SEARCH_BAR_HEIGHT + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT
-        } else {
-            SEARCH_BAR_HEIGHT
-        };
-        let width = if show_results_shell {
-            self.window_width + DETAIL_PANEL_WIDTH + 1.0
-        } else {
-            self.window_width
-        };
-        let size = Size::new(width, height);
-
-        let width_changed = (size.width - self.last_window_size.width).abs() >= 1.0;
-        let height_changed = (size.height - self.last_window_size.height).abs() >= 1.0;
-
-        if !width_changed && !height_changed {
-            return Task::none();
-        }
-
-        self.last_window_size = size;
-        self.last_programmatic_resize_at = Some(std::time::Instant::now());
-
-        let resize_task = match self.window_id {
-            Some(id) => window::resize(id, size),
-            None => window::oldest().then(move |maybe_id| match maybe_id {
-                Some(id) => window::resize(id, size),
-                None => Task::none(),
-            }),
-        };
-
-        // 리사이즈 직후 포커스 회복은 약간의 딜레이를 주어
-        // macOS가 resize 완료 후 focus를 돌려받을 수 있도록 한다.
-        // (IME 상태 보존을 위해 동기 focus 대신 scheduled focus 사용)
-        if self.window_focused {
-            let input_id = self.input_id.clone();
-            let delayed_focus = Task::future(async move {
-                tokio::time::sleep(Duration::from_millis(80)).await;
-                Message::EnsureFocus(1)
-            });
-            Task::batch([
-                resize_task,
-                iced::widget::operation::focus::<Message>(input_id),
-                delayed_focus,
-            ])
-        } else {
-            resize_task
-        }
+        iced::widget::operation::focus::<Message>(self.input_id.clone())
     }
 }
 
@@ -2111,58 +1997,50 @@ fn prefix_of(query: &str) -> Prefix {
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let t = &self.theme;
-        let show_results_shell = !self.query.trim().is_empty();
 
+        // ── 항상 동일한 위젯 트리 — 콘텐츠만 교체하여 레이아웃 점프/깜빡임 원천 제거 ──
         let search_bar = self.view_search_bar();
-        let mut left_col = Column::new().push(search_bar);
-
-        if show_results_shell {
-            let border_color = t.border;
-            left_col = left_col.push(container(text("")).width(Fill).height(1).style(
-                move |_: &_| container::Style {
-                    background: Some(Background::Color(border_color)),
-                    ..Default::default()
-                },
-            ));
-            left_col = left_col.push(self.view_results_list());
-            let sep_color = t.border;
-            left_col = left_col.push(container(text("")).width(Fill).height(1).style(
-                move |_: &_| container::Style {
-                    background: Some(Background::Color(sep_color)),
-                    ..Default::default()
-                },
-            ));
-            left_col = left_col.push(self.view_status_bar());
-            left_col = left_col.push(self.view_accent_bar());
-        }
-
-        let content: Element<'_, Message> = if show_results_shell {
-            let divider_color = t.border;
-            let divider = container(text(""))
-                .width(1)
-                .height(Fill)
+        let sep = |color: Color| -> Element<'_, Message> {
+            container(text(""))
+                .width(Fill)
+                .height(1)
                 .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(divider_color)),
+                    background: Some(Background::Color(color)),
                     ..Default::default()
-                });
-
-            row![
-                container(left_col).width(Fill),
-                divider,
-                self.view_detail_panel()
-            ]
-            .width(Fill)
-            .height(Fill)
-            .into()
-        } else {
-            left_col.into()
+                })
+                .into()
         };
+
+        let left_col = Column::new()
+            .push(search_bar)
+            .push(sep(t.border))
+            .push(self.view_results_list())
+            .push(sep(t.border))
+            .push(self.view_status_bar())
+            .push(self.view_accent_bar());
+
+        let divider_color = t.border;
+        let divider = container(text(""))
+            .width(1)
+            .height(Fill)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_color)),
+                ..Default::default()
+            });
+
+        let content = row![
+            container(left_col).width(Fill),
+            divider,
+            self.view_detail_panel()
+        ]
+        .width(Fill)
+        .height(Fill);
 
         let bg = t.background_with_opacity();
         let radius = t.corner_radius;
         let shadow_i = t.shadow_intensity;
         let border_color = Color {
-            a: 0.35,
+            a: 0.20,
             ..t.accent
         };
 
@@ -2173,29 +2051,38 @@ impl App {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.5,
+                    width: 1.0,
                     color: border_color,
                 },
                 shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25 * shadow_i),
-                    offset: Vector::new(0.0, 2.0),
-                    blur_radius: 6.0,
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.30 * shadow_i),
+                    offset: Vector::new(0.0, 4.0),
+                    blur_radius: 16.0,
                 },
                 text_color: None,
                 snap: false,
             });
 
-        let left_edge_resize = mouse_area(container(text("")).width(8).height(Fill))
+        let left_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::West))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
-        let right_edge_resize = mouse_area(container(text("")).width(8).height(Fill))
+        let right_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::East))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
 
-        row![left_edge_resize, body, right_edge_resize]
-            .width(Fill)
-            .height(Fill)
-            .into()
+        let top_pad = container(text("")).width(Fill).height(2);
+        let bottom_pad = container(text("")).width(Fill).height(2);
+
+        column![
+            top_pad,
+            row![left_edge_resize, body, right_edge_resize]
+                .width(Fill)
+                .height(Fill),
+            bottom_pad
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into()
     }
 
     fn view_search_bar(&self) -> Element<'_, Message> {
@@ -2204,7 +2091,6 @@ impl App {
         let overlay_color = t.overlay;
         let accent_color = t.accent;
         let surface = t.surface;
-        let has_results = !self.results.is_empty();
 
         let bar_surface = Color {
             r: (surface.r + 0.02).min(1.0),
@@ -2212,10 +2098,6 @@ impl App {
             b: (surface.b + 0.02).min(1.0),
             a: surface.a,
         };
-
-        let radius = t.corner_radius;
-        let bar_border_width: f32 = if has_results { 1.0 } else { 1.2 };
-        let bar_shadow_blur: f32 = if has_results { 4.0 } else { 10.0 };
 
         let brand = mouse_area(container(text("\u{00BB}").size(23).color(t.peach)).padding(
             Padding {
@@ -2298,10 +2180,6 @@ impl App {
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 14]));
 
-        let border_glow = Color {
-            a: if has_results { 0.18 } else { 0.28 },
-            ..accent_color
-        };
         let top_drag_strip = mouse_area(container(text("")).width(Fill).height(8))
             .on_press(Message::StartWindowDrag)
             .interaction(iced::mouse::Interaction::Grab);
@@ -2315,38 +2193,48 @@ impl App {
             .height(SEARCH_BAR_HEIGHT - 8.0)
             .center_y(Fill);
 
-        let layered = column![top_drag_strip, main_bar];
-
-        container(layered)
+        container(column![top_drag_strip, main_bar])
             .width(Fill)
             .height(SEARCH_BAR_HEIGHT)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bar_surface)),
-                border: Border {
-                    radius: radius.into(),
-                    width: bar_border_width,
-                    color: border_glow,
-                },
-                shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-                    offset: Vector::new(0.0, 3.0),
-                    blur_radius: bar_shadow_blur,
-                },
-                text_color: None,
-                snap: false,
+                ..Default::default()
             })
             .into()
     }
 
     fn view_results_list(&self) -> Element<'_, Message> {
         let t = &self.theme;
+        let list_height = MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT;
+        let bg = t.background_with_opacity();
+
+        if self.results.is_empty() {
+            let placeholder_text = if self.query.trim().is_empty() {
+                "Type to search files, apps, settings, and more"
+            } else {
+                "No results found"
+            };
+            let overlay_c = t.overlay;
+            return container(
+                container(text(placeholder_text).size(14).color(overlay_c).center())
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .center_y(Fill),
+            )
+            .width(Fill)
+            .height(list_height)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(bg)),
+                ..Default::default()
+            })
+            .into();
+        }
+
         let mut list = Column::new().spacing(0);
         for (i, result) in self.results.iter().enumerate() {
             list = list.push(self.view_result_row(i, result));
         }
-
-        let list_height = MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT;
-        let bg = t.background_with_opacity();
 
         scrollable(
             container(list)
@@ -2504,10 +2392,30 @@ impl App {
         };
 
         let Some(result) = self.results.get(self.selected) else {
-            return container(text(""))
-                .width(DETAIL_PANEL_WIDTH)
-                .height(Fill)
-                .into();
+            let hint_color = t.overlay;
+            let shortcuts_col = column![
+                text("Shortcuts").size(11).color(hint_color),
+                container(text("")).height(8),
+                text("Enter    Open").size(10).color(hint_color),
+                text("\u{2191}\u{2193}      Navigate")
+                    .size(10)
+                    .color(hint_color),
+                text("Esc       Close").size(10).color(hint_color),
+                text("Tab       Detail").size(10).color(hint_color),
+            ]
+            .spacing(4);
+            return container(
+                container(shortcuts_col)
+                    .width(Fill)
+                    .padding(Padding::from([20, 16])),
+            )
+            .width(DETAIL_PANEL_WIDTH)
+            .height(Fill)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(panel_bg)),
+                ..Default::default()
+            })
+            .into();
         };
         let item = &result.item;
 

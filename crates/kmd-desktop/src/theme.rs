@@ -83,7 +83,7 @@ pub fn midnight() -> DesktopTheme {
         red: rgb(0xFF, 0x6E, 0x8C),
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.95,
-        corner_radius: 0.0,
+        corner_radius: 12.0,
         shadow_intensity: 1.0,
     }
 }
@@ -106,7 +106,7 @@ pub fn obsidian() -> DesktopTheme {
         red: rgb(0xFF, 0x6E, 0x8C),
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.98,
-        corner_radius: 0.0,
+        corner_radius: 12.0,
         shadow_intensity: 0.8,
     }
 }
@@ -129,7 +129,7 @@ pub fn snow() -> DesktopTheme {
         red: rgb(0xD0, 0x30, 0x50),
         teal: rgb(0x00, 0x88, 0x80),
         opacity: 0.95,
-        corner_radius: 0.0,
+        corner_radius: 12.0,
         shadow_intensity: 0.5,
     }
 }
@@ -152,7 +152,7 @@ pub fn rose_pine() -> DesktopTheme {
         red: rgb(0xEB, 0x6F, 0x92),
         teal: rgb(0x9C, 0xCF, 0xD8),
         opacity: 0.93,
-        corner_radius: 0.0,
+        corner_radius: 12.0,
         shadow_intensity: 0.9,
     }
 }
@@ -175,7 +175,7 @@ pub fn nord() -> DesktopTheme {
         red: rgb(0xBF, 0x61, 0x6A),
         teal: rgb(0x8F, 0xBC, 0xBB),
         opacity: 0.95,
-        corner_radius: 0.0,
+        corner_radius: 12.0,
         shadow_intensity: 0.7,
     }
 }
