@@ -48,8 +48,6 @@ const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 120;
 const MAX_FOCUS_RETRIES: u8 = 3;
-const EMPTY_QUERY_RESIZE_DEBOUNCE_MS: u64 = 90;
-
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
 /// 비동기 엔진 로드 결과 — 10-tuple 대신 명확한 필드로 관리
@@ -107,10 +105,8 @@ pub struct App {
     // ── Startup warmup ────────────────────────────────────────────────
     full_warmup_started: bool,
     warmup_token: u64,
-    resize_token: u64,
 
-    /// 프로그래밍적 resize 후 Resized 이벤트에서 window_width 갱신을 방지
-    expected_resize: Option<Size>,
+    /// 프로그래밍적 resize 직후 macOS spurious Unfocused/Resized 이벤트를 무시하기 위한 타임스탬프
     last_programmatic_resize_at: Option<std::time::Instant>,
 }
 
@@ -133,7 +129,6 @@ pub enum Message {
     EngineReady,
     CheckQuitSignal,
     WindowEvent(window::Id, window::Event),
-    DelayedResize(u64),
     ShellDone(Result<String, String>),
     /// 상세 패널의 컨텍스트 액션 실행
     RunAction(ContextAction),
@@ -314,8 +309,6 @@ impl App {
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
-            resize_token: 0,
-            expected_resize: None,
             last_programmatic_resize_at: None,
         };
 
@@ -334,13 +327,6 @@ impl App {
         Task::future(async move {
             tokio::time::sleep(Duration::from_millis(FOCUS_RETRY_MS)).await;
             Message::EnsureFocus(attempt)
-        })
-    }
-
-    fn schedule_delayed_resize(token: u64) -> Task<Message> {
-        Task::future(async move {
-            tokio::time::sleep(Duration::from_millis(EMPTY_QUERY_RESIZE_DEBOUNCE_MS)).await;
-            Message::DelayedResize(token)
         })
     }
 
@@ -381,10 +367,22 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::QueryChanged(query) => {
+                let was_empty = self.query.trim().is_empty();
                 self.query = query;
+                let now_empty = self.query.trim().is_empty();
                 self.selected = 0;
+
                 let search_task = self.perform_search();
-                self.with_activity_warmup(search_task)
+
+                // empty↔non-empty 전환 시에만 즉시 resize (한 세션에 최대 2회).
+                // 연속 타이핑 중에는 resize가 발생하지 않아 깜빡임·포커스 유실 방지.
+                let resize_task = if was_empty != now_empty {
+                    self.resize_window()
+                } else {
+                    Task::none()
+                };
+
+                self.with_activity_warmup(Task::batch([search_task, resize_task]))
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
@@ -399,21 +397,33 @@ impl App {
                 self.with_activity_warmup(key_task)
             }
             Message::BrandClicked => {
-                // Toggle quick help.
                 if self.query.starts_with(":help") {
                     self.clear_query_and_refocus()
                 } else {
+                    let was_empty = self.query.trim().is_empty();
                     self.query = ":help".to_string();
-                    self.perform_search()
+                    let search = self.perform_search();
+                    let resize = if was_empty {
+                        self.resize_window()
+                    } else {
+                        Task::none()
+                    };
+                    Task::batch([search, resize])
                 }
             }
             Message::BrandRightClicked => {
-                // Toggle settings.
                 if self.query.starts_with(":set") {
                     self.clear_query_and_refocus()
                 } else {
+                    let was_empty = self.query.trim().is_empty();
                     self.query = ":set".to_string();
-                    self.perform_search()
+                    let search = self.perform_search();
+                    let resize = if was_empty {
+                        self.resize_window()
+                    } else {
+                        Task::none()
+                    };
+                    Task::batch([search, resize])
                 }
             }
             Message::StartWindowDrag => match self.window_id {
@@ -500,20 +510,28 @@ impl App {
                 }
 
                 if !self.window_focused {
-                    // Windows: GetForegroundWindow로 실제 포그라운드 확인 가능
-                    #[cfg(target_os = "windows")]
-                    {
-                        if let Some(raw_id) = self.raw_window_id {
-                            if !crate::platform::is_our_window_foreground(raw_id) {
-                                return Task::none();
-                            }
-                        } else {
-                            return Task::none();
+                    // macOS: resize 직후 spurious Unfocused로 false가 된 경우 보정
+                    #[cfg(not(target_os = "windows"))]
+                    if let Some(ts) = self.last_programmatic_resize_at {
+                        if ts.elapsed() < Duration::from_millis(500) {
+                            self.window_focused = true;
                         }
                     }
-                    // macOS/Linux: window_focused 플래그가 정확하므로 직접 신뢰
-                    #[cfg(not(target_os = "windows"))]
-                    return Task::none();
+
+                    if !self.window_focused {
+                        #[cfg(target_os = "windows")]
+                        {
+                            if let Some(raw_id) = self.raw_window_id {
+                                if !crate::platform::is_our_window_foreground(raw_id) {
+                                    return Task::none();
+                                }
+                            } else {
+                                return Task::none();
+                            }
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        return Task::none();
+                    }
                 }
 
                 let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
@@ -583,12 +601,10 @@ impl App {
                     }
                     window::Event::Resized(size) => {
                         self.last_window_size = size;
-                        // 프로그래밍적 resize의 결과 이벤트인지 확인.
-                        // 일치하면 window_width를 갱신하지 않아야 누적 증가 방지.
-                        if let Some(expected) = self.expected_resize.take() {
-                            if (size.width - expected.width).abs() < 2.0
-                                && (size.height - expected.height).abs() < 2.0
-                            {
+                        // 프로그래밍적 resize 후 500ms 이내의 Resized 이벤트는
+                        // window_width 갱신을 건너뛰어 너비 누적 증가를 원천 방지한다.
+                        if let Some(ts) = self.last_programmatic_resize_at {
+                            if ts.elapsed() < Duration::from_millis(500) {
                                 return Task::none();
                             }
                         }
@@ -606,6 +622,18 @@ impl App {
                         }
                     }
                     window::Event::Unfocused => {
+                        // macOS: resize 직후 발생하는 spurious Unfocused를 소스에서 차단.
+                        // 500ms 이내이면 OS가 resize로 인해 일시적으로 unfocus 한 것으로 간주,
+                        // window_focused를 true 로 유지하고 exit 타이머를 시작하지 않는다.
+                        #[cfg(not(target_os = "windows"))]
+                        if let Some(ts) = self.last_programmatic_resize_at {
+                            if ts.elapsed() < Duration::from_millis(500) {
+                                return iced::widget::operation::focus::<Message>(
+                                    self.input_id.clone(),
+                                );
+                            }
+                        }
+
                         self.window_focused = false;
                         return Task::future(async {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -615,12 +643,6 @@ impl App {
                     _ => {}
                 }
                 Task::none()
-            }
-            Message::DelayedResize(token) => {
-                if token != self.resize_token {
-                    return Task::none();
-                }
-                self.resize_window()
             }
             Message::ShellDone(result) => {
                 match result {
@@ -646,8 +668,7 @@ impl App {
                 if self.window_focused {
                     return Task::none();
                 }
-                // Windows에서는 GetForegroundWindow로 정확히 확인 가능.
-                // macOS/Linux에서는 항상 true를 반환하므로 window_focused만 신뢰.
+                // Windows: GetForegroundWindow로 정확히 확인
                 #[cfg(target_os = "windows")]
                 if let Some(raw_id) = self.raw_window_id {
                     if crate::platform::is_our_window_foreground(raw_id) {
@@ -658,17 +679,8 @@ impl App {
                         return Task::batch([focus_now, focus_retry]);
                     }
                 }
-                #[cfg(not(target_os = "windows"))]
-                if let Some(ts) = self.last_programmatic_resize_at {
-                    if ts.elapsed() < Duration::from_millis(220) {
-                        // macOS에서 드물게 리사이즈 직후 Unfocused가 스푸리어스하게 들어올 수 있음.
-                        self.window_focused = true;
-                        let focus_now =
-                            iced::widget::operation::focus::<Message>(self.input_id.clone());
-                        let focus_retry = Self::schedule_focus_retry(1);
-                        return Task::batch([focus_now, focus_retry]);
-                    }
-                }
+                // macOS/Linux: spurious unfocus는 이미 Unfocused 핸들러에서 차단했으므로
+                // 여기까지 도달했다면 실제 포커스 유실이다.
 
                 if self.state_dirty {
                     self.window_state.save();
@@ -824,32 +836,28 @@ impl App {
     fn perform_search(&mut self) -> Task<Message> {
         let query = self.query.clone();
         let trimmed = query.trim();
-        self.resize_token = self.resize_token.wrapping_add(1);
-        let resize_token = self.resize_token;
 
         if trimmed.is_empty() {
             self.results.clear();
             self.search_mode = kmd_core::SearchMode::Fuzzy;
-            return Self::schedule_delayed_resize(resize_token);
-        } else {
-            match prefix_of(trimmed) {
-                Prefix::Web => self.handle_web_query(trimmed),
-                Prefix::Transform => self.handle_transform_query(trimmed),
-                Prefix::Prompt => self.handle_prompt_query(trimmed),
-                Prefix::Calc => self.handle_calc_query(trimmed),
-                Prefix::Emoji => self.handle_emoji_query(trimmed),
-                Prefix::Settings => self.handle_settings_query(trimmed),
-                Prefix::Help => self.handle_help_query(),
-                Prefix::Version => self.handle_version_query(),
-                Prefix::Shell => self.handle_shell_query(trimmed),
-                Prefix::Keymap => self.handle_keymap_query(trimmed),
-                Prefix::General => self.handle_main_search(trimmed),
-            }
+            return Task::none();
         }
 
-        // 결과 변화가 빠르게 연속 발생할 수 있으므로 resize를 coalescing 처리
-        // (마지막 토큰만 유효)해서 macOS 깜빡임과 포커스 튐을 줄인다.
-        Self::schedule_delayed_resize(resize_token)
+        match prefix_of(trimmed) {
+            Prefix::Web => self.handle_web_query(trimmed),
+            Prefix::Transform => self.handle_transform_query(trimmed),
+            Prefix::Prompt => self.handle_prompt_query(trimmed),
+            Prefix::Calc => self.handle_calc_query(trimmed),
+            Prefix::Emoji => self.handle_emoji_query(trimmed),
+            Prefix::Settings => self.handle_settings_query(trimmed),
+            Prefix::Help => self.handle_help_query(),
+            Prefix::Version => self.handle_version_query(),
+            Prefix::Shell => self.handle_shell_query(trimmed),
+            Prefix::Keymap => self.handle_keymap_query(trimmed),
+            Prefix::General => self.handle_main_search(trimmed),
+        }
+
+        Task::none()
     }
 
     /// classify_web_query 통합 분류기 사용
@@ -2001,8 +2009,6 @@ impl App {
     }
 
     fn resize_window(&mut self) -> Task<Message> {
-        // query가 존재하는 동안 결과 껍데기(리스트/상세 영역)를 유지해
-        // 결과 0↔N 전환 시 레이아웃 점프와 깜빡임을 줄인다.
         let show_results_shell = !self.query.trim().is_empty();
         let height = if show_results_shell {
             SEARCH_BAR_HEIGHT + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT
@@ -2024,8 +2030,8 @@ impl App {
         }
 
         self.last_window_size = size;
-        self.expected_resize = Some(size);
         self.last_programmatic_resize_at = Some(std::time::Instant::now());
+
         let resize_task = match self.window_id {
             Some(id) => window::resize(id, size),
             None => window::oldest().then(move |maybe_id| match maybe_id {
@@ -2034,11 +2040,20 @@ impl App {
             }),
         };
 
-        // 리사이즈 직후 text_input 포커스가 떨어지는 회귀를 방지한다.
-        // (window_focused=false일 때는 포커스를 되찾지 않음)
+        // 리사이즈 직후 포커스 회복은 약간의 딜레이를 주어
+        // macOS가 resize 완료 후 focus를 돌려받을 수 있도록 한다.
+        // (IME 상태 보존을 위해 동기 focus 대신 scheduled focus 사용)
         if self.window_focused {
-            let focus_task = iced::widget::operation::focus::<Message>(self.input_id.clone());
-            Task::batch([resize_task, focus_task])
+            let input_id = self.input_id.clone();
+            let delayed_focus = Task::future(async move {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                Message::EnsureFocus(1)
+            });
+            Task::batch([
+                resize_task,
+                iced::widget::operation::focus::<Message>(input_id),
+                delayed_focus,
+            ])
         } else {
             resize_task
         }
