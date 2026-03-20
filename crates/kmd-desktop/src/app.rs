@@ -136,6 +136,8 @@ pub enum Message {
     RunAction(ContextAction),
     /// 포커스 잃은 후 debounce 확인 → 여전히 포커스 없으면 종료
     CheckUnfocusedExit,
+    /// 투명 배경 클릭 → Spotlight처럼 앱 닫기
+    BackgroundClicked,
 }
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
@@ -602,6 +604,12 @@ impl App {
             }
             Message::RunAction(action) => {
                 return self.execute_context_action(action);
+            }
+            Message::BackgroundClicked => {
+                if self.state_dirty {
+                    self.window_state.save();
+                }
+                return iced::exit();
             }
             Message::CheckUnfocusedExit => {
                 if self.window_focused {
@@ -2014,21 +2022,12 @@ impl App {
             content = content.push(hint);
         }
 
-        let left_edge = mouse_area(container(text("")).width(4).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::West))
-            .interaction(iced::mouse::Interaction::ResizingHorizontally);
-        let right_edge = mouse_area(container(text("")).width(4).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::East))
-            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        // 남은 투명 영역: 클릭 시 Spotlight처럼 앱 종료
+        let bg_dismiss = mouse_area(container(text("")).width(Fill).height(Fill))
+            .on_press(Message::BackgroundClicked);
+        content = content.push(bg_dismiss);
 
-        row![
-            left_edge,
-            container(content).width(Fill).height(Fill),
-            right_edge
-        ]
-        .width(Fill)
-        .height(Fill)
-        .into()
+        container(content).width(Fill).height(Fill).into()
     }
 
     /// Spotlight 스타일 pill-shaped 검색바. 양끝이 완전 라운드.
@@ -2158,7 +2157,7 @@ impl App {
         .width(Fill)
         .height(Fill);
 
-        container(content)
+        let panel = container(content)
             .width(Fill)
             .height(Fill)
             .style(move |_: &_| container::Style {
@@ -2175,7 +2174,18 @@ impl App {
                 },
                 text_color: None,
                 snap: false,
-            })
+            });
+
+        let left_edge = mouse_area(container(text("")).width(4).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::West))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        let right_edge = mouse_area(container(text("")).width(4).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::East))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+
+        row![left_edge, panel, right_edge]
+            .width(Fill)
+            .height(Fill)
             .into()
     }
 
