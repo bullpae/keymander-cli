@@ -13,6 +13,7 @@ pub struct DesktopTheme {
 
     // Surfaces
     pub background: Color,
+    #[allow(dead_code)]
     pub surface: Color,
     pub surface2: Color,
     pub border: Color,

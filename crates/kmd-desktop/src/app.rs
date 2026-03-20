@@ -20,8 +20,8 @@ use iced::widget::{
     column, container, image, mouse_area, row, scrollable, text, text_input, Column, Space,
 };
 use iced::{
-    window, Background, Border, Color, Element, Fill, Padding, Point, Shadow, Size, Subscription,
-    Task, Vector,
+    window, Background, Border, Color, Element, Fill, Length, Padding, Point, Shadow, Size,
+    Subscription, Task, Vector,
 };
 
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
@@ -35,20 +35,20 @@ use crate::window_state::WindowState;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const DEFAULT_WIDTH: f32 = 680.0;
-pub const SEARCH_BAR_HEIGHT: f32 = 56.0;
-const ROW_HEIGHT: f32 = 52.0;
-const STATUS_BAR_HEIGHT: f32 = 28.0;
+const PILL_HEIGHT: f32 = 48.0;
+const DRAG_STRIP: f32 = 8.0;
+pub const SEARCH_BAR_HEIGHT: f32 = PILL_HEIGHT + DRAG_STRIP;
+const ROW_HEIGHT: f32 = 48.0;
+const STATUS_BAR_HEIGHT: f32 = 26.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
-const DETAIL_PANEL_WIDTH: f32 = 260.0;
-const ACCENT_BAR_HEIGHT: f32 = 2.0;
+const RESULTS_GAP: f32 = 6.0;
 
 /// 창은 처음부터 전체 높이로 열린다 — 런타임 resize 없이 콘텐츠만 전환.
-pub const FULL_WINDOW_HEIGHT: f32 = SEARCH_BAR_HEIGHT
-    + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT)
-    + STATUS_BAR_HEIGHT
-    + ACCENT_BAR_HEIGHT;
+/// 기본 = pill 검색바만 표시, 결과 시 아래 패널이 투명→불투명으로 나타남.
+pub const FULL_WINDOW_HEIGHT: f32 =
+    SEARCH_BAR_HEIGHT + RESULTS_GAP + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT;
 
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
@@ -1996,136 +1996,73 @@ fn prefix_of(query: &str) -> Prefix {
 
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
-        let t = &self.theme;
+        let has_results = !self.results.is_empty();
 
-        // ── 항상 동일한 위젯 트리 — 콘텐츠만 교체하여 레이아웃 점프/깜빡임 원천 제거 ──
-        let search_bar = self.view_search_bar();
-        let sep = |color: Color| -> Element<'_, Message> {
-            container(text(""))
+        let pill = self.view_search_pill();
+        let mut content = Column::new().push(pill);
+
+        if has_results {
+            content = content
+                .push(container(text("")).height(RESULTS_GAP))
+                .push(self.view_results_panel());
+        } else if !self.query.trim().is_empty() {
+            let t = &self.theme;
+            let hint = container(text("No results found").size(13).color(t.overlay).center())
                 .width(Fill)
-                .height(1)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(color)),
-                    ..Default::default()
-                })
-                .into()
-        };
+                .padding(Padding::from([10, 0]))
+                .center_x(Fill);
+            content = content.push(hint);
+        }
 
-        let left_col = Column::new()
-            .push(search_bar)
-            .push(sep(t.border))
-            .push(self.view_results_list())
-            .push(sep(t.border))
-            .push(self.view_status_bar())
-            .push(self.view_accent_bar());
-
-        let divider_color = t.border;
-        let divider = container(text(""))
-            .width(1)
-            .height(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(divider_color)),
-                ..Default::default()
-            });
-
-        let content = row![
-            container(left_col).width(Fill),
-            divider,
-            self.view_detail_panel()
-        ]
-        .width(Fill)
-        .height(Fill);
-
-        let bg = t.background_with_opacity();
-        let radius = t.corner_radius;
-        let shadow_i = t.shadow_intensity;
-        let border_color = Color {
-            a: 0.20,
-            ..t.accent
-        };
-
-        let body = container(content)
-            .width(Fill)
-            .height(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(bg)),
-                border: Border {
-                    radius: radius.into(),
-                    width: 1.0,
-                    color: border_color,
-                },
-                shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.30 * shadow_i),
-                    offset: Vector::new(0.0, 4.0),
-                    blur_radius: 16.0,
-                },
-                text_color: None,
-                snap: false,
-            });
-
-        let left_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
+        let left_edge = mouse_area(container(text("")).width(4).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::West))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
-        let right_edge_resize = mouse_area(container(text("")).width(6).height(Fill))
+        let right_edge = mouse_area(container(text("")).width(4).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::East))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
 
-        let top_pad = container(text("")).width(Fill).height(2);
-        let bottom_pad = container(text("")).width(Fill).height(2);
-
-        column![
-            top_pad,
-            row![left_edge_resize, body, right_edge_resize]
-                .width(Fill)
-                .height(Fill),
-            bottom_pad
+        row![
+            left_edge,
+            container(content).width(Fill).height(Fill),
+            right_edge
         ]
         .width(Fill)
         .height(Fill)
         .into()
     }
 
-    fn view_search_bar(&self) -> Element<'_, Message> {
+    /// Spotlight 스타일 pill-shaped 검색바. 양끝이 완전 라운드.
+    fn view_search_pill(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let text_color = t.text;
         let overlay_color = t.overlay;
         let accent_color = t.accent;
-        let surface = t.surface;
+        let bg = t.background_with_opacity();
+        let shadow_i = t.shadow_intensity;
 
-        let bar_surface = Color {
-            r: (surface.r + 0.02).min(1.0),
-            g: (surface.g + 0.02).min(1.0),
-            b: (surface.b + 0.02).min(1.0),
-            a: surface.a,
-        };
+        let drag_strip = mouse_area(container(text("")).width(Fill).height(DRAG_STRIP))
+            .on_press(Message::StartWindowDrag)
+            .interaction(iced::mouse::Interaction::Grab);
 
-        let brand = mouse_area(container(text("\u{00BB}").size(23).color(t.peach)).padding(
-            Padding {
+        let search_icon = mouse_area(
+            container(text("\u{1F50D}").size(16).color(overlay_color)).padding(Padding {
                 top: 0.0,
-                right: 6.0,
+                right: 2.0,
                 bottom: 0.0,
-                left: 2.0,
-            },
-        ))
+                left: 6.0,
+            }),
+        )
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
         .interaction(iced::mouse::Interaction::Pointer);
 
-        // placeholder는 고정 문자열로 유지해 깜빡임을 방지한다.
-        let placeholder = "Search anything...  (:help for commands)";
-
-        let input = text_input(placeholder, &self.query)
+        let input = text_input("Search anything...", &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
             .width(Fill)
-            .size(19)
-            .padding(Padding {
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-                left: 4.0,
-            })
+            .size(17)
+            .padding(Padding::from([0, 4]))
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
                 let ph_color = if is_focused {
@@ -2149,104 +2086,109 @@ impl App {
                 }
             });
 
-        let status_text = if self.loading {
-            "INDEX"
-        } else if self.query.is_empty() {
-            "READY"
-        } else {
-            self.search_mode.label()
+        let bar_content = row![search_icon, input]
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .padding(Padding::from([0, 12]));
+
+        let pill_radius = PILL_HEIGHT / 2.0;
+        let border_color = Color {
+            a: 0.15,
+            ..accent_color
         };
-        let badge_text = text(status_text).size(11).color(t.overlay);
-        let chip_surface = Color::from_rgba(
-            (bar_surface.r + 0.03).min(1.0),
-            (bar_surface.g + 0.03).min(1.0),
-            (bar_surface.b + 0.03).min(1.0),
-            1.0,
-        );
-        let badge = container(badge_text)
-            .padding(Padding::from([4, 8]))
+        let pill = container(bar_content)
+            .width(Fill)
+            .height(PILL_HEIGHT)
+            .center_y(Fill)
             .style(move |_: &_| container::Style {
-                background: Some(Background::Color(chip_surface)),
+                background: Some(Background::Color(bg)),
                 border: Border {
-                    radius: 999.0.into(),
+                    radius: pill_radius.into(),
                     width: 1.0,
-                    color: Color::from_rgba(accent_color.r, accent_color.g, accent_color.b, 0.22),
+                    color: border_color,
                 },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.30 * shadow_i),
+                    offset: Vector::new(0.0, 3.0),
+                    blur_radius: 14.0,
+                },
+                text_color: None,
+                snap: false,
+            });
+
+        column![drag_strip, pill].width(Fill).into()
+    }
+
+    /// 결과 패널: 리스트(2/3) + 상세(1/3), 라운드 모서리 + 그림자
+    fn view_results_panel(&self) -> Element<'_, Message> {
+        let t = &self.theme;
+        let bg = t.background_with_opacity();
+        let radius = t.corner_radius;
+        let shadow_i = t.shadow_intensity;
+        let accent = t.accent;
+        let border_c = Color { a: 0.12, ..accent };
+        let divider_c = t.border;
+
+        let sep = container(text(""))
+            .width(Fill)
+            .height(1)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_c)),
                 ..Default::default()
             });
 
-        let bar_content = row![brand, input, badge]
-            .spacing(10)
-            .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 14]));
+        let left_col = Column::new()
+            .push(self.view_results_list())
+            .push(sep)
+            .push(self.view_status_bar());
 
-        let top_drag_strip = mouse_area(container(text("")).width(Fill).height(8))
-            .on_press(Message::StartWindowDrag)
-            .interaction(iced::mouse::Interaction::Grab);
-
-        let main_bar = container(bar_content)
+        let vert_divider = container(text(""))
+            .width(1)
+            .height(Fill)
             .style(move |_: &_| container::Style {
-                background: Some(Background::Color(bar_surface)),
+                background: Some(Background::Color(divider_c)),
                 ..Default::default()
-            })
-            .width(Fill)
-            .height(SEARCH_BAR_HEIGHT - 8.0)
-            .center_y(Fill);
+            });
 
-        container(column![top_drag_strip, main_bar])
+        let content = row![
+            container(left_col).width(Length::FillPortion(2)),
+            vert_divider,
+            container(self.view_detail_panel()).width(Length::FillPortion(1)),
+        ]
+        .width(Fill)
+        .height(Fill);
+
+        container(content)
             .width(Fill)
-            .height(SEARCH_BAR_HEIGHT)
+            .height(Fill)
             .style(move |_: &_| container::Style {
-                background: Some(Background::Color(bar_surface)),
-                ..Default::default()
+                background: Some(Background::Color(bg)),
+                border: Border {
+                    radius: radius.into(),
+                    width: 1.0,
+                    color: border_c,
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.20 * shadow_i),
+                    offset: Vector::new(0.0, 4.0),
+                    blur_radius: 16.0,
+                },
+                text_color: None,
+                snap: false,
             })
             .into()
     }
 
     fn view_results_list(&self) -> Element<'_, Message> {
-        let t = &self.theme;
-        let list_height = MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT;
-        let bg = t.background_with_opacity();
-
-        if self.results.is_empty() {
-            let placeholder_text = if self.query.trim().is_empty() {
-                "Type to search files, apps, settings, and more"
-            } else {
-                "No results found"
-            };
-            let overlay_c = t.overlay;
-            return container(
-                container(text(placeholder_text).size(14).color(overlay_c).center())
-                    .width(Fill)
-                    .height(Fill)
-                    .center_x(Fill)
-                    .center_y(Fill),
-            )
-            .width(Fill)
-            .height(list_height)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(bg)),
-                ..Default::default()
-            })
-            .into();
-        }
-
         let mut list = Column::new().spacing(0);
         for (i, result) in self.results.iter().enumerate() {
             list = list.push(self.view_result_row(i, result));
         }
 
-        scrollable(
-            container(list)
-                .width(Fill)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(bg)),
-                    ..Default::default()
-                }),
-        )
-        .id(self.scrollable_id.clone())
-        .height(list_height)
-        .into()
+        scrollable(container(list).width(Fill))
+            .id(self.scrollable_id.clone())
+            .height(Fill)
+            .into()
     }
 
     fn view_result_row<'a>(
@@ -2357,39 +2299,18 @@ impl App {
             self.results.len()
         );
 
-        let left = text(status_text).size(11).color(t.overlay);
-        let right = text("Esc to close").size(11).color(t.overlay);
+        let left = text(status_text).size(10).color(t.overlay);
+        let right = text("Esc to close").size(10).color(t.overlay);
 
         let bar = row![left, Space::new().width(Fill), right]
-            .padding(Padding::from([4, 16]))
+            .padding(Padding::from([4, 14]))
             .align_y(iced::Alignment::Center);
 
-        container(bar)
-            .width(Fill)
-            .height(STATUS_BAR_HEIGHT - 2.0)
-            .into()
-    }
-
-    fn view_accent_bar(&self) -> Element<'_, Message> {
-        let accent = self.theme.accent;
-        container(text(""))
-            .width(Fill)
-            .height(2)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(accent)),
-                ..Default::default()
-            })
-            .into()
+        container(bar).width(Fill).height(STATUS_BAR_HEIGHT).into()
     }
 
     fn view_detail_panel(&self) -> Element<'_, Message> {
         let t = &self.theme;
-        let panel_bg = Color {
-            r: (t.surface.r - 0.01).max(0.0),
-            g: (t.surface.g - 0.01).max(0.0),
-            b: (t.surface.b - 0.01).max(0.0),
-            a: t.surface.a,
-        };
 
         let Some(result) = self.results.get(self.selected) else {
             let hint_color = t.overlay;
@@ -2409,12 +2330,8 @@ impl App {
                     .width(Fill)
                     .padding(Padding::from([20, 16])),
             )
-            .width(DETAIL_PANEL_WIDTH)
+            .width(Fill)
             .height(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(panel_bg)),
-                ..Default::default()
-            })
             .into();
         };
         let item = &result.item;
@@ -2627,14 +2544,7 @@ impl App {
         ]
         .spacing(0);
 
-        container(panel_content)
-            .width(DETAIL_PANEL_WIDTH)
-            .height(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(panel_bg)),
-                ..Default::default()
-            })
-            .into()
+        container(panel_content).width(Fill).height(Fill).into()
     }
 }
 
