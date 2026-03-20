@@ -35,8 +35,8 @@ use crate::window_state::WindowState;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const DEFAULT_WIDTH: f32 = 680.0;
-const PILL_HEIGHT: f32 = 48.0;
-const DRAG_STRIP: f32 = 8.0;
+const PILL_HEIGHT: f32 = 34.0;
+const DRAG_STRIP: f32 = 6.0;
 pub const SEARCH_BAR_HEIGHT: f32 = PILL_HEIGHT + DRAG_STRIP;
 const ROW_HEIGHT: f32 = 48.0;
 const STATUS_BAR_HEIGHT: f32 = 26.0;
@@ -2043,14 +2043,15 @@ impl App {
             .on_press(Message::StartWindowDrag)
             .interaction(iced::mouse::Interaction::Grab);
 
-        let search_icon = mouse_area(
-            container(text("\u{1F50D}").size(16).color(overlay_color)).padding(Padding {
+        let peach = t.peach;
+        let brand = mouse_area(container(text("\u{00BB}").size(20).color(peach)).padding(
+            Padding {
                 top: 0.0,
-                right: 2.0,
+                right: 4.0,
                 bottom: 0.0,
-                left: 6.0,
-            }),
-        )
+                left: 2.0,
+            },
+        ))
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
         .interaction(iced::mouse::Interaction::Pointer);
@@ -2060,7 +2061,7 @@ impl App {
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
             .width(Fill)
-            .size(17)
+            .size(15)
             .padding(Padding::from([0, 4]))
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
@@ -2085,14 +2086,14 @@ impl App {
                 }
             });
 
-        let bar_content = row![search_icon, input]
-            .spacing(6)
+        let bar_content = row![brand, input]
+            .spacing(4)
             .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 12]));
+            .padding(Padding::from([0, 10]));
 
         let pill_radius = PILL_HEIGHT / 2.0;
         let border_color = Color {
-            a: 0.15,
+            a: 0.30,
             ..accent_color
         };
         let pill = container(bar_content)
@@ -2103,13 +2104,13 @@ impl App {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: pill_radius.into(),
-                    width: 1.0,
+                    width: 2.0,
                     color: border_color,
                 },
                 shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.30 * shadow_i),
-                    offset: Vector::new(0.0, 3.0),
-                    blur_radius: 14.0,
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.12 * shadow_i),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 6.0,
                 },
                 text_color: None,
                 snap: false,
