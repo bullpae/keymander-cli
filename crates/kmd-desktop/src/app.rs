@@ -2359,12 +2359,12 @@ impl App {
         };
         let u = self.ui;
         let left_bar = container(text(""))
-            .width(3)
+            .width(4)
             .height(u.row_height - 8.0)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(sel_color)),
                 border: Border {
-                    radius: 1.5.into(),
+                    radius: 2.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
