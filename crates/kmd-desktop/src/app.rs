@@ -855,12 +855,20 @@ impl App {
     // ─── Subscription ─────────────────────────────────────────────────────
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keyboard_sub = keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed { key, modifiers, .. } => Message::KeyEvent(key, modifiers),
-            keyboard::Event::KeyReleased { .. } | keyboard::Event::ModifiersChanged(_) => {
-                Message::KeyEvent(keyboard::Key::Unidentified, keyboard::Modifiers::default())
-            }
-        });
+        // event::listen_with로 위젯이 소비한 이벤트도 캡처 (ESC 등)
+        let keyboard_sub =
+            iced::event::listen_with(|event, _status, _id| {
+                if let iced::Event::Keyboard(kb_event) = event {
+                    match kb_event {
+                        keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                            Some(Message::KeyEvent(key, modifiers))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            });
 
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
