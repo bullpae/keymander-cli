@@ -36,7 +36,6 @@ pub struct DesktopTheme {
     // Effects
     pub opacity: f32,
     pub corner_radius: f32,
-    pub shadow_intensity: f32,
 }
 
 impl DesktopTheme {
@@ -85,7 +84,6 @@ pub fn midnight() -> DesktopTheme {
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.95,
         corner_radius: 12.0,
-        shadow_intensity: 1.0,
     }
 }
 
@@ -108,7 +106,6 @@ pub fn obsidian() -> DesktopTheme {
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.98,
         corner_radius: 12.0,
-        shadow_intensity: 0.8,
     }
 }
 
@@ -131,7 +128,6 @@ pub fn snow() -> DesktopTheme {
         teal: rgb(0x00, 0x88, 0x80),
         opacity: 0.95,
         corner_radius: 12.0,
-        shadow_intensity: 0.5,
     }
 }
 
@@ -154,7 +150,6 @@ pub fn rose_pine() -> DesktopTheme {
         teal: rgb(0x9C, 0xCF, 0xD8),
         opacity: 0.93,
         corner_radius: 12.0,
-        shadow_intensity: 0.9,
     }
 }
 
@@ -177,7 +172,6 @@ pub fn nord() -> DesktopTheme {
         teal: rgb(0x8F, 0xBC, 0xBB),
         opacity: 0.95,
         corner_radius: 12.0,
-        shadow_intensity: 0.7,
     }
 }
 

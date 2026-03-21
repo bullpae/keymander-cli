@@ -705,7 +705,7 @@ fn check_accessibility_permission() -> bool {
         // kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
         let key_str = CFStringCreateWithCString(
             std::ptr::null(),
-            b"AXTrustedCheckOptionPrompt\0".as_ptr(),
+            c"AXTrustedCheckOptionPrompt".as_ptr().cast(),
             0x0800_0100, // kCFStringEncodingUTF8
         );
         if key_str.is_null() {

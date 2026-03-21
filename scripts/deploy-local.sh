@@ -95,7 +95,11 @@ mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/kmd-data"
 cp target/release/kmd "$DEPLOY_DIR/"
 cp target/release/kmd-desktop "$DEPLOY_DIR/"
 cp target/release/kmd-daemon "$DEPLOY_DIR/"
-cp dist/config.toml "$DEPLOY_DIR/kmd-data/"
+if [ ! -f "$DEPLOY_DIR/kmd-data/config.toml" ]; then
+    cp dist/config.toml "$DEPLOY_DIR/kmd-data/"
+else
+    info "기존 config.toml 유지 (덮어쓰기 안 함)"
+fi
 chmod +x "$DEPLOY_DIR/kmd" "$DEPLOY_DIR/kmd-desktop" "$DEPLOY_DIR/kmd-daemon"
 
 ok "바이너리 배포 완료"

@@ -63,7 +63,6 @@ pub fn run() -> color_eyre::Result<()> {
             Ok((stream, _addr)) => {
                 let engine = engine.clone();
                 let shutdown = shutdown.clone();
-                let started_at = started_at;
 
                 std::thread::spawn(move || {
                     if let Err(e) = handle_client(stream, &engine, &shutdown, started_at) {

@@ -39,6 +39,9 @@ pub struct GeneralConfig {
     /// Reset input method to English when the desktop launcher opens.
     /// Useful because most commands start with English characters (@, :, etc.).
     pub reset_ime_on_launch: bool,
+    /// Desktop launcher base font size in pixels.
+    /// All UI elements scale proportionally. Range: 12–32, default: 16.
+    pub font_size: f32,
 }
 
 impl Default for GeneralConfig {
@@ -51,6 +54,7 @@ impl Default for GeneralConfig {
             editor: None,
             emoji_icons: true,
             reset_ime_on_launch: true,
+            font_size: 16.0,
         }
     }
 }

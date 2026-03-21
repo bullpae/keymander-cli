@@ -30,6 +30,10 @@
 # Desktop 실행 시 IME를 영어 모드로 전환
 # reset_ime_on_launch = true
 
+# Desktop 런처 기본 폰트 크기 (px)
+# 모든 UI 요소가 이 값에 비례하여 자동 조절됨 (범위: 12–32, 기본: 16)
+# font_size = 16
+
 # ── 런처 설정 ────────────────────────────────────────────────
 [launcher]
 # 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs
