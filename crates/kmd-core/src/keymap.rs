@@ -526,7 +526,137 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
     }
 }
 
-/// 키맵핑 치트시트 생성 — config 기반 전체 바인딩을 시각화
+/// vim-nav 프리셋의 TOML 기본 바인딩.
+/// daemon(kmd-daemon)이 프리셋+사용자 config을 deep merge하여 사용하는데,
+/// desktop은 daemon에 의존하지 않으므로 치트시트 표시용으로 TOML 수준의
+/// 기본값을 여기서 제공한다.
+fn vim_nav_default_layer() -> crate::config::LayerToml {
+    use crate::config::{LayerDoubleTapToml, LayerToml};
+    let mut mappings = std::collections::HashMap::new();
+    mappings.insert("H".into(), "Left".into());
+    mappings.insert("J".into(), "Down".into());
+    mappings.insert("K".into(), "Up".into());
+    mappings.insert("L".into(), "Right".into());
+    mappings.insert("N".into(), "PageUp".into());
+    mappings.insert("M".into(), "PageDown".into());
+    mappings.insert(".".into(), "Backspace".into());
+    mappings.insert("Space".into(), "launch:kmd-desktop".into());
+
+    #[cfg(target_os = "macos")]
+    {
+        mappings.insert("P".into(), "Cmd+V".into());
+        mappings.insert("Y".into(), "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C".into());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mappings.insert("P".into(), "Ctrl+V".into());
+        mappings.insert("Y".into(), "macro:Home;Shift+End;Ctrl+C".into());
+    }
+
+    let mut double_taps = std::collections::HashMap::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        double_taps.insert(
+            "I".into(),
+            LayerDoubleTapToml {
+                single: "Alt+Left".into(),
+                double: "Cmd+Left".into(),
+                timeout_ms: Some(300),
+            },
+        );
+        double_taps.insert(
+            "O".into(),
+            LayerDoubleTapToml {
+                single: "Alt+Right".into(),
+                double: "Cmd+Right".into(),
+                timeout_ms: Some(300),
+            },
+        );
+        double_taps.insert(
+            "Slash".into(),
+            LayerDoubleTapToml {
+                single: "Delete".into(),
+                double: "macro:Cmd+Left;Shift+Cmd+Right;Delete".into(),
+                timeout_ms: Some(300),
+            },
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        double_taps.insert(
+            "I".into(),
+            LayerDoubleTapToml {
+                single: "Ctrl+Left".into(),
+                double: "Home".into(),
+                timeout_ms: Some(300),
+            },
+        );
+        double_taps.insert(
+            "O".into(),
+            LayerDoubleTapToml {
+                single: "Ctrl+Right".into(),
+                double: "End".into(),
+                timeout_ms: Some(300),
+            },
+        );
+        double_taps.insert(
+            "Slash".into(),
+            LayerDoubleTapToml {
+                single: "Delete".into(),
+                double: "macro:Home;Shift+End;Delete".into(),
+                timeout_ms: Some(300),
+            },
+        );
+    }
+
+    LayerToml {
+        trigger: "LAlt".into(),
+        tap_action: Some("Escape".into()),
+        tap_hold_ms: Some(200),
+        mappings,
+        double_taps,
+    }
+}
+
+/// active_profile 기반으로 프리셋 기본값을 사용자 config에 병합한 effective keymap 반환
+fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapConfig {
+    let mut merged = km.clone();
+    if km.active_profile.eq_ignore_ascii_case("vim-nav") {
+        let base_layer = vim_nav_default_layer();
+        let user_nav = merged.layers.get("nav").cloned();
+        if let Some(user) = user_nav {
+            let mut effective = base_layer;
+            effective.trigger = user.trigger;
+            if user.tap_action.is_some() {
+                effective.tap_action = user.tap_action;
+            }
+            if user.tap_hold_ms.is_some() {
+                effective.tap_hold_ms = user.tap_hold_ms;
+            }
+            for (k, v) in user.mappings {
+                effective.mappings.insert(k, v);
+            }
+            for (k, v) in user.double_taps {
+                effective.double_taps.insert(k, v);
+            }
+            merged.layers.insert("nav".into(), effective);
+        } else {
+            merged.layers.insert("nav".into(), base_layer);
+        }
+
+        if merged.double_taps.is_empty() {
+            merged.double_taps.push(crate::config::DoubleTapToml {
+                key: "RShift".into(),
+                action: "Hangul".into(),
+                timeout_ms: Some(300),
+            });
+        }
+    }
+    merged
+}
+
+/// 키맵핑 치트시트 생성 — 프리셋+사용자 config 병합 결과를 시각화
 pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem> {
     let mut items: Vec<IndexItem> = Vec::new();
 
@@ -654,7 +784,7 @@ pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem>
     );
 
     // ── daemon keybindings: remaps ──
-    let km = &config.launcher.keymap;
+    let km = &effective_keymap(&config.launcher.keymap);
     if !km.remaps.is_empty() {
         section(&mut items, "Remaps", if e { "\u{1F504}" } else { "[R]" });
         let mut remaps: Vec<_> = km.remaps.iter().collect();

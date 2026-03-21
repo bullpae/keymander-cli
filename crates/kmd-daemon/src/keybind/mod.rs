@@ -565,6 +565,60 @@ impl KeybindConfig {
             double_taps: default_hangul_double_taps(),
         }
     }
+
+    /// base(프리셋)에 custom(사용자 config)을 deep merge.
+    /// - remaps/combos/double_taps: custom이 base를 덮어씀
+    /// - layers: 같은 name → 키 단위 병합 (custom이 우선), 새 name → 추가
+    pub fn merge(mut self, custom: Self) -> Self {
+        for (k, v) in custom.remaps {
+            self.remaps.insert(k, v);
+        }
+
+        for custom_layer in custom.layers {
+            if let Some(pos) = self
+                .layers
+                .iter()
+                .position(|layer| layer.name == custom_layer.name)
+            {
+                let bl = &mut self.layers[pos];
+                bl.trigger = custom_layer.trigger;
+                if custom_layer.tap_action.is_some() {
+                    bl.tap_action = custom_layer.tap_action;
+                }
+                bl.tap_hold_ms = custom_layer.tap_hold_ms;
+                for (k, v) in custom_layer.mappings {
+                    bl.mappings.insert(k, v);
+                }
+                for (k, v) in custom_layer.double_tap_mappings {
+                    bl.double_tap_mappings.insert(k, v);
+                }
+            } else {
+                self.layers.push(custom_layer);
+            }
+        }
+
+        for (trigger, action) in custom.combos {
+            if let Some(pos) = self
+                .combos
+                .iter()
+                .position(|(t, _)| t.key == trigger.key && t.modifiers == trigger.modifiers)
+            {
+                self.combos[pos] = (trigger, action);
+            } else {
+                self.combos.push((trigger, action));
+            }
+        }
+
+        for dt in custom.double_taps {
+            if let Some(pos) = self.double_taps.iter().position(|x| x.key == dt.key) {
+                self.double_taps[pos] = dt;
+            } else {
+                self.double_taps.push(dt);
+            }
+        }
+
+        self
+    }
 }
 
 #[cfg(target_os = "windows")]

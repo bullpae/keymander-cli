@@ -240,61 +240,9 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     kb
 }
 
-/// 프리셋(base) + 사용자 TOML(custom) 병합.
-///
-/// - remaps: 같은 키는 custom이 덮어씀
-/// - layers: 같은 name → deep merge (mappings/double_taps 키 단위 병합), 새 name → 추가
-/// - combos: 같은 trigger(modifiers+key)는 custom이 덮어씀
-/// - double_taps: 같은 key는 custom이 덮어씀
-fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> KeybindConfig {
-    for (k, v) in custom.remaps {
-        base.remaps.insert(k, v);
-    }
-
-    for custom_layer in custom.layers {
-        if let Some(pos) = base
-            .layers
-            .iter()
-            .position(|layer| layer.name == custom_layer.name)
-        {
-            let bl = &mut base.layers[pos];
-            bl.trigger = custom_layer.trigger;
-            if custom_layer.tap_action.is_some() {
-                bl.tap_action = custom_layer.tap_action;
-            }
-            bl.tap_hold_ms = custom_layer.tap_hold_ms;
-            for (k, v) in custom_layer.mappings {
-                bl.mappings.insert(k, v);
-            }
-            for (k, v) in custom_layer.double_tap_mappings {
-                bl.double_tap_mappings.insert(k, v);
-            }
-        } else {
-            base.layers.push(custom_layer);
-        }
-    }
-
-    for (trigger, action) in custom.combos {
-        if let Some(pos) = base
-            .combos
-            .iter()
-            .position(|(t, _)| t.key == trigger.key && t.modifiers == trigger.modifiers)
-        {
-            base.combos[pos] = (trigger, action);
-        } else {
-            base.combos.push((trigger, action));
-        }
-    }
-
-    for dt in custom.double_taps {
-        if let Some(pos) = base.double_taps.iter().position(|x| x.key == dt.key) {
-            base.double_taps[pos] = dt;
-        } else {
-            base.double_taps.push(dt);
-        }
-    }
-
-    base
+/// 프리셋(base) + 사용자 TOML(custom) 병합. KeybindConfig::merge 위임.
+fn merge_keybind_config(base: KeybindConfig, custom: KeybindConfig) -> KeybindConfig {
+    base.merge(custom)
 }
 
 #[cfg(target_os = "windows")]

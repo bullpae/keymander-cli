@@ -76,6 +76,7 @@ extern "C" {
     fn CGEventGetFlags(event: CGEventRef) -> u64;
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
+    fn CGEventSetType(event: CGEventRef, type_: u32);
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -499,10 +500,26 @@ fn execute_action(action: &BindAction) {
 /// 레이어 내 액션 실행 — 트리거 modifier(Alt 등)를 일시 해제한 뒤 액션을 보낸다.
 /// 물리적으로 Alt를 누르고 있으면 합성 이벤트(Cmd+Left 등)에 잔여 Alt 플래그가
 /// 간섭할 수 있다. 특히 한글 IME 활성 시 이 간섭이 문제가 된다.
+///
+/// 단순 keyUp이 아닌 flagsChanged(타입 12) 이벤트를 직접 생성하여
+/// OS modifier 상태를 확실히 클리어한다.
 fn execute_layer_action(action: &BindAction, trigger: VKey) {
-    let trigger_kc = vkey_to_cg(trigger);
-    send_key_event(trigger_kc, false, 0);
-    std::thread::sleep(std::time::Duration::from_millis(2));
+    unsafe {
+        let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
+        if !source.is_null() {
+            let trigger_kc = vkey_to_cg(trigger);
+            let ev = CGEventCreateKeyboardEvent(source, trigger_kc, false);
+            if !ev.is_null() {
+                CGEventSetType(ev, CG_EVENT_FLAGS_CHANGED);
+                CGEventSetFlags(ev, 0);
+                CGEventSetIntegerValueField(ev, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
+                CGEventPost(CG_SESSION_EVENT_TAP, ev);
+                CFRelease(ev);
+            }
+            CFRelease(source);
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(3));
 
     execute_action(action);
 }
