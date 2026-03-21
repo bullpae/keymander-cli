@@ -125,6 +125,7 @@ mod tests {
                 source: Source::FileProvider,
                 icon: "--".to_string(),
                 keywords: String::new(),
+                icon_path: None,
             },
             score,
         }

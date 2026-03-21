@@ -243,6 +243,7 @@ impl ShellExtension {
                 source: Source::Plugin,
                 icon: a.icon.to_string(),
                 keywords: a.description.to_string(),
+                icon_path: None,
             })
             .collect()
     }
@@ -276,6 +277,7 @@ impl Extension for ShellExtension {
             source: Source::Plugin,
             icon: "\u{1F4DF}".to_string(), // 📟
             keywords: format!("shell execute run command {}", query),
+            icon_path: None,
         });
 
         results

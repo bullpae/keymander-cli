@@ -443,6 +443,7 @@ fn status_item(config: &Config, emoji: bool) -> IndexItem {
         }
         .to_string(),
         keywords: "kmd:keymap:noop".to_string(),
+        icon_path: None,
     }
 }
 
@@ -475,6 +476,7 @@ fn profile_list_items(config: &Config, emoji: bool) -> Vec<IndexItem> {
                 }
                 .to_string(),
                 keywords: format!("kmd:keymap:use:{p}"),
+                icon_path: None,
             }
         })
         .collect()
@@ -490,6 +492,7 @@ fn preset_list_items(emoji: bool) -> Vec<IndexItem> {
             source: Source::Plugin,
             icon: if emoji { "\u{1F4E6}" } else { "[P]" }.to_string(),
             keywords: format!("kmd:keymap:noop:{name}"),
+            icon_path: None,
         })
         .collect()
 }
@@ -519,6 +522,7 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
         source: Source::Plugin,
         icon: icon.to_string(),
         keywords: keywords.to_string(),
+        icon_path: None,
     }
 }
 

@@ -1196,6 +1196,7 @@ fn list_directory_contents(dir: &Path, use_emoji: bool) -> Vec<SearchResult> {
                 icon_for_path(&path, use_emoji)
             },
             keywords: String::new(),
+            icon_path: None,
         };
 
         let result = SearchResult {
@@ -1264,6 +1265,7 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
                     source: Source::FileProvider,
                     icon,
                     keywords: String::new(),
+                    icon_path: None,
                 },
                 score: h.frequency * HISTORY_SCORE_MULTIPLIER,
             }

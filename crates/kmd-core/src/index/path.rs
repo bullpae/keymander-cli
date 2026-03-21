@@ -64,6 +64,7 @@ pub fn collect_executables(use_emoji: bool) -> Vec<IndexItem> {
                         "Ex".to_string()
                     },
                     keywords: full_path,
+                    icon_path: None,
                 });
             }
         }

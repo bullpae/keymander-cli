@@ -24,6 +24,7 @@ pub fn list_templates_as_items(
             source: Source::Plugin,
             icon: if use_emoji { "\u{1F4DD}" } else { "Pt" }.to_string(),
             keywords: format!("prompt template {}", t.name),
+            icon_path: None,
         })
         .collect();
 
@@ -36,6 +37,7 @@ pub fn list_templates_as_items(
             source: Source::Plugin,
             icon: if use_emoji { "\u{2139}\u{FE0F}" } else { "[i]" }.to_string(),
             keywords: "prompt template empty".to_string(),
+            icon_path: None,
         });
     }
 
@@ -49,6 +51,7 @@ pub fn list_templates_as_items(
             source: Source::Plugin,
             icon: if use_emoji { "\u{2795}" } else { "[+]" }.to_string(),
             keywords: "kmd:prompt:add".to_string(),
+            icon_path: None,
         });
     }
 

@@ -103,6 +103,7 @@ mod tests {
             source: Source::FileProvider,
             icon: "Rs".to_string(),
             keywords: "/home/user/test.rs".to_string(),
+            icon_path: None,
         });
         index.items.push(IndexItem {
             name: "docs".to_string(),
@@ -111,6 +112,7 @@ mod tests {
             source: Source::FileProvider,
             icon: ">>".to_string(),
             keywords: "/home/user/docs".to_string(),
+            icon_path: None,
         });
         index
     }

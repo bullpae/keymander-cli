@@ -684,6 +684,7 @@ fn walkdir_into_items<I>(
                 icon_for_path(path, use_emoji)
             },
             keywords: path_str,
+            icon_path: None,
         });
 
         if items.len() >= limit {
@@ -741,6 +742,7 @@ fn parse_line_output_into(stdout: &[u8], items: &mut Vec<IndexItem>, max: usize,
                 icon_for_path(&path, use_emoji)
             },
             keywords: line,
+            icon_path: None,
         });
 
         if items.len() >= max {

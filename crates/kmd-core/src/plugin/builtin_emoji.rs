@@ -179,6 +179,7 @@ fn emoji_to_item(entry: &EmojiEntry) -> IndexItem {
         source: Source::Plugin,
         icon: entry.emoji.to_string(),
         keywords: kw,
+        icon_path: None,
     }
 }
 

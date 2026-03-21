@@ -1006,6 +1006,7 @@ impl App {
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
                 keywords: "kmd:settings:noop".to_string(),
+                icon_path: None,
             },
             IndexItem {
                 name: format!("kmd-core {}", kmd_core::Index::current_version()),
@@ -1014,6 +1015,7 @@ impl App {
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
                 keywords: "kmd:settings:noop".to_string(),
+                icon_path: None,
             },
             IndexItem {
                 name: format!("target {}", std::env::consts::ARCH),
@@ -1022,6 +1024,7 @@ impl App {
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
                 keywords: "kmd:settings:noop".to_string(),
+                icon_path: None,
             },
         ];
         self.apply_contains_items(version_items);
@@ -1054,6 +1057,7 @@ impl App {
                         }
                         .to_string(),
                         keywords: "kmd:settings:noop".to_string(),
+                        icon_path: None,
                     }));
                     self.selected = 0;
                     return;
@@ -1108,6 +1112,7 @@ impl App {
                         source: Source::Plugin,
                         icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
                         keywords: "kmd:settings:noop".to_string(),
+                        icon_path: None,
                     }));
                 } else if body.is_empty() {
                     self.results = items_to_results(std::iter::once(IndexItem {
@@ -1117,6 +1122,7 @@ impl App {
                         source: Source::Plugin,
                         icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
                         keywords: "kmd:settings:noop".to_string(),
+                        icon_path: None,
                     }));
                 } else {
                     let mut cfg = config;
@@ -1139,6 +1145,7 @@ impl App {
                         source: Source::Plugin,
                         icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
                         keywords: "kmd:settings:noop".to_string(),
+                        icon_path: None,
                     }));
                 }
             } else {
@@ -1154,6 +1161,7 @@ impl App {
                     }
                     .to_string(),
                     keywords: "kmd:settings:noop".to_string(),
+                    icon_path: None,
                 }));
             }
             self.selected = 0;
@@ -1181,6 +1189,7 @@ impl App {
                     }
                     .to_string(),
                     keywords: "kmd:settings:noop".to_string(),
+                    icon_path: None,
                 }));
             } else if templates.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
                 let name_owned = name.to_string();
@@ -1197,6 +1206,7 @@ impl App {
                     source: Source::Plugin,
                     icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
                     keywords: "kmd:settings:noop".to_string(),
+                    icon_path: None,
                 }));
             } else {
                 self.results = items_to_results(std::iter::once(IndexItem {
@@ -1206,6 +1216,7 @@ impl App {
                     source: Source::Plugin,
                     icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
                     keywords: "kmd:settings:noop".to_string(),
+                    icon_path: None,
                 }));
             }
             self.selected = 0;
@@ -1478,6 +1489,7 @@ impl App {
                 kind: ItemKind::SystemCommand,
                 source: Source::Plugin,
                 keywords: action.clone(),
+                icon_path: None,
             })
             .collect();
 
@@ -1592,6 +1604,7 @@ impl App {
                 } else {
                     String::new()
                 },
+                icon_path: None,
             })
             .collect();
 
@@ -2789,6 +2802,7 @@ fn ensure_multi_llm_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
         keywords: "@ll @llm @multi @cmp multi llm compare".to_string(),
+        icon_path: None,
     });
 }
 
@@ -2806,6 +2820,7 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
         keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
+        icon_path: None,
     });
 }
 

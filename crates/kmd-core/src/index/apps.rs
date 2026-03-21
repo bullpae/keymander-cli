@@ -235,6 +235,7 @@ $sw.Close()
             source: Source::Apps,
             icon: app_icon(use_emoji),
             keywords: format!("{} {}", launch_path, path),
+            icon_path: None,
         });
     }
 
@@ -293,6 +294,7 @@ fn scan_lnk_dir(
             source: Source::Apps,
             icon: app_icon(use_emoji),
             keywords: full_path,
+            icon_path: None,
         });
     }
 }
@@ -346,6 +348,7 @@ fn collect_macos_apps(use_emoji: bool) -> Vec<IndexItem> {
                 source: Source::Apps,
                 icon: app_icon(use_emoji),
                 keywords: full_path,
+                icon_path: None,
             });
         }
     }
@@ -462,5 +465,6 @@ fn parse_desktop_file(
         source: Source::Apps,
         icon: app_icon(use_emoji),
         keywords: format!("{} {}", name, exec),
+        icon_path: None,
     })
 }

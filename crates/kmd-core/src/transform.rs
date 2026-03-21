@@ -98,6 +98,7 @@ pub fn help_items(use_emoji: bool) -> Vec<IndexItem> {
             source: Source::Plugin,
             icon: icon.to_string(),
             keywords: "transform clipboard".to_string(),
+            icon_path: None,
         })
         .collect()
 }

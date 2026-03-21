@@ -221,6 +221,7 @@ pub fn collect_system_commands(use_emoji: bool) -> Vec<IndexItem> {
                 source: Source::SystemCommand,
                 icon: cmd.pick_icon(use_emoji).to_string(),
                 keywords: keywords_str,
+                icon_path: None,
             }
         })
         .collect()

@@ -23,6 +23,9 @@ pub struct IndexItem {
     pub icon: String,
     /// Search keywords (joined subtitle/keywords for matching)
     pub keywords: String,
+    /// OS-specific icon path (Linux: Icon= from .desktop, macOS: derived at runtime)
+    #[serde(default)]
+    pub icon_path: Option<String>,
 }
 
 /// Item classification

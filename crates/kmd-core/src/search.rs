@@ -529,6 +529,7 @@ mod tests {
                 source: Source::Apps,
                 icon: "\u{1F4E6}".to_string(),
                 keywords: "firefox browser web".to_string(),
+                icon_path: None,
             },
             IndexItem {
                 name: "VS Code".to_string(),
@@ -537,6 +538,7 @@ mod tests {
                 source: Source::Apps,
                 icon: "\u{1F4E6}".to_string(),
                 keywords: "code editor vscode".to_string(),
+                icon_path: None,
             },
         ]);
 
@@ -566,6 +568,7 @@ mod tests {
                 source: Source::FileProvider,
                 icon: ">>".to_string(),
                 keywords: "downloads".to_string(),
+                icon_path: None,
             },
             IndexItem {
                 name: "download.txt".to_string(),
@@ -574,6 +577,7 @@ mod tests {
                 source: Source::FileProvider,
                 icon: "\u{1F4DD}".to_string(),
                 keywords: "download text".to_string(),
+                icon_path: None,
             },
         ]);
 
@@ -595,6 +599,7 @@ mod tests {
             source: Source::FileProvider,
             icon: ">>".to_string(),
             keywords: keywords.to_string(),
+            icon_path: None,
         }
     }
 

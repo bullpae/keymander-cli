@@ -57,6 +57,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
                 source: Source::Plugin,
                 icon: s.pick_icon(use_emoji).to_string(),
                 keywords: format!("{} {}", s.prefixes.join(" "), s.description),
+                icon_path: None,
             }
         })
         .collect();
@@ -110,6 +111,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
                 source: Source::Plugin,
                 icon: icon.to_string(),
                 keywords: keywords.to_string(),
+                icon_path: None,
             });
         }
     }
@@ -128,6 +130,7 @@ pub fn search_result_item(service: &WebService, query: &str, use_emoji: bool) ->
         source: Source::Plugin,
         icon: service.pick_icon(use_emoji).to_string(),
         keywords: url,
+        icon_path: None,
     }
 }
 
@@ -228,6 +231,7 @@ pub fn spell_result_items(query: &str, selected_ids: &[String], use_emoji: bool)
             source: Source::Plugin,
             icon: svc.pick_icon(use_emoji).to_string(),
             keywords: url.clone(),
+            icon_path: None,
         })
         .collect();
     build_batch_items(
@@ -272,6 +276,7 @@ pub fn translate_result_items(
             source: Source::Plugin,
             icon: svc.pick_icon(use_emoji).to_string(),
             keywords: url.clone(),
+            icon_path: None,
         })
         .collect();
     build_batch_items(
@@ -356,6 +361,7 @@ fn services_to_browse_items<T: HasId>(
             source: Source::Plugin,
             icon: s.pick_icon(use_emoji).to_string(),
             keywords: keywords_fn(s),
+            icon_path: None,
         })
         .collect()
 }
@@ -379,6 +385,7 @@ fn build_batch_items(
         source: Source::Plugin,
         icon: icon.to_string(),
         keywords: format!("{}\nproviders: {}", marker, providers_str),
+        icon_path: None,
     }];
     items.append(&mut individual);
     items

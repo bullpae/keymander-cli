@@ -58,6 +58,7 @@ impl CalcExtension {
                 source: Source::Plugin,
                 icon: calc_icon(use_emoji),
                 keywords: "calculator calc math".to_string(),
+                icon_path: None,
             }];
         }
 
@@ -72,6 +73,7 @@ impl CalcExtension {
                     source: Source::Plugin,
                     icon: calc_icon(use_emoji),
                     keywords: format!("calc {} {}", expr, result),
+                    icon_path: None,
                 }]
             }
             Err(_) => {
@@ -82,6 +84,7 @@ impl CalcExtension {
                     source: Source::Plugin,
                     icon: calc_error_icon(use_emoji),
                     keywords: String::new(),
+                    icon_path: None,
                 }]
             }
         }
