@@ -35,10 +35,10 @@ use crate::window_state::WindowState;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const DEFAULT_WIDTH: f32 = 680.0;
-const PILL_HEIGHT: f32 = 34.0;
+const PILL_HEIGHT: f32 = 36.0;
 const DRAG_STRIP: f32 = 6.0;
 pub const SEARCH_BAR_HEIGHT: f32 = PILL_HEIGHT + DRAG_STRIP;
-const ROW_HEIGHT: f32 = 48.0;
+const ROW_HEIGHT: f32 = 46.0;
 const STATUS_BAR_HEIGHT: f32 = 26.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
@@ -557,10 +557,13 @@ impl App {
                 match event {
                     window::Event::Focused => {
                         self.window_focused = true;
-                        let focus_now =
-                            iced::widget::operation::focus::<Message>(self.input_id.clone());
-                        let focus_retry = Self::schedule_focus_retry(1);
-                        return Task::batch([focus_now, focus_retry]);
+                        if self.query.is_empty() {
+                            let focus_now =
+                                iced::widget::operation::focus::<Message>(self.input_id.clone());
+                            let focus_retry = Self::schedule_focus_retry(1);
+                            return Task::batch([focus_now, focus_retry]);
+                        }
+                        return Task::none();
                     }
                     window::Event::Moved(point) => {
                         self.window_state.x = Some(point.x);
@@ -2021,13 +2024,13 @@ impl App {
             .on_press(Message::StartWindowDrag)
             .interaction(iced::mouse::Interaction::Grab);
 
-        // ── 검색바 콘텐츠 (항상 동일한 위젯 트리 위치 유지 → IME 보존) ──
-        let brand = mouse_area(container(text("\u{00BB}").size(18).color(peach)).padding(
+        // ── 검색바 콘텐츠 ──
+        let brand = mouse_area(container(text("\u{00BB}").size(22).color(peach)).padding(
             Padding {
                 top: 0.0,
                 right: 4.0,
                 bottom: 0.0,
-                left: 2.0,
+                left: 4.0,
             },
         ))
         .on_press(Message::BrandClicked)
@@ -2039,8 +2042,8 @@ impl App {
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
             .width(Fill)
-            .size(15)
-            .padding(Padding::from([0, 4]))
+            .size(18)
+            .padding(Padding::from([2, 4]))
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
                 let ph_color = if is_focused {
@@ -2065,57 +2068,61 @@ impl App {
             });
 
         let search_row = row![brand, input]
-            .spacing(4)
+            .spacing(6)
             .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 10]));
+            .padding(Padding::from([0, 12]));
 
-        let search_bar = container(search_row).width(Fill).height(PILL_HEIGHT);
+        let search_bar = container(search_row).width(Fill).center_y(PILL_HEIGHT);
 
-        // ── 카드 본체 조립 ──
-        let mut card_col = Column::new().push(search_bar);
-
-        if has_results {
-            let h_sep = container(text(""))
-                .width(Fill)
-                .height(1)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(divider_c)),
-                    ..Default::default()
-                });
-
-            let h_sep2 = container(text(""))
-                .width(Fill)
-                .height(1)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(divider_c)),
-                    ..Default::default()
-                });
-
-            let vert_divider = container(text(""))
-                .width(1)
-                .height(Fill)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(divider_c)),
-                    ..Default::default()
-                });
-
-            let left_col = Column::new()
-                .push(self.view_results_list())
-                .push(h_sep2)
-                .push(self.view_status_bar());
-
-            let results_body = row![
-                container(left_col).width(Length::FillPortion(2)),
-                vert_divider,
-                container(self.view_detail_panel()).width(Length::FillPortion(1)),
-            ]
+        // ── 카드 본체 (항상 동일한 트리 구조 — 포커스/IME 안정성 보장) ──
+        let sep_h = if has_results { 1.0 } else { 0.0 };
+        let h_sep = container(text(""))
             .width(Fill)
-            .height(Fill);
+            .height(sep_h)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_c)),
+                ..Default::default()
+            });
 
-            card_col = card_col.push(h_sep).push(results_body);
-        }
+        let h_sep2 = container(text(""))
+            .width(Fill)
+            .height(sep_h)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_c)),
+                ..Default::default()
+            });
 
-        // ── 카드 스타일: 결과 없으면 pill, 있으면 라운드 사각 ──
+        let vert_divider = container(text(""))
+            .width(if has_results { 1 } else { 0 })
+            .height(Fill)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(divider_c)),
+                ..Default::default()
+            });
+
+        let left_col = Column::new()
+            .push(self.view_results_list())
+            .push(h_sep2)
+            .push(self.view_status_bar());
+
+        let results_body = row![
+            container(left_col).width(Length::FillPortion(2)),
+            vert_divider,
+            container(self.view_detail_panel()).width(Length::FillPortion(1)),
+        ]
+        .width(Fill)
+        .height(if has_results {
+            Length::Fill
+        } else {
+            Length::Fixed(0.0)
+        });
+
+        let card_col = Column::new()
+            .push(search_bar)
+            .push(h_sep)
+            .push(results_body);
+
+        // ── 카드 스타일 (pill ↔ 라운드 사각 자연 전환) ──
         let border_color = Color {
             a: 0.30,
             ..accent_color
@@ -2144,31 +2151,41 @@ impl App {
                 snap: false,
             });
 
-        // ── 최종 레이아웃 ──
-        let mut content = Column::new().push(drag_strip);
+        // ── 안정적 트리: 항상 동일한 4개 자식 (drag, card_row, hint, bg_dismiss) ──
+        let edge_w: f32 = if has_results { 4.0 } else { 0.0 };
+        let left_edge = mouse_area(container(text("")).width(edge_w).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::West))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        let right_edge = mouse_area(container(text("")).width(edge_w).height(Fill))
+            .on_press(Message::StartWindowResize(window::Direction::East))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally);
 
-        if has_results {
-            let left_edge = mouse_area(container(text("")).width(4).height(Fill))
-                .on_press(Message::StartWindowResize(window::Direction::West))
-                .interaction(iced::mouse::Interaction::ResizingHorizontally);
-            let right_edge = mouse_area(container(text("")).width(4).height(Fill))
-                .on_press(Message::StartWindowResize(window::Direction::East))
-                .interaction(iced::mouse::Interaction::ResizingHorizontally);
-            content = content.push(row![left_edge, card, right_edge].width(Fill).height(Fill));
+        let card_row = row![left_edge, card, right_edge]
+            .width(Fill)
+            .height(if has_results {
+                Length::Fill
+            } else {
+                Length::Shrink
+            });
+
+        let hint_area: Element<'_, Message> = if !has_results && !self.query.trim().is_empty() {
+            container(text("No results found").size(13).color(t.overlay).center())
+                .width(Fill)
+                .padding(Padding::from([8, 0]))
+                .center_x(Fill)
+                .into()
         } else {
-            content = content.push(card);
-            if !self.query.trim().is_empty() {
-                let hint = container(text("No results found").size(12).color(t.overlay).center())
-                    .width(Fill)
-                    .padding(Padding::from([8, 0]))
-                    .center_x(Fill);
-                content = content.push(hint);
-            }
-        }
+            container(text("")).width(0).height(0).into()
+        };
 
         let bg_dismiss = mouse_area(container(text("")).width(Fill).height(Fill))
             .on_press(Message::BackgroundClicked);
-        content = content.push(bg_dismiss);
+
+        let content = Column::new()
+            .push(drag_strip)
+            .push(card_row)
+            .push(hint_area)
+            .push(bg_dismiss);
 
         container(content).width(Fill).height(Fill).into()
     }
@@ -2211,7 +2228,7 @@ impl App {
                 ..Default::default()
             });
 
-        let icon_size: f32 = 26.0;
+        let icon_size: f32 = 30.0;
         let icon_element: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
@@ -2223,17 +2240,17 @@ impl App {
                 .height(icon_size)
                 .into()
         } else {
-            container(text(&item.icon).size(icon_size - 4.0))
+            container(text(&item.icon).size(icon_size - 6.0))
                 .center_x(icon_size)
                 .center_y(icon_size)
                 .into()
         };
         let title = text(&item.name)
-            .size(14)
+            .size(15)
             .color(t.text)
             .wrapping(Wrapping::None);
         let subtitle = text(&item.path)
-            .size(11)
+            .size(12)
             .color(t.subtext)
             .wrapping(Wrapping::None);
         let info = column![title, subtitle].spacing(2).width(Fill).clip(true);
@@ -2241,11 +2258,11 @@ impl App {
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();
         let badge_bg = Color {
-            a: 0.12,
+            a: 0.10,
             ..kind_color
         };
         let badge_border = Color {
-            a: 0.25,
+            a: 0.20,
             ..kind_color
         };
         let badge = container(text(kind_label).size(10).color(kind_color))
