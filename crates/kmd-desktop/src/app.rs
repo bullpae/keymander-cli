@@ -36,7 +36,6 @@ use crate::window_state::WindowState;
 
 pub const DEFAULT_WIDTH: f32 = 1000.0;
 const DRAG_STRIP: f32 = 6.0;
-const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
@@ -45,6 +44,7 @@ const SCORE_PLUGIN: u32 = u32::MAX;
 #[derive(Debug, Clone, Copy)]
 pub struct UiScale {
     pub font: f32,
+    pub visible_rows: usize,
     pub pill_height: f32,
     pub search_bar_height: f32,
     pub row_height: f32,
@@ -68,19 +68,21 @@ pub struct UiScale {
 }
 
 impl UiScale {
-    pub fn from_font_size(raw: f32) -> Self {
-        let f = raw.clamp(12.0, 32.0);
+    pub fn new(raw_font: f32, raw_rows: usize) -> Self {
+        let f = raw_font.clamp(12.0, 32.0);
+        let visible_rows = raw_rows.clamp(4, 20);
         let pill_height = (f * 2.625).round();     // 16→42
         let search_bar_height = pill_height + DRAG_STRIP;
         let row_height = (f * 3.0).round();         // 16→48
         let status_bar_height = (f * 1.75).round();  // 16→28
         let full_window_height = search_bar_height
             + 1.0
-            + (MAX_VISIBLE_ROWS as f32 * row_height)
+            + (visible_rows as f32 * row_height)
             + 1.0
             + status_bar_height;
         Self {
             font: f,
+            visible_rows,
             pill_height,
             search_bar_height,
             row_height,
@@ -105,9 +107,9 @@ impl UiScale {
     }
 }
 
-/// 주어진 font_size로 전체 창 높이를 계산 (main.rs 에서 사용).
-pub fn full_window_height(font_size: f32) -> f32 {
-    UiScale::from_font_size(font_size).full_window_height
+/// 주어진 font_size, visible_rows로 전체 창 높이를 계산 (main.rs 에서 사용).
+pub fn full_window_height(font_size: f32, visible_rows: usize) -> f32 {
+    UiScale::new(font_size, visible_rows).full_window_height
 }
 
 const QUIT_POLL_MS: u64 = 300;
@@ -348,7 +350,7 @@ impl App {
         let translate_providers = config.launcher.translate_providers.clone();
         let translate_prefixes = config.launcher.translate_prefixes.clone();
         let reset_ime = config.general.reset_ime_on_launch;
-        let ui = UiScale::from_font_size(config.general.font_size);
+        let ui = UiScale::new(config.general.font_size, config.general.visible_rows);
         let window_width = window_state.width.unwrap_or(DEFAULT_WIDTH);
 
         let input_id = iced::widget::Id::unique();
@@ -2075,7 +2077,10 @@ impl App {
     }
 
     fn scroll_to_selected(&self) -> Task<Message> {
-        let top_row = self.selected.saturating_sub(MAX_VISIBLE_ROWS - 1);
+        if self.results.is_empty() {
+            return Task::none();
+        }
+        let top_row = self.selected.saturating_sub(self.ui.visible_rows - 1);
         let y_offset = top_row as f32 * self.ui.row_height;
         scroll_to(
             self.scrollable_id.clone(),
@@ -2304,8 +2309,16 @@ impl App {
             container(text("")).width(0).height(0).into()
         };
 
-        let bg_dismiss = mouse_area(container(text("")).width(Fill).height(Fill))
-            .on_press(Message::BackgroundClicked);
+        let bg_dismiss = mouse_area(
+            container(text(""))
+                .width(Fill)
+                .height(if has_results {
+                    Length::Fixed(0.0)
+                } else {
+                    Length::Fill
+                }),
+        )
+        .on_press(Message::BackgroundClicked);
 
         let content = Column::new()
             .push(drag_strip)
@@ -2913,10 +2926,11 @@ mod tests {
 
     #[test]
     fn 기본_폰트_창높이_일관성() {
-        let u = UiScale::from_font_size(kmd_core::Config::default().general.font_size);
+        let cfg = kmd_core::Config::default();
+        let u = UiScale::new(cfg.general.font_size, cfg.general.visible_rows);
         let expected = u.search_bar_height
             + 1.0
-            + (MAX_VISIBLE_ROWS as f32 * u.row_height)
+            + (u.visible_rows as f32 * u.row_height)
             + 1.0
             + u.status_bar_height;
         assert!(
@@ -2929,7 +2943,7 @@ mod tests {
     #[test]
     fn pill_높이가_폰트보다_충분히_큼() {
         for fs in [12.0, 16.0, 20.0, 24.0, 32.0] {
-            let u = UiScale::from_font_size(fs);
+            let u = UiScale::new(fs, 8);
             assert!(
                 u.pill_height > u.font + 10.0,
                 "font_size={fs}: pill_height({})가 폰트보다 충분히 커야 함",
@@ -2941,7 +2955,7 @@ mod tests {
     #[test]
     fn row_높이가_아이콘보다_큼() {
         for fs in [12.0, 16.0, 20.0, 24.0, 32.0] {
-            let u = UiScale::from_font_size(fs);
+            let u = UiScale::new(fs, 8);
             assert!(
                 u.row_height > u.result_icon + 8.0,
                 "font_size={fs}: row_height({})가 아이콘({})보다 충분히 커야 함",
@@ -2953,16 +2967,38 @@ mod tests {
 
     #[test]
     fn 폰트_클램프_범위() {
-        let small = UiScale::from_font_size(5.0);
+        let small = UiScale::new(5.0, 8);
         assert_eq!(small.font, 12.0, "최소 12로 클램프");
-        let big = UiScale::from_font_size(100.0);
+        let big = UiScale::new(100.0, 8);
         assert_eq!(big.font, 32.0, "최대 32로 클램프");
     }
 
     #[test]
+    fn visible_rows_클램프_범위() {
+        let small = UiScale::new(16.0, 1);
+        assert_eq!(small.visible_rows, 4, "최소 4로 클램프");
+        let big = UiScale::new(16.0, 100);
+        assert_eq!(big.visible_rows, 20, "최대 20으로 클램프");
+        let normal = UiScale::new(16.0, 12);
+        assert_eq!(normal.visible_rows, 12, "범위 내 값은 그대로");
+    }
+
+    #[test]
+    fn visible_rows_변경시_창높이_비례() {
+        let u8 = UiScale::new(16.0, 8);
+        let u12 = UiScale::new(16.0, 12);
+        let diff = u12.full_window_height - u8.full_window_height;
+        let expected = 4.0 * u8.row_height;
+        assert!(
+            (diff - expected).abs() < f32::EPSILON,
+            "rows 4개 증가 → 창높이 차이({diff}) == row_height*4({expected})"
+        );
+    }
+
+    #[test]
     fn 비례_스케일링_선형() {
-        let u16 = UiScale::from_font_size(16.0);
-        let u32 = UiScale::from_font_size(32.0);
+        let u16 = UiScale::new(16.0, 8);
+        let u32 = UiScale::new(32.0, 8);
         let ratio = u32.pill_height / u16.pill_height;
         assert!(
             (ratio - 2.0).abs() < 0.1,

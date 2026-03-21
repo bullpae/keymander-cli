@@ -34,6 +34,9 @@
 # 모든 UI 요소가 이 값에 비례하여 자동 조절됨 (범위: 12–32, 기본: 16)
 # font_size = 16
 
+# Desktop 런처 결과창에 표시되는 행 수 (범위: 4–20, 기본: 8)
+# visible_rows = 8
+
 # ── 런처 설정 ────────────────────────────────────────────────
 [launcher]
 # 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs

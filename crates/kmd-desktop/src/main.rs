@@ -87,7 +87,7 @@ fn main() -> iced::Result {
         .width
         .unwrap_or(DEFAULT_WIDTH)
         .clamp(420.0, 1200.0);
-    let win_height = full_window_height(config.general.font_size);
+    let win_height = full_window_height(config.general.font_size, config.general.visible_rows);
     let initial_size = Size::new(base_width, win_height);
 
     let position = match (window_state.x, window_state.y) {

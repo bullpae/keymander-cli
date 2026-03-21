@@ -42,6 +42,8 @@ pub struct GeneralConfig {
     /// Desktop launcher base font size in pixels.
     /// All UI elements scale proportionally. Range: 12–32, default: 16.
     pub font_size: f32,
+    /// Desktop launcher visible result rows. Range: 4–20, default: 8.
+    pub visible_rows: usize,
 }
 
 impl Default for GeneralConfig {
@@ -55,6 +57,7 @@ impl Default for GeneralConfig {
             emoji_icons: true,
             reset_ime_on_launch: true,
             font_size: 16.0,
+            visible_rows: 8,
         }
     }
 }
