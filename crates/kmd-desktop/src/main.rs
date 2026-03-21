@@ -19,7 +19,7 @@ mod window_state;
 use iced::{window, Color, Point, Size};
 use std::sync::Mutex;
 
-use crate::app::{DEFAULT_WIDTH, full_window_height};
+use crate::app::{full_window_height, DEFAULT_WIDTH};
 use crate::window_state::WindowState;
 
 fn should_print_version() -> bool {

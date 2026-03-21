@@ -414,8 +414,7 @@ mod platform {
 
         while pos + 8 <= data.len() {
             let entry_type: [u8; 4] = data[pos..pos + 4].try_into().ok()?;
-            let entry_len =
-                u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+            let entry_len = u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
 
             if entry_len < 8 || pos + entry_len > data.len() {
                 break;

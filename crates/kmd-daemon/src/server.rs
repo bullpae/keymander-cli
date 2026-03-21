@@ -243,7 +243,7 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
 /// 프리셋(base) + 사용자 TOML(custom) 병합.
 ///
 /// - remaps: 같은 키는 custom이 덮어씀
-/// - layers: 같은 name은 custom이 덮어씀, 새 name은 추가
+/// - layers: 같은 name → deep merge (mappings/double_taps 키 단위 병합), 새 name → 추가
 /// - combos: 같은 trigger(modifiers+key)는 custom이 덮어씀
 /// - double_taps: 같은 key는 custom이 덮어씀
 fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> KeybindConfig {
@@ -257,7 +257,18 @@ fn merge_keybind_config(mut base: KeybindConfig, custom: KeybindConfig) -> Keybi
             .iter()
             .position(|layer| layer.name == custom_layer.name)
         {
-            base.layers[pos] = custom_layer;
+            let bl = &mut base.layers[pos];
+            bl.trigger = custom_layer.trigger;
+            if custom_layer.tap_action.is_some() {
+                bl.tap_action = custom_layer.tap_action;
+            }
+            bl.tap_hold_ms = custom_layer.tap_hold_ms;
+            for (k, v) in custom_layer.mappings {
+                bl.mappings.insert(k, v);
+            }
+            for (k, v) in custom_layer.double_tap_mappings {
+                bl.double_tap_mappings.insert(k, v);
+            }
         } else {
             base.layers.push(custom_layer);
         }
@@ -401,5 +412,143 @@ mod tests {
             }
         }
         assert!(matched, "동일 트리거 콤보는 custom 액션으로 덮어써야 함");
+    }
+
+    #[test]
+    fn merge_layer_deep_보존_base_매핑() {
+        let base = KeybindConfig::vim_nav_preset();
+        let base_h = base.layers[0].mappings.contains_key(&keybind::VKey::H);
+        let base_period = base.layers[0].mappings.contains_key(&keybind::VKey::Period);
+        let base_dt_i = base.layers[0]
+            .double_tap_mappings
+            .contains_key(&keybind::VKey::I);
+        assert!(base_h && base_period && base_dt_i, "프리셋 확인");
+
+        // custom은 H만 재정의 → Period, double-tap I 등 base 매핑은 유지
+        let mut custom_mappings = std::collections::HashMap::new();
+        custom_mappings.insert(
+            keybind::VKey::H,
+            keybind::BindAction::SendKey(keybind::VKey::Right),
+        );
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![keybind::Layer {
+                name: "nav".into(),
+                trigger: keybind::VKey::LAlt,
+                tap_action: Some(keybind::VKey::Escape),
+                tap_hold_ms: 200,
+                mappings: custom_mappings,
+                double_tap_mappings: std::collections::HashMap::new(),
+            }],
+            combos: vec![],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        assert_eq!(merged.layers.len(), 1);
+        let layer = &merged.layers[0];
+
+        // H는 custom으로 덮어씀
+        assert!(
+            matches!(
+                layer.mappings.get(&keybind::VKey::H),
+                Some(keybind::BindAction::SendKey(keybind::VKey::Right))
+            ),
+            "H는 custom 값(Right)이어야 함"
+        );
+
+        // Period는 base에서 보존
+        assert!(
+            layer.mappings.contains_key(&keybind::VKey::Period),
+            "Period는 base에서 보존되어야 함 (deep merge)"
+        );
+
+        // double-tap I는 base에서 보존
+        assert!(
+            layer.double_tap_mappings.contains_key(&keybind::VKey::I),
+            "double-tap I는 base에서 보존되어야 함"
+        );
+
+        // Space(launch:kmd-desktop)도 base에서 보존
+        assert!(
+            layer.mappings.contains_key(&keybind::VKey::Space),
+            "Space는 base에서 보존되어야 함"
+        );
+    }
+
+    #[test]
+    fn merge_layer_deep_custom_double_tap_덮어쓰기() {
+        let base = KeybindConfig::vim_nav_preset();
+        let custom_dt = keybind::LayerDoubleTap {
+            single_action: keybind::BindAction::SendKey(keybind::VKey::Home),
+            double_action: keybind::BindAction::SendKey(keybind::VKey::End),
+            timeout_ms: 500,
+        };
+        let mut dt_map = std::collections::HashMap::new();
+        dt_map.insert(keybind::VKey::I, custom_dt);
+
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![keybind::Layer {
+                name: "nav".into(),
+                trigger: keybind::VKey::LAlt,
+                tap_action: None,
+                tap_hold_ms: 200,
+                mappings: std::collections::HashMap::new(),
+                double_tap_mappings: dt_map,
+            }],
+            combos: vec![],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        let layer = &merged.layers[0];
+
+        // custom의 double-tap I가 base를 덮어씀
+        let dt = layer.double_tap_mappings.get(&keybind::VKey::I).unwrap();
+        assert_eq!(dt.timeout_ms, 500, "custom timeout_ms 적용");
+
+        // tap_action은 None이면 base 값 유지 (Escape)
+        assert_eq!(
+            layer.tap_action,
+            Some(keybind::VKey::Escape),
+            "custom tap_action이 None이면 base 유지"
+        );
+    }
+
+    #[test]
+    fn merge_새_레이어_추가() {
+        let base = KeybindConfig::vim_nav_preset();
+        let mut mappings = std::collections::HashMap::new();
+        mappings.insert(
+            keybind::VKey::A,
+            keybind::BindAction::SendKey(keybind::VKey::B),
+        );
+        let custom = KeybindConfig {
+            remaps: std::collections::HashMap::new(),
+            layers: vec![keybind::Layer {
+                name: "custom-layer".into(),
+                trigger: keybind::VKey::RAlt,
+                tap_action: None,
+                tap_hold_ms: 150,
+                mappings,
+                double_tap_mappings: std::collections::HashMap::new(),
+            }],
+            combos: vec![],
+            double_taps: vec![],
+        };
+
+        let merged = merge_keybind_config(base, custom);
+        assert_eq!(merged.layers.len(), 2, "새 레이어가 추가되어야 함");
+        assert_eq!(merged.layers[1].name, "custom-layer");
+    }
+
+    #[test]
+    fn resolve_launch_cmd_경로순회_방지() {
+        let resolved = keybind::resolve_launch_cmd("../../../etc/passwd");
+        assert!(
+            !resolved.contains(".."),
+            "경로 순회 문자가 제거되어야 함: {resolved}"
+        );
     }
 }

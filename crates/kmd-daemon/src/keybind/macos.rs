@@ -340,8 +340,15 @@ fn send_key_press(keycode: u16) {
 fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
     let flags = modifiers_to_flags(modifier_vkeys);
     let kc = vkey_to_cg(key);
+    // modifier down → key down → key up → modifier up (Windows 방식과 동일)
+    for m in modifier_vkeys {
+        send_key_event(vkey_to_cg(*m), true, modifiers_to_flags(&[*m]));
+    }
     send_key_event(kc, true, flags);
     send_key_event(kc, false, flags);
+    for m in modifier_vkeys.iter().rev() {
+        send_key_event(vkey_to_cg(*m), false, 0);
+    }
 }
 
 // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
@@ -386,13 +393,16 @@ fn execute_action(action: &BindAction) {
                         send_combo(modifiers, *key);
                     }
                 }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
         }
         BindAction::Launch(cmd) => {
             let resolved = resolve_launch_cmd(cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
-                let _ = std::process::Command::new(&resolved).spawn();
+                if let Err(e) = std::process::Command::new(&resolved).spawn() {
+                    tracing::error!("프로그램 실행 실패: {resolved} — {e}");
+                }
             });
         }
     }

@@ -656,11 +656,7 @@ pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem>
     // ── daemon keybindings: remaps ──
     let km = &config.launcher.keymap;
     if !km.remaps.is_empty() {
-        section(
-            &mut items,
-            "Remaps",
-            if e { "\u{1F504}" } else { "[R]" },
-        );
+        section(&mut items, "Remaps", if e { "\u{1F504}" } else { "[R]" });
         let mut remaps: Vec<_> = km.remaps.iter().collect();
         remaps.sort_by_key(|(k, _)| k.to_lowercase());
         for (from, to) in remaps {
@@ -719,11 +715,7 @@ pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem>
 
     // ── daemon keybindings: combos ──
     if !km.combos.is_empty() {
-        section(
-            &mut items,
-            "Combos",
-            if e { "\u{1F3B9}" } else { "[C]" },
-        );
+        section(&mut items, "Combos", if e { "\u{1F3B9}" } else { "[C]" });
         for combo in &km.combos {
             entry(
                 &mut items,

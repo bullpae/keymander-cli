@@ -353,9 +353,12 @@ fn execute_action(action: &BindAction) {
             std::thread::spawn(move || {
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                let _ = std::process::Command::new(&resolved)
+                if let Err(e) = std::process::Command::new(&resolved)
                     .creation_flags(CREATE_NO_WINDOW)
-                    .spawn();
+                    .spawn()
+                {
+                    tracing::error!("프로그램 실행 실패: {resolved} — {e}");
+                }
             });
         }
     }

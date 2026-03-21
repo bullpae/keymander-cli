@@ -327,13 +327,19 @@ fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
 
 /// `launch:name` 액션에서 실행 경로를 결정한다.
 /// 실행 파일과 같은 디렉토리에서 먼저 찾고, 없으면 원래 이름을 반환한다.
+/// 경로 순회(../) 공격을 방지하기 위해 파일 이름만 허용.
 pub fn resolve_launch_cmd(name: &str) -> String {
+    let safe_name = std::path::Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(name);
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             #[cfg(windows)]
-            let bin = format!("{name}.exe");
+            let bin = format!("{safe_name}.exe");
             #[cfg(not(windows))]
-            let bin = name.to_string();
+            let bin = safe_name.to_string();
 
             let sibling = dir.join(&bin);
             if sibling.exists() {
@@ -341,7 +347,7 @@ pub fn resolve_launch_cmd(name: &str) -> String {
             }
         }
     }
-    name.to_string()
+    safe_name.to_string()
 }
 
 // ── 수정자 키 헬퍼 (플랫폼 공용) ─────────────────────────────────────────────

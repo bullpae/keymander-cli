@@ -71,15 +71,12 @@ impl UiScale {
     pub fn new(raw_font: f32, raw_rows: usize) -> Self {
         let f = raw_font.clamp(12.0, 32.0);
         let visible_rows = raw_rows.clamp(4, 20);
-        let pill_height = (f * 2.625).round();     // 16→42
+        let pill_height = (f * 2.625).round(); // 16→42
         let search_bar_height = pill_height + DRAG_STRIP;
-        let row_height = (f * 3.0).round();         // 16→48
-        let status_bar_height = (f * 1.75).round();  // 16→28
-        let full_window_height = search_bar_height
-            + 1.0
-            + (visible_rows as f32 * row_height)
-            + 1.0
-            + status_bar_height;
+        let row_height = (f * 3.0).round(); // 16→48
+        let status_bar_height = (f * 1.75).round(); // 16→28
+        let full_window_height =
+            search_bar_height + 1.0 + (visible_rows as f32 * row_height) + 1.0 + status_bar_height;
         Self {
             font: f,
             visible_rows,
@@ -88,21 +85,21 @@ impl UiScale {
             row_height,
             status_bar_height,
             full_window_height,
-            brand_icon: (f * 1.5).round(),          // 16→24
-            result_icon: (f * 2.0).round(),          // 16→32
-            title_font: (f * 1.0).round(),           // 16→16
-            subtitle_font: (f * 0.8125).round(),     // 16→13
-            badge_font: (f * 0.625).round(),         // 16→10
-            status_font: (f * 0.6875).round(),       // 16→11
-            hint_font: (f * 0.6875).round(),         // 16→11
-            detail_name_font: (f * 0.9375).round(),  // 16→15
-            detail_big_icon: (f * 3.25).round(),     // 16→52
-            path_label_font: (f * 0.625).round(),    // 16→10
-            path_text_font: (f * 0.6875).round(),    // 16→11
-            action_icon_font: (f * 0.8125).round(),  // 16→13
-            action_label_font: (f * 0.75).round(),   // 16→12
+            brand_icon: (f * 1.5).round(),             // 16→24
+            result_icon: (f * 2.0).round(),            // 16→32
+            title_font: (f * 1.0).round(),             // 16→16
+            subtitle_font: (f * 0.8125).round(),       // 16→13
+            badge_font: (f * 0.625).round(),           // 16→10
+            status_font: (f * 0.6875).round(),         // 16→11
+            hint_font: (f * 0.6875).round(),           // 16→11
+            detail_name_font: (f * 0.9375).round(),    // 16→15
+            detail_big_icon: (f * 3.25).round(),       // 16→52
+            path_label_font: (f * 0.625).round(),      // 16→10
+            path_text_font: (f * 0.6875).round(),      // 16→11
+            action_icon_font: (f * 0.8125).round(),    // 16→13
+            action_label_font: (f * 0.75).round(),     // 16→12
             action_shortcut_font: (f * 0.625).round(), // 16→10
-            no_results_font: (f * 0.8125).round(),   // 16→13
+            no_results_font: (f * 0.8125).round(),     // 16→13
         }
     }
 }
@@ -219,8 +216,6 @@ pub enum ContextAction {
     OpenFolder,
     CopyPath,
     CopyName,
-    #[allow(dead_code)]
-    Uninstall,
 }
 
 impl ContextAction {
@@ -231,7 +226,6 @@ impl ContextAction {
             Self::OpenFolder => "파일 위치 열기",
             Self::CopyPath => "경로 복사",
             Self::CopyName => "이름 복사",
-            Self::Uninstall => "프로그램 제거",
         }
     }
 
@@ -242,19 +236,6 @@ impl ContextAction {
             Self::OpenFolder => "Ctrl+2",
             Self::CopyPath => "Ctrl+3",
             Self::CopyName => "Ctrl+4",
-            Self::Uninstall => "",
-        }
-    }
-
-    #[allow(dead_code)]
-    fn icon_char(&self) -> &str {
-        match self {
-            Self::Open => "\u{2197}",        // ↗
-            Self::OpenAsAdmin => "\u{26A1}", // ⚡
-            Self::OpenFolder => "\u{1F4C2}", // 📂
-            Self::CopyPath => "\u{1F4CB}",   // 📋
-            Self::CopyName => "\u{270D}",    // ✍
-            Self::Uninstall => "\u{1F5D1}",  // 🗑
         }
     }
 }
@@ -458,10 +439,7 @@ impl App {
     /// 포커스 가드: UI 상태(query/results)가 변경되면 자동으로 포커스를 복원한다.
     /// 개별 핸들러가 request_focus()를 빠뜨려도 안전하게 보장하는 최후의 안전망.
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        let skip_focus_guard = matches!(
-            message,
-            Message::DelayedRefocus | Message::EnsureFocus(_)
-        );
+        let skip_focus_guard = matches!(message, Message::DelayedRefocus | Message::EnsureFocus(_));
 
         let old_query_len = self.query.len();
         let old_results_len = self.results.len();
@@ -729,9 +707,7 @@ impl App {
                 }
                 iced::exit()
             }
-            Message::RunAction(action) => {
-                self.execute_context_action(action)
-            }
+            Message::RunAction(action) => self.execute_context_action(action),
             Message::BackgroundClicked => {
                 if self.state_dirty {
                     self.window_state.save();
@@ -774,19 +750,22 @@ impl App {
         let item = &result.item;
 
         match action {
-            ContextAction::Open => {
-                self.launch_selected()
-            }
+            ContextAction::Open => self.launch_selected(),
             ContextAction::OpenAsAdmin => {
                 #[cfg(target_os = "windows")]
                 {
                     use std::os::windows::process::CommandExt;
                     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
                     let path = item.path.clone();
-                    let _ = std::process::Command::new("powershell")
-                        .args(["-Command", &format!("Start-Process '{}' -Verb RunAs", path)])
+                    let escaped = path.replace('\'', "''");
+                    let script = format!("Start-Process -FilePath '{}' -Verb RunAs", escaped);
+                    if let Err(e) = std::process::Command::new("powershell")
+                        .args(["-NoProfile", "-Command", &script])
                         .creation_flags(CREATE_NO_WINDOW)
-                        .spawn();
+                        .spawn()
+                    {
+                        tracing::error!("관리자 실행 실패: {e}");
+                    }
                     return iced::exit();
                 }
                 #[cfg(not(target_os = "windows"))]
@@ -833,22 +812,6 @@ impl App {
                 }
                 iced::exit()
             }
-            ContextAction::Uninstall => {
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                    let _ = std::process::Command::new("control")
-                        .arg("appwiz.cpl")
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .spawn();
-                    return iced::exit();
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    Task::none()
-                }
-            }
         }
     }
 
@@ -856,19 +819,18 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         // event::listen_with로 위젯이 소비한 이벤트도 캡처 (ESC 등)
-        let keyboard_sub =
-            iced::event::listen_with(|event, _status, _id| {
-                if let iced::Event::Keyboard(kb_event) = event {
-                    match kb_event {
-                        keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                            Some(Message::KeyEvent(key, modifiers))
-                        }
-                        _ => None,
+        let keyboard_sub = iced::event::listen_with(|event, _status, _id| {
+            if let iced::Event::Keyboard(kb_event) = event {
+                match kb_event {
+                    keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                        Some(Message::KeyEvent(key, modifiers))
                     }
-                } else {
-                    None
+                    _ => None,
                 }
-            });
+            } else {
+                None
+            }
+        });
 
         let quit_sub = iced::time::every(Duration::from_millis(QUIT_POLL_MS))
             .map(|_| Message::CheckQuitSignal);
@@ -2181,7 +2143,7 @@ impl App {
         let overlay_color = t.overlay;
         let accent_color = t.accent;
         let bg = t.background_with_opacity();
-        
+
         let peach = t.peach;
         let divider_c = t.border;
 
@@ -2192,14 +2154,14 @@ impl App {
 
         // ── 검색바 콘텐츠 ──
         let u = self.ui;
-        let brand = mouse_area(container(text("\u{00BB}").size(u.brand_icon).color(peach)).padding(
-            Padding {
+        let brand = mouse_area(
+            container(text("\u{00BB}").size(u.brand_icon).color(peach)).padding(Padding {
                 top: 0.0,
                 right: 4.0,
                 bottom: 0.0,
                 left: 6.0,
-            },
-        ))
+            }),
+        )
         .on_press(Message::BrandClicked)
         .on_right_press(Message::BrandRightClicked)
         .interaction(iced::mouse::Interaction::Pointer);
@@ -2327,24 +2289,25 @@ impl App {
             });
 
         let hint_area: Element<'_, Message> = if !has_results && !self.query.trim().is_empty() {
-            container(text("No results found").size(u.no_results_font).color(t.overlay).center())
-                .width(Fill)
-                .padding(Padding::from([8, 0]))
-                .center_x(Fill)
-                .into()
+            container(
+                text("No results found")
+                    .size(u.no_results_font)
+                    .color(t.overlay)
+                    .center(),
+            )
+            .width(Fill)
+            .padding(Padding::from([8, 0]))
+            .center_x(Fill)
+            .into()
         } else {
             container(text("")).width(0).height(0).into()
         };
 
-        let bg_dismiss = mouse_area(
-            container(text(""))
-                .width(Fill)
-                .height(if has_results {
-                    Length::Fixed(0.0)
-                } else {
-                    Length::Fill
-                }),
-        )
+        let bg_dismiss = mouse_area(container(text("")).width(Fill).height(if has_results {
+            Length::Fixed(0.0)
+        } else {
+            Length::Fill
+        }))
         .on_press(Message::BackgroundClicked);
 
         let content = Column::new()
@@ -2405,8 +2368,7 @@ impl App {
                         &item.path,
                         item.icon_path.as_deref(),
                     )
-                })
-        {
+                }) {
             image(handle)
                 .content_fit(iced::ContentFit::Fill)
                 .width(icon_size)
@@ -2491,7 +2453,10 @@ impl App {
             .padding(Padding::from([4, 14]))
             .align_y(iced::Alignment::Center);
 
-        container(bar).width(Fill).height(u.status_bar_height).into()
+        container(bar)
+            .width(Fill)
+            .height(u.status_bar_height)
+            .into()
     }
 
     fn view_detail_panel(&self) -> Element<'_, Message> {
@@ -2533,8 +2498,7 @@ impl App {
                         &item.path,
                         item.icon_path.as_deref(),
                     )
-                })
-        {
+                }) {
             image(handle)
                 .content_fit(iced::ContentFit::Fill)
                 .width(big_icon_size)
@@ -2660,12 +2624,13 @@ impl App {
                 ContextAction::OpenFolder => "\u{1F4C1}",
                 ContextAction::CopyPath => "\u{1F4CB}",
                 ContextAction::CopyName => "\u{270D}",
-                ContextAction::Uninstall => "\u{2715}",
             };
 
             let icon_label = text(icon_text).size(u.action_icon_font);
             let label = text(label_text).size(u.action_label_font).color(text_color);
-            let shortcut = text(shortcut_text).size(u.action_shortcut_font).color(t.overlay);
+            let shortcut = text(shortcut_text)
+                .size(u.action_shortcut_font)
+                .color(t.overlay);
 
             let action_row = row![
                 container(icon_label).width(22).center_x(22),
@@ -2932,10 +2897,7 @@ mod tests {
     /// 테스트용 App 인스턴스 생성 (각 테스트마다 고유 temp 디렉토리)
     fn make_test_app() -> App {
         let seq = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let tmp = std::env::temp_dir().join(format!(
-            "kmd_test_app_{}_{seq}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("kmd_test_app_{}_{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
 
@@ -3209,10 +3171,7 @@ mod tests {
         // 3단계: DelayedRefocus (16ms 후 iced 이벤트 루프가 전달)
         let _task = app.update(Message::DelayedRefocus);
         let c2 = app.focus_request_count;
-        assert!(
-            c2 > c1,
-            "DelayedRefocus가 추가 focus 요청 (새 트리에 적용)"
-        );
+        assert!(c2 > c1, "DelayedRefocus가 추가 focus 요청 (새 트리에 적용)");
 
         // 4단계: 두 번째 글자 입력 가능
         let _task = app.update(Message::QueryChanged("he".to_string()));
