@@ -43,12 +43,10 @@ const STATUS_BAR_HEIGHT: f32 = 26.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
-const RESULTS_GAP: f32 = 6.0;
-
 /// 창은 처음부터 전체 높이로 열린다 — 런타임 resize 없이 콘텐츠만 전환.
-/// 기본 = pill 검색바만 표시, 결과 시 아래 패널이 투명→불투명으로 나타남.
+/// 기본 = pill 검색바만 표시, 결과 시 같은 카드가 아래로 확장되어 보임.
 pub const FULL_WINDOW_HEIGHT: f32 =
-    SEARCH_BAR_HEIGHT + RESULTS_GAP + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + STATUS_BAR_HEIGHT;
+    SEARCH_BAR_HEIGHT + 1.0 + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + 1.0 + STATUS_BAR_HEIGHT;
 
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
@@ -462,10 +460,14 @@ impl App {
                 if self.reset_ime_on_launch {
                     crate::platform::force_english_ime(raw_id);
                 }
-                Task::batch([
-                    iced::widget::operation::focus::<Message>(self.input_id.clone()),
-                    Self::schedule_focus_retry(1),
-                ])
+                if self.query.is_empty() {
+                    Task::batch([
+                        iced::widget::operation::focus::<Message>(self.input_id.clone()),
+                        Self::schedule_focus_retry(1),
+                    ])
+                } else {
+                    Task::none()
+                }
             }
             Message::WarmupTick(token) => {
                 if self.full_warmup_started || token != self.warmup_token {
@@ -481,7 +483,7 @@ impl App {
                 self.spawn_full_engine_load_task()
             }
             Message::EnsureFocus(attempt) => {
-                if attempt > MAX_FOCUS_RETRIES {
+                if attempt > MAX_FOCUS_RETRIES || !self.query.is_empty() {
                     return Task::none();
                 }
 
@@ -2004,47 +2006,23 @@ fn prefix_of(query: &str) -> Prefix {
 
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
-        let has_results = !self.results.is_empty();
-
-        let pill = self.view_search_pill();
-        let mut content = Column::new().push(pill);
-
-        if has_results {
-            content = content
-                .push(container(text("")).height(RESULTS_GAP))
-                .push(self.view_results_panel());
-        } else if !self.query.trim().is_empty() {
-            let t = &self.theme;
-            let hint = container(text("No results found").size(13).color(t.overlay).center())
-                .width(Fill)
-                .padding(Padding::from([10, 0]))
-                .center_x(Fill);
-            content = content.push(hint);
-        }
-
-        // 남은 투명 영역: 클릭 시 Spotlight처럼 앱 종료
-        let bg_dismiss = mouse_area(container(text("")).width(Fill).height(Fill))
-            .on_press(Message::BackgroundClicked);
-        content = content.push(bg_dismiss);
-
-        container(content).width(Fill).height(Fill).into()
-    }
-
-    /// Spotlight 스타일 pill-shaped 검색바. 양끝이 완전 라운드.
-    fn view_search_pill(&self) -> Element<'_, Message> {
         let t = &self.theme;
+        let has_results = !self.results.is_empty();
         let text_color = t.text;
         let overlay_color = t.overlay;
         let accent_color = t.accent;
         let bg = t.background_with_opacity();
         let shadow_i = t.shadow_intensity;
+        let peach = t.peach;
+        let divider_c = t.border;
 
+        // ── 드래그 스트립 (투명) ──
         let drag_strip = mouse_area(container(text("")).width(Fill).height(DRAG_STRIP))
             .on_press(Message::StartWindowDrag)
             .interaction(iced::mouse::Interaction::Grab);
 
-        let peach = t.peach;
-        let brand = mouse_area(container(text("\u{00BB}").size(20).color(peach)).padding(
+        // ── 검색바 콘텐츠 (항상 동일한 위젯 트리 위치 유지 → IME 보존) ──
+        let brand = mouse_area(container(text("\u{00BB}").size(18).color(peach)).padding(
             Padding {
                 top: 0.0,
                 right: 4.0,
@@ -2086,108 +2064,113 @@ impl App {
                 }
             });
 
-        let bar_content = row![brand, input]
+        let search_row = row![brand, input]
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .padding(Padding::from([0, 10]));
 
-        let pill_radius = PILL_HEIGHT / 2.0;
+        let search_bar = container(search_row).width(Fill).height(PILL_HEIGHT);
+
+        // ── 카드 본체 조립 ──
+        let mut card_col = Column::new().push(search_bar);
+
+        if has_results {
+            let h_sep = container(text(""))
+                .width(Fill)
+                .height(1)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(divider_c)),
+                    ..Default::default()
+                });
+
+            let h_sep2 = container(text(""))
+                .width(Fill)
+                .height(1)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(divider_c)),
+                    ..Default::default()
+                });
+
+            let vert_divider = container(text(""))
+                .width(1)
+                .height(Fill)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(divider_c)),
+                    ..Default::default()
+                });
+
+            let left_col = Column::new()
+                .push(self.view_results_list())
+                .push(h_sep2)
+                .push(self.view_status_bar());
+
+            let results_body = row![
+                container(left_col).width(Length::FillPortion(2)),
+                vert_divider,
+                container(self.view_detail_panel()).width(Length::FillPortion(1)),
+            ]
+            .width(Fill)
+            .height(Fill);
+
+            card_col = card_col.push(h_sep).push(results_body);
+        }
+
+        // ── 카드 스타일: 결과 없으면 pill, 있으면 라운드 사각 ──
         let border_color = Color {
             a: 0.30,
             ..accent_color
         };
-        let pill = container(bar_content)
+        let radius: f32 = if has_results {
+            t.corner_radius
+        } else {
+            PILL_HEIGHT / 2.0
+        };
+
+        let card = container(card_col)
             .width(Fill)
-            .height(PILL_HEIGHT)
-            .center_y(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(bg)),
-                border: Border {
-                    radius: pill_radius.into(),
-                    width: 2.0,
-                    color: border_color,
-                },
-                shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.12 * shadow_i),
-                    offset: Vector::new(0.0, 2.0),
-                    blur_radius: 6.0,
-                },
-                text_color: None,
-                snap: false,
-            });
-
-        column![drag_strip, pill].width(Fill).into()
-    }
-
-    /// 결과 패널: 리스트(2/3) + 상세(1/3), 라운드 모서리 + 그림자
-    fn view_results_panel(&self) -> Element<'_, Message> {
-        let t = &self.theme;
-        let bg = t.background_with_opacity();
-        let radius = t.corner_radius;
-        let shadow_i = t.shadow_intensity;
-        let accent = t.accent;
-        let border_c = Color { a: 0.12, ..accent };
-        let divider_c = t.border;
-
-        let sep = container(text(""))
-            .width(Fill)
-            .height(1)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(divider_c)),
-                ..Default::default()
-            });
-
-        let left_col = Column::new()
-            .push(self.view_results_list())
-            .push(sep)
-            .push(self.view_status_bar());
-
-        let vert_divider = container(text(""))
-            .width(1)
-            .height(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(divider_c)),
-                ..Default::default()
-            });
-
-        let content = row![
-            container(left_col).width(Length::FillPortion(2)),
-            vert_divider,
-            container(self.view_detail_panel()).width(Length::FillPortion(1)),
-        ]
-        .width(Fill)
-        .height(Fill);
-
-        let panel = container(content)
-            .width(Fill)
-            .height(Fill)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bg)),
                 border: Border {
                     radius: radius.into(),
-                    width: 1.0,
-                    color: border_c,
+                    width: 2.0,
+                    color: border_color,
                 },
                 shadow: Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.20 * shadow_i),
-                    offset: Vector::new(0.0, 4.0),
-                    blur_radius: 16.0,
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.15 * shadow_i),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 8.0,
                 },
                 text_color: None,
                 snap: false,
             });
 
-        let left_edge = mouse_area(container(text("")).width(4).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::West))
-            .interaction(iced::mouse::Interaction::ResizingHorizontally);
-        let right_edge = mouse_area(container(text("")).width(4).height(Fill))
-            .on_press(Message::StartWindowResize(window::Direction::East))
-            .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        // ── 최종 레이아웃 ──
+        let mut content = Column::new().push(drag_strip);
 
-        row![left_edge, panel, right_edge]
-            .width(Fill)
-            .height(Fill)
-            .into()
+        if has_results {
+            let left_edge = mouse_area(container(text("")).width(4).height(Fill))
+                .on_press(Message::StartWindowResize(window::Direction::West))
+                .interaction(iced::mouse::Interaction::ResizingHorizontally);
+            let right_edge = mouse_area(container(text("")).width(4).height(Fill))
+                .on_press(Message::StartWindowResize(window::Direction::East))
+                .interaction(iced::mouse::Interaction::ResizingHorizontally);
+            content = content.push(row![left_edge, card, right_edge].width(Fill).height(Fill));
+        } else {
+            content = content.push(card);
+            if !self.query.trim().is_empty() {
+                let hint = container(text("No results found").size(12).color(t.overlay).center())
+                    .width(Fill)
+                    .padding(Padding::from([8, 0]))
+                    .center_x(Fill);
+                content = content.push(hint);
+            }
+        }
+
+        let bg_dismiss = mouse_area(container(text("")).width(Fill).height(Fill))
+            .on_press(Message::BackgroundClicked);
+        content = content.push(bg_dismiss);
+
+        container(content).width(Fill).height(Fill).into()
     }
 
     fn view_results_list(&self) -> Element<'_, Message> {
