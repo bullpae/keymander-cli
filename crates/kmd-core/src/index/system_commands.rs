@@ -194,7 +194,7 @@ const SYSTEM_COMMANDS: &[SystemCommand] = &[
         icon: "->",
         emoji_icon: "\u{1F6AA}",
         command: "loginctl",
-        args: &["terminate-user", "--"],
+        args: &["terminate-session", "self"],
         confirm: true,
     },
     SystemCommand {

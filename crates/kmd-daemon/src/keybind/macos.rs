@@ -554,6 +554,11 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
+    // null 이벤트 방어 (OS 오류 시)
+    if event.is_null() && type_ != CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+        return event;
+    }
+
     // 타임아웃으로 비활성화된 경우 재활성화 + modifier 상태 리셋
     if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
         let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);

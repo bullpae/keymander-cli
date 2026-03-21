@@ -102,7 +102,9 @@ fn main() -> iced::Result {
     iced::application(
         move || {
             let mut lock = boot_data.lock().unwrap_or_else(|e| e.into_inner());
-            let (guard, config, ws) = lock.take().expect("boot called more than once");
+            let (guard, config, ws) = lock
+                .take()
+                .expect("iced 초기화가 두 번 이상 호출됨 — 프레임워크 버그");
             app::App::new(guard, config, ws)
         },
         app::App::update,

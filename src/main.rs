@@ -427,8 +427,8 @@ mod win_console {
 
     /// Check if we are the only process on this console.
     pub fn is_sole_console_owner() -> bool {
-        let mut pids = [0u32; 16];
-        let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 16) };
+        let mut pids = [0u32; 64];
+        let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 64) };
         count <= 1
     }
 
