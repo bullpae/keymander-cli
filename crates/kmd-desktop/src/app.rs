@@ -35,11 +35,11 @@ use crate::window_state::WindowState;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const DEFAULT_WIDTH: f32 = 680.0;
-const PILL_HEIGHT: f32 = 36.0;
+const PILL_HEIGHT: f32 = 42.0;
 const DRAG_STRIP: f32 = 6.0;
 pub const SEARCH_BAR_HEIGHT: f32 = PILL_HEIGHT + DRAG_STRIP;
-const ROW_HEIGHT: f32 = 46.0;
-const STATUS_BAR_HEIGHT: f32 = 26.0;
+const ROW_HEIGHT: f32 = 48.0;
+const STATUS_BAR_HEIGHT: f32 = 28.0;
 const MAX_VISIBLE_ROWS: usize = 8;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
@@ -101,6 +101,7 @@ pub struct App {
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
+    last_query_changed_at: std::time::Instant,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -307,6 +308,7 @@ impl App {
             window_state,
             state_dirty: false,
             window_focused: true,
+            last_query_changed_at: std::time::Instant::now(),
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
@@ -369,8 +371,11 @@ impl App {
             Message::QueryChanged(query) => {
                 self.query = query;
                 self.selected = 0;
+                self.last_query_changed_at = std::time::Instant::now();
                 let search_task = self.perform_search();
-                self.with_activity_warmup(search_task)
+                let refocus =
+                    iced::widget::operation::focus::<Message>(self.input_id.clone());
+                Task::batch([self.with_activity_warmup(search_task), refocus])
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
@@ -557,13 +562,13 @@ impl App {
                 match event {
                     window::Event::Focused => {
                         self.window_focused = true;
+                        let focus_now =
+                            iced::widget::operation::focus::<Message>(self.input_id.clone());
                         if self.query.is_empty() {
-                            let focus_now =
-                                iced::widget::operation::focus::<Message>(self.input_id.clone());
                             let focus_retry = Self::schedule_focus_retry(1);
                             return Task::batch([focus_now, focus_retry]);
                         }
-                        return Task::none();
+                        return focus_now;
                     }
                     window::Event::Moved(point) => {
                         self.window_state.x = Some(point.x);
@@ -580,6 +585,11 @@ impl App {
                         }
                     }
                     window::Event::Unfocused => {
+                        let typing_recently =
+                            self.last_query_changed_at.elapsed() < Duration::from_millis(500);
+                        if typing_recently {
+                            return Task::none();
+                        }
                         self.window_focused = false;
                         return Task::future(async {
                             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -2025,12 +2035,12 @@ impl App {
             .interaction(iced::mouse::Interaction::Grab);
 
         // ── 검색바 콘텐츠 ──
-        let brand = mouse_area(container(text("\u{00BB}").size(22).color(peach)).padding(
+        let brand = mouse_area(container(text("\u{00BB}").size(24).color(peach)).padding(
             Padding {
                 top: 0.0,
                 right: 4.0,
                 bottom: 0.0,
-                left: 4.0,
+                left: 6.0,
             },
         ))
         .on_press(Message::BrandClicked)
@@ -2042,8 +2052,8 @@ impl App {
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
             .width(Fill)
-            .size(18)
-            .padding(Padding::from([2, 4]))
+            .size(20)
+            .padding(Padding::from([2, 6]))
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
                 let ph_color = if is_focused {
@@ -2228,7 +2238,7 @@ impl App {
                 ..Default::default()
             });
 
-        let icon_size: f32 = 30.0;
+        let icon_size: f32 = 32.0;
         let icon_element: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
@@ -2246,11 +2256,11 @@ impl App {
                 .into()
         };
         let title = text(&item.name)
-            .size(15)
+            .size(16)
             .color(t.text)
             .wrapping(Wrapping::None);
         let subtitle = text(&item.path)
-            .size(12)
+            .size(13)
             .color(t.subtext)
             .wrapping(Wrapping::None);
         let info = column![title, subtitle].spacing(2).width(Fill).clip(true);
@@ -2310,8 +2320,8 @@ impl App {
             self.results.len()
         );
 
-        let left = text(status_text).size(10).color(t.overlay);
-        let right = text("Esc to close").size(10).color(t.overlay);
+        let left = text(status_text).size(11).color(t.overlay);
+        let right = text("Esc to close").size(11).color(t.overlay);
 
         let bar = row![left, Space::new().width(Fill), right]
             .padding(Padding::from([4, 14]))
@@ -2326,14 +2336,14 @@ impl App {
         let Some(result) = self.results.get(self.selected) else {
             let hint_color = t.overlay;
             let shortcuts_col = column![
-                text("Shortcuts").size(11).color(hint_color),
+                text("Shortcuts").size(12).color(hint_color),
                 container(text("")).height(8),
-                text("Enter    Open").size(10).color(hint_color),
+                text("Enter    Open").size(11).color(hint_color),
                 text("\u{2191}\u{2193}      Navigate")
-                    .size(10)
+                    .size(11)
                     .color(hint_color),
-                text("Esc       Close").size(10).color(hint_color),
-                text("Tab       Detail").size(10).color(hint_color),
+                text("Esc       Close").size(11).color(hint_color),
+                text("Tab       Detail").size(11).color(hint_color),
             ]
             .spacing(4);
             return container(
@@ -2387,7 +2397,7 @@ impl App {
         let name_str = truncate_str(&item.name, 25);
         let name_label = container(
             text(name_str)
-                .size(14)
+                .size(15)
                 .color(t.text)
                 .wrapping(Wrapping::None)
                 .center(),
@@ -2413,9 +2423,9 @@ impl App {
         };
         let path_section = container(
             column![
-                text("Path").size(9).color(t.overlay),
+                text("Path").size(10).color(t.overlay),
                 text(path_text)
-                    .size(10)
+                    .size(11)
                     .color(t.subtext)
                     .wrapping(Wrapping::None),
             ]
@@ -2434,7 +2444,7 @@ impl App {
             a: 0.22,
             ..kind_color
         };
-        let badge = container(text(kind_label).size(9).color(kind_color))
+        let badge = container(text(kind_label).size(10).color(kind_color))
             .padding(Padding::from([2, 8]))
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(badge_bg)),
@@ -2482,9 +2492,9 @@ impl App {
                 ContextAction::Uninstall => "\u{2715}",
             };
 
-            let icon_label = text(icon_text).size(12);
-            let label = text(label_text).size(11).color(text_color);
-            let shortcut = text(shortcut_text).size(9).color(t.overlay);
+            let icon_label = text(icon_text).size(13);
+            let label = text(label_text).size(12).color(text_color);
+            let shortcut = text(shortcut_text).size(10).color(t.overlay);
 
             let action_row = row![
                 container(icon_label).width(22).center_x(22),
@@ -2734,5 +2744,272 @@ fn save_config(f: impl FnOnce(&mut kmd_core::Config)) {
             }
         }
         Err(e) => tracing::warn!("Failed to load config for save: {e}"),
+    }
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    /// 테스트용 App 인스턴스 생성 (각 테스트마다 고유 temp 디렉토리)
+    fn make_test_app() -> App {
+        let seq = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let tmp = std::env::temp_dir().join(format!(
+            "kmd_test_app_{}_{seq}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let guard = match kmd_core::single_instance::acquire_or_toggle(&tmp) {
+            kmd_core::single_instance::InstanceAction::Acquired(g) => g,
+            _ => panic!("Guard 획득 실패"),
+        };
+        let config = kmd_core::Config::default();
+        let window_state = WindowState::default();
+        let (app, _task) = App::new(guard, config, window_state);
+        app
+    }
+
+    // ── 레이아웃 상수 일관성 ──
+
+    #[test]
+    fn 전체_창_높이_계산_일관성() {
+        let expected =
+            SEARCH_BAR_HEIGHT + 1.0 + (MAX_VISIBLE_ROWS as f32 * ROW_HEIGHT) + 1.0 + STATUS_BAR_HEIGHT;
+        assert!(
+            (FULL_WINDOW_HEIGHT - expected).abs() < f32::EPSILON,
+            "FULL_WINDOW_HEIGHT({FULL_WINDOW_HEIGHT}) != 계산값({expected})"
+        );
+    }
+
+    #[test]
+    fn pill_높이가_폰트보다_충분히_큼() {
+        let input_font_size: f32 = 20.0;
+        assert!(
+            PILL_HEIGHT > input_font_size + 10.0,
+            "PILL_HEIGHT({PILL_HEIGHT})가 폰트({input_font_size})보다 상하 마진 포함해 충분히 커야 함"
+        );
+    }
+
+    #[test]
+    fn row_높이가_아이콘보다_큼() {
+        let icon_size: f32 = 32.0;
+        assert!(
+            ROW_HEIGHT > icon_size + 8.0,
+            "ROW_HEIGHT({ROW_HEIGHT})가 아이콘({icon_size})보다 충분히 커야 함"
+        );
+    }
+
+    // ── 포커스 상태 관리 ──
+
+    #[test]
+    fn 쿼리_변경시_window_focused_유지() {
+        let mut app = make_test_app();
+        assert!(app.window_focused, "초기 상태에서 window_focused = true");
+
+        let _task = app.update(Message::QueryChanged("test".to_string()));
+        assert!(
+            app.window_focused,
+            "QueryChanged 후에도 window_focused 유지되어야 함"
+        );
+        assert_eq!(app.query, "test");
+    }
+
+    #[test]
+    fn 쿼리_비어있을때_ensure_focus_실행_가능() {
+        let mut app = make_test_app();
+        app.window_focused = true;
+        app.query.clear();
+        let _task = app.update(Message::EnsureFocus(1));
+        // EnsureFocus 가드: attempt <= MAX 이고 query가 비어있으면 실행
+        // (Task 내부는 검증 불가하지만, 상태 변경 없음을 확인)
+        assert!(app.window_focused);
+    }
+
+    #[test]
+    fn 쿼리_있을때_ensure_focus_건너뜀() {
+        let mut app = make_test_app();
+        app.window_focused = true;
+        app.query = "hello".to_string();
+        let _task = app.update(Message::EnsureFocus(1));
+        // query가 비어있지 않으므로 EnsureFocus는 Task::none() 반환
+        assert!(app.window_focused);
+    }
+
+    #[test]
+    fn 최대_재시도_초과시_ensure_focus_중단() {
+        let mut app = make_test_app();
+        app.window_focused = true;
+        app.query.clear();
+        let _task = app.update(Message::EnsureFocus(MAX_FOCUS_RETRIES + 1));
+        assert!(app.window_focused);
+    }
+
+    // ── Unfocused 이벤트 타이핑 가드 ──
+
+    #[test]
+    fn 타이핑_직후_unfocused_무시() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+
+        // 타이핑 시뮬레이션
+        let _task = app.update(Message::QueryChanged("가".to_string()));
+        assert!(app.window_focused, "QueryChanged 직후 focused 유지");
+
+        // 타이핑 직후(500ms 이내) Unfocused 이벤트
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Unfocused,
+        ));
+        assert!(
+            app.window_focused,
+            "타이핑 500ms 이내 Unfocused는 무시되어야 함"
+        );
+    }
+
+    #[test]
+    fn 타이핑_없을때_unfocused_정상_처리() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+        // last_query_changed_at을 충분히 과거로 설정
+        app.last_query_changed_at = std::time::Instant::now() - Duration::from_secs(5);
+
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Unfocused,
+        ));
+        assert!(
+            !app.window_focused,
+            "타이핑하지 않은 상태에서 Unfocused는 window_focused=false로"
+        );
+    }
+
+    // ── Focused 이벤트 — 항상 refocus ──
+
+    #[test]
+    fn 쿼리_있어도_focused시_window_focused_복원() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+        app.window_focused = false;
+        app.query = "검색어".to_string();
+
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Focused,
+        ));
+        assert!(
+            app.window_focused,
+            "Focused 이벤트 시 query 상태와 무관하게 window_focused=true"
+        );
+    }
+
+    #[test]
+    fn 빈_쿼리_focused시_window_focused_복원() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+        app.window_focused = false;
+        app.query.clear();
+
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Focused,
+        ));
+        assert!(app.window_focused, "Focused 이벤트 시 window_focused=true");
+    }
+
+    // ── 한글 입력 IME 보호 ──
+
+    #[test]
+    fn 한글_자모_연속_입력시_상태_일관성() {
+        let mut app = make_test_app();
+
+        // ㄱ 입력 (자음)
+        let _task = app.update(Message::QueryChanged("ㄱ".to_string()));
+        assert_eq!(app.query, "ㄱ");
+        assert!(app.window_focused);
+        let ts1 = app.last_query_changed_at;
+
+        // ㅏ 결합 → 가
+        let _task = app.update(Message::QueryChanged("가".to_string()));
+        assert_eq!(app.query, "가");
+        assert!(app.window_focused);
+        assert!(
+            app.last_query_changed_at >= ts1,
+            "last_query_changed_at은 갱신되어야 함"
+        );
+    }
+
+    #[test]
+    fn 한글_입력중_spurious_unfocused_무시() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+
+        // 한글 입력
+        let _task = app.update(Message::QueryChanged("ㄱ".to_string()));
+
+        // 바로 spurious Unfocused 발생
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Unfocused,
+        ));
+        assert!(
+            app.window_focused,
+            "한글 조합 중 spurious Unfocused는 무시"
+        );
+
+        // 이어서 Focused 발생
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Focused,
+        ));
+        assert!(app.window_focused, "Focused 후 복원");
+
+        // ㅏ 결합 가능
+        let _task = app.update(Message::QueryChanged("가".to_string()));
+        assert_eq!(app.query, "가", "한글 조합이 정상 완료되어야 함");
+    }
+
+    #[test]
+    fn 영문_입력중_spurious_unfocused_무시() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+
+        let _task = app.update(Message::QueryChanged("h".to_string()));
+        assert!(app.window_focused);
+
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Unfocused,
+        ));
+        assert!(
+            app.window_focused,
+            "영문 입력 직후 spurious Unfocused 무시"
+        );
+
+        let _task = app.update(Message::QueryChanged("he".to_string()));
+        assert_eq!(app.query, "he", "연속 입력 가능해야 함");
+    }
+
+    #[test]
+    fn got_raw_window_id_쿼리_있으면_focus_건너뜀() {
+        let mut app = make_test_app();
+        app.query = "test".to_string();
+        let _task = app.update(Message::GotRawWindowId(12345));
+        assert!(app.window_focused);
+    }
+
+    #[test]
+    fn clear_search_후_focus_복원() {
+        let mut app = make_test_app();
+        app.query = "something".to_string();
+        let _task = app.update(Message::QueryChanged("".to_string()));
+        assert_eq!(app.query, "");
+        assert!(app.window_focused);
     }
 }
