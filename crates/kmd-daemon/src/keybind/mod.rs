@@ -229,12 +229,12 @@ fn platform_word_modifier() -> VKey {
     VKey::LCtrl
 }
 
-/// 줄 시작 액션 (macOS: Ctrl+A — Cocoa+readline 범용, Windows/Linux: Home)
+/// 줄 시작 액션 (macOS: Cmd+Left — 한글 IME에서도 안정 동작, Windows/Linux: Home)
 #[cfg(target_os = "macos")]
 fn platform_home_action() -> BindAction {
     BindAction::SendCombo {
-        modifiers: vec![VKey::LCtrl],
-        key: VKey::A,
+        modifiers: vec![VKey::LWin],
+        key: VKey::Left,
     }
 }
 #[cfg(not(target_os = "macos"))]
@@ -242,12 +242,12 @@ fn platform_home_action() -> BindAction {
     BindAction::SendKey(VKey::Home)
 }
 
-/// 줄 끝 액션 (macOS: Ctrl+E — Cocoa+readline 범용, Windows/Linux: End)
+/// 줄 끝 액션 (macOS: Cmd+Right — 한글 IME에서도 안정 동작, Windows/Linux: End)
 #[cfg(target_os = "macos")]
 fn platform_end_action() -> BindAction {
     BindAction::SendCombo {
-        modifiers: vec![VKey::LCtrl],
-        key: VKey::E,
+        modifiers: vec![VKey::LWin],
+        key: VKey::Right,
     }
 }
 #[cfg(not(target_os = "macos"))]
@@ -256,18 +256,18 @@ fn platform_end_action() -> BindAction {
 }
 
 /// 줄 전체 복사 매크로 스텝 (줄 시작 → 줄 끝까지 선택 → 복사)
-/// macOS: Ctrl+A → Shift+Ctrl+E → Cmd+C
+/// macOS: Cmd+Left → Shift+Cmd+Right → Cmd+C (한글 IME 안정)
 /// Windows/Linux: Home → Shift+End → Ctrl+C
 #[cfg(target_os = "macos")]
 fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
     vec![
         MacroStep::Combo {
-            modifiers: vec![VKey::LCtrl],
-            key: VKey::A,
+            modifiers: vec![VKey::LWin],
+            key: VKey::Left,
         },
         MacroStep::Combo {
-            modifiers: vec![VKey::LShift, VKey::LCtrl],
-            key: VKey::E,
+            modifiers: vec![VKey::LShift, VKey::LWin],
+            key: VKey::Right,
         },
         MacroStep::Combo {
             modifiers: vec![copy_mod],
@@ -277,18 +277,18 @@ fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
 }
 
 /// 줄 전체 삭제 액션
-/// macOS: Ctrl+A → Shift+Ctrl+E → Delete
+/// macOS: Cmd+Left → Shift+Cmd+Right → Delete (한글 IME 안정)
 /// Windows/Linux: Home → Shift+End → Delete
 #[cfg(target_os = "macos")]
 fn platform_line_delete_action() -> BindAction {
     BindAction::Macro(vec![
         MacroStep::Combo {
-            modifiers: vec![VKey::LCtrl],
-            key: VKey::A,
+            modifiers: vec![VKey::LWin],
+            key: VKey::Left,
         },
         MacroStep::Combo {
-            modifiers: vec![VKey::LShift, VKey::LCtrl],
-            key: VKey::E,
+            modifiers: vec![VKey::LShift, VKey::LWin],
+            key: VKey::Right,
         },
         MacroStep::KeyPress(VKey::Delete),
         MacroStep::KeyRelease(VKey::Delete),
@@ -490,7 +490,7 @@ impl KeybindConfig {
         mappings.insert(VKey::J, BindAction::SendKey(VKey::Down));
         mappings.insert(VKey::K, BindAction::SendKey(VKey::Up));
         mappings.insert(VKey::L, BindAction::SendKey(VKey::Right));
-        mappings.insert(VKey::U, BindAction::SendKey(VKey::PageUp));
+        mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
         mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
         mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
         mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
@@ -913,7 +913,7 @@ mod tests {
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
-        assert!(layer.mappings.contains_key(&VKey::U), "Alt+U는 PageUp 매핑");
+        assert!(layer.mappings.contains_key(&VKey::N), "Alt+N은 PageUp 매핑");
         assert!(
             !layer.mappings.contains_key(&VKey::Slash),
             "/는 double_tap_mappings로 이동"

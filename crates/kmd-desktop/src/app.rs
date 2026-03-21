@@ -2229,22 +2229,34 @@ impl App {
                 ..Default::default()
             });
 
-        let left_col = Column::new()
-            .push(self.view_results_list())
-            .push(h_sep2)
-            .push(self.view_status_bar());
+        let is_keys_mode = self.query.trim().starts_with(":keys")
+            || self.query.trim() == ":k"
+            || self.query.trim().starts_with(":k ");
 
-        let results_body = row![
-            container(left_col).width(Length::FillPortion(2)),
-            vert_divider,
-            container(self.view_detail_panel()).width(Length::FillPortion(1)),
-        ]
-        .width(Fill)
-        .height(if has_results {
-            Length::Fill
+        let results_body: Element<'_, Message> = if is_keys_mode && has_results {
+            container(scrollable(self.view_cheatsheet()).width(Fill).height(Fill))
+                .width(Fill)
+                .height(Length::Fill)
+                .into()
         } else {
-            Length::Fixed(0.0)
-        });
+            let left_col = Column::new()
+                .push(self.view_results_list())
+                .push(h_sep2)
+                .push(self.view_status_bar());
+
+            row![
+                container(left_col).width(Length::FillPortion(2)),
+                vert_divider,
+                container(self.view_detail_panel()).width(Length::FillPortion(1)),
+            ]
+            .width(Fill)
+            .height(if has_results {
+                Length::Fill
+            } else {
+                Length::Fixed(0.0)
+            })
+            .into()
+        };
 
         let card_col = Column::new()
             .push(search_bar)
@@ -2435,6 +2447,108 @@ impl App {
         )
         .on_press(Message::ResultClicked(index))
         .into()
+    }
+
+    /// :keys 치트시트 전체를 한 페이지 팝업 형태로 렌더링
+    fn view_cheatsheet(&self) -> Element<'_, Message> {
+        let t = &self.theme;
+        let u = self.ui;
+        let font_sm = u.hint_font;
+        let font_md = font_sm + 2.0;
+        let font_lg = font_md + 2.0;
+        let hint_c = t.overlay;
+        let text_c = t.text;
+        let accent = t.accent;
+        let border_c = Color { a: 0.12, ..accent };
+        let shortcut_w = Length::Fixed(u.pill_height * 3.5);
+
+        // 섹션 인덱스 수집: 헤더(━━) 위치 목록
+        let header_indices: Vec<usize> = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.item.name.starts_with("━━"))
+            .map(|(i, _)| i)
+            .collect();
+
+        let section_count = header_indices.len();
+        let mid = (section_count + 1) / 2;
+
+        let mut left_col = Column::new().spacing(8).width(Fill);
+        let mut right_col = Column::new().spacing(8).width(Fill);
+
+        for (sec_idx, &hdr_pos) in header_indices.iter().enumerate() {
+            let hdr = &self.results[hdr_pos].item;
+            let title = hdr
+                .name
+                .trim_start_matches('━')
+                .trim_end_matches('━')
+                .trim();
+
+            let mut col = Column::new().spacing(2);
+            let title_row = row![
+                text(&hdr.icon).size(font_md).color(accent),
+                text(title)
+                    .size(font_lg)
+                    .color(accent)
+                    .wrapping(Wrapping::None),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+            col = col.push(title_row);
+            col = col.push(Space::new().height(4));
+
+            // 다음 헤더까지의 엔트리
+            let end = header_indices
+                .get(sec_idx + 1)
+                .copied()
+                .unwrap_or(self.results.len());
+            for entry_idx in (hdr_pos + 1)..end {
+                let item = &self.results[entry_idx].item;
+                let r = row![
+                    container(
+                        text(&item.name)
+                            .size(font_md)
+                            .color(text_c)
+                            .wrapping(Wrapping::None)
+                    )
+                    .width(shortcut_w),
+                    text(&item.path)
+                        .size(font_sm)
+                        .color(hint_c)
+                        .wrapping(Wrapping::None),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center);
+                col = col.push(r);
+            }
+
+            let card: Element<'_, Message> = container(col)
+                .padding(Padding::from([10, 14]))
+                .width(Fill)
+                .style(move |_: &_| container::Style {
+                    border: Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: border_c,
+                    },
+                    ..Default::default()
+                })
+                .into();
+
+            if sec_idx < mid {
+                left_col = left_col.push(card);
+            } else {
+                right_col = right_col.push(card);
+            }
+        }
+
+        let grid = row![left_col, right_col].spacing(10).width(Fill);
+
+        container(grid)
+            .padding(Padding::from([10, 14]))
+            .width(Fill)
+            .into()
     }
 
     fn view_status_bar(&self) -> Element<'_, Message> {
