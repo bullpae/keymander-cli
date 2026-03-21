@@ -2301,7 +2301,8 @@ impl App {
             });
 
         // ── 안정적 트리: 항상 동일한 4개 자식 (drag, card_row, hint, bg_dismiss) ──
-        let edge_w: f32 = if has_results { 4.0 } else { 0.0 };
+        // edge_w를 항상 동일하게 유지하여 pill↔결과 전환 시 카드 너비 일관성 확보
+        let edge_w: f32 = 4.0;
         let left_edge = mouse_area(container(text("")).width(edge_w).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::West))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
