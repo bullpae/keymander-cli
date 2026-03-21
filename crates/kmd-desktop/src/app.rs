@@ -886,6 +886,7 @@ impl App {
 /// | `:emoji`  | Emoji search      | `:emoji fire`, `:e 하트`       |
 /// | `:set`    | Settings          | `:set`, `:settings theme`      |
 /// | `:keymap` | Keymap control    | `:keymap`, `:km on`, `:km off` |
+/// | `:keys`   | Keybinding sheet  | `:keys`, `:k`, `F1`            |
 /// | `:help`   | Help / commands   | `:help`, `:h`                  |
 /// | `!`       | Shell command     | `!ip`, `!echo hello`           |
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
@@ -931,6 +932,7 @@ impl App {
             Prefix::Version => self.handle_version_query(),
             Prefix::Shell => self.handle_shell_query(trimmed),
             Prefix::Keymap => self.handle_keymap_query(trimmed),
+            Prefix::Keys => self.handle_keys_query(),
             Prefix::General => self.handle_main_search(trimmed),
         }
 
@@ -1254,6 +1256,13 @@ impl App {
         self.apply_contains_items(shell_ext.search(shell_query));
     }
 
+    /// :keys / :k — 키 맵핑 치트시트
+    fn handle_keys_query(&mut self) {
+        let config = crate::engine::load_config();
+        let items = kmd_core::keymap::keybinding_cheatsheet(&config, self.use_emoji);
+        self.apply_contains_items(items);
+    }
+
     /// :keymap / :km 쿼리 처리
     fn handle_keymap_query(&mut self, query: &str) {
         let sub = query
@@ -1534,9 +1543,14 @@ impl App {
                 if emoji { "\u{1F4DD}" } else { "[PT]" },
             ),
             (
+                ":keys  Key Mapping Sheet",
+                "Type :keys or :k or press F1  (show all keybinding cheatsheet)",
+                if emoji { "\u{1F5FA}\u{FE0F}" } else { "[KEY]" },
+            ),
+            (
                 ":keymap  Keymap Control",
                 "Type :keymap or :km  (kanata status, on/off, profile switch)",
-                if emoji { "\u{2328}\u{FE0F}" } else { "[KEY]" },
+                if emoji { "\u{2328}\u{FE0F}" } else { "[KM]" },
             ),
             (
                 ":version  Version Info",
@@ -2064,13 +2078,14 @@ impl App {
                 self.scroll_to_selected()
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                if !self.query.is_empty() {
-                    return self.clear_query_and_refocus();
-                }
                 if self.state_dirty {
                     self.window_state.save();
                 }
                 iced::exit()
+            }
+            keyboard::Key::Named(keyboard::key::Named::F1) => {
+                self.query = ":keys".to_string();
+                self.perform_search()
             }
             _ => Task::none(),
         }
@@ -2112,6 +2127,7 @@ enum Prefix {
     Version,
     Shell,
     Keymap,
+    Keys,
     General,
 }
 
@@ -2138,6 +2154,8 @@ fn prefix_of(query: &str) -> Prefix {
         Prefix::Version
     } else if query.starts_with(":keymap") || query.starts_with(":km ") || query == ":km" {
         Prefix::Keymap
+    } else if query.starts_with(":keys") || query == ":k" || query.starts_with(":k ") {
+        Prefix::Keys
     } else if query.starts_with('!') {
         Prefix::Shell
     } else {

@@ -526,6 +526,234 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
     }
 }
 
+/// 키맵핑 치트시트 생성 — config 기반 전체 바인딩을 시각화
+pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem> {
+    let mut items: Vec<IndexItem> = Vec::new();
+
+    let section = |items: &mut Vec<IndexItem>, title: &str, icon: &str| {
+        items.push(IndexItem {
+            name: format!("━━  {title}  ━━"),
+            path: String::new(),
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: icon.to_string(),
+            keywords: "kmd:keys:noop".to_string(),
+            icon_path: None,
+        });
+    };
+    let entry = |items: &mut Vec<IndexItem>, shortcut: &str, desc: &str, icon: &str| {
+        items.push(IndexItem {
+            name: shortcut.to_string(),
+            path: desc.to_string(),
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: icon.to_string(),
+            keywords: "kmd:keys:noop".to_string(),
+            icon_path: None,
+        });
+    };
+
+    let e = use_emoji;
+
+    // ── kmd-desktop 내장 단축키 ──
+    section(
+        &mut items,
+        "KMD Desktop",
+        if e { "\u{2328}\u{FE0F}" } else { "[KMD]" },
+    );
+    entry(
+        &mut items,
+        "Esc",
+        "프로그램 종료",
+        if e { "\u{274C}" } else { "[X]" },
+    );
+    entry(
+        &mut items,
+        "\u{2191} / \u{2193}",
+        "결과 목록 이동",
+        if e { "\u{1F503}" } else { "[^v]" },
+    );
+    entry(
+        &mut items,
+        "Enter",
+        "선택 항목 실행",
+        if e { "\u{23CE}" } else { "[>]" },
+    );
+    entry(
+        &mut items,
+        "Tab",
+        "상세 패널 열기",
+        if e { "\u{21E5}" } else { "[T]" },
+    );
+    entry(
+        &mut items,
+        "Ctrl+1~4",
+        "컨텍스트 액션 실행",
+        if e { "\u{1F522}" } else { "[#]" },
+    );
+    entry(
+        &mut items,
+        "Ctrl+Shift+Enter",
+        "관리자 권한 실행",
+        if e { "\u{1F512}" } else { "[!]" },
+    );
+
+    // ── 명령어 ──
+    section(
+        &mut items,
+        "Commands",
+        if e { "\u{1F4DD}" } else { "[CMD]" },
+    );
+    entry(
+        &mut items,
+        ":help / :h",
+        "도움말 표시",
+        if e { "\u{2753}" } else { "[?]" },
+    );
+    entry(
+        &mut items,
+        ":set / :settings",
+        "설정 관리",
+        if e { "\u{2699}\u{FE0F}" } else { "[S]" },
+    );
+    entry(
+        &mut items,
+        ":keys / :k",
+        "키 맵핑 시트 (현재 화면)",
+        if e { "\u{1F5FA}\u{FE0F}" } else { "[K]" },
+    );
+    entry(
+        &mut items,
+        ":keymap / :km",
+        "키맵 프로파일 관리",
+        if e { "\u{1F3AE}" } else { "[KM]" },
+    );
+    entry(
+        &mut items,
+        ":calc",
+        "계산기",
+        if e { "\u{1F4F1}" } else { "[=]" },
+    );
+    entry(
+        &mut items,
+        ":emoji / :e",
+        "이모지 검색",
+        if e { "\u{1F60A}" } else { "[E]" },
+    );
+    entry(
+        &mut items,
+        "@ (prefix)",
+        "웹 서비스 검색 (@g, @ai, ...)",
+        if e { "\u{1F310}" } else { "[@]" },
+    );
+    entry(
+        &mut items,
+        "! (prefix)",
+        "셸 명령 실행",
+        if e { "\u{1F4BB}" } else { "[!]" },
+    );
+
+    // ── daemon keybindings: remaps ──
+    let km = &config.launcher.keymap;
+    if !km.remaps.is_empty() {
+        section(
+            &mut items,
+            "Remaps",
+            if e { "\u{1F504}" } else { "[R]" },
+        );
+        let mut remaps: Vec<_> = km.remaps.iter().collect();
+        remaps.sort_by_key(|(k, _)| k.to_lowercase());
+        for (from, to) in remaps {
+            entry(
+                &mut items,
+                &format!("{from}  \u{2192}  {to}"),
+                "항상 활성",
+                if e { "\u{1F517}" } else { "[>]" },
+            );
+        }
+    }
+
+    // ── daemon keybindings: layers ──
+    let mut layer_names: Vec<_> = km.layers.keys().collect();
+    layer_names.sort();
+    for layer_name in layer_names {
+        let layer = &km.layers[layer_name];
+        let trigger = &layer.trigger;
+        section(
+            &mut items,
+            &format!("Layer: {layer_name} ({trigger} hold)"),
+            if e { "\u{1F4E6}" } else { "[L]" },
+        );
+        if let Some(ref tap) = layer.tap_action {
+            entry(
+                &mut items,
+                &format!("{trigger} (tap)"),
+                &format!("\u{2192} {tap}"),
+                if e { "\u{1F44B}" } else { "[T]" },
+            );
+        }
+
+        let mut mappings: Vec<_> = layer.mappings.iter().collect();
+        mappings.sort_by_key(|(k, _)| k.to_lowercase());
+        for (key, action) in &mappings {
+            entry(
+                &mut items,
+                &format!("{trigger}+{key}"),
+                &format!("\u{2192} {action}"),
+                if e { "\u{27A1}\u{FE0F}" } else { "[>]" },
+            );
+        }
+
+        let mut dt_keys: Vec<_> = layer.double_taps.keys().collect();
+        dt_keys.sort_by_key(|k| k.to_lowercase());
+        for key in dt_keys {
+            let dt = &layer.double_taps[key];
+            entry(
+                &mut items,
+                &format!("{trigger}+{key}"),
+                &format!("1\u{00D7}: {} / 2\u{00D7}: {}", dt.single, dt.double),
+                if e { "\u{1F4A8}" } else { "[D]" },
+            );
+        }
+    }
+
+    // ── daemon keybindings: combos ──
+    if !km.combos.is_empty() {
+        section(
+            &mut items,
+            "Combos",
+            if e { "\u{1F3B9}" } else { "[C]" },
+        );
+        for combo in &km.combos {
+            entry(
+                &mut items,
+                &combo.trigger,
+                &format!("\u{2192} {}", combo.action),
+                if e { "\u{26A1}" } else { "[>]" },
+            );
+        }
+    }
+
+    // ── daemon keybindings: double-taps ──
+    if !km.double_taps.is_empty() {
+        section(
+            &mut items,
+            "Double-Tap",
+            if e { "\u{1F91C}" } else { "[DT]" },
+        );
+        for dt in &km.double_taps {
+            entry(
+                &mut items,
+                &format!("{} \u{00D7}2", dt.key),
+                &format!("\u{2192} {}", dt.action),
+                if e { "\u{26A1}" } else { "[>]" },
+            );
+        }
+    }
+
+    items
+}
+
 /// keymap 아이템 선택 시 실행할 액션 처리 (Desktop/TUI 공용)
 pub fn execute_keymap_action(config: &mut Config, keywords: &str) -> Option<String> {
     if keywords == "kmd:keymap:start" {
