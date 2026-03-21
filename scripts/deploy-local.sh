@@ -73,7 +73,7 @@ echo ""
 
 # [1] 빌드
 info "[1/4] 릴리스 빌드..."
-cargo build --release 2>&1 | tail -3
+cargo build --release --workspace 2>&1 | tail -3
 ok "빌드 완료"
 
 # [2] 테스트

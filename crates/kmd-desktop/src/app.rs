@@ -2359,7 +2359,13 @@ impl App {
         let icon_element: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
-                .or_else(|| crate::app_icons::app_icon_for_item(item.kind, &item.path))
+                .or_else(|| {
+                    crate::app_icons::app_icon_for_item(
+                        item.kind,
+                        &item.path,
+                        item.icon_path.as_deref(),
+                    )
+                })
         {
             image(handle)
                 .content_fit(iced::ContentFit::Fill)
@@ -2481,7 +2487,13 @@ impl App {
         let big_icon: Element<'_, Message> = if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
-                .or_else(|| crate::app_icons::app_icon_for_item(item.kind, &item.path))
+                .or_else(|| {
+                    crate::app_icons::app_icon_for_item(
+                        item.kind,
+                        &item.path,
+                        item.icon_path.as_deref(),
+                    )
+                })
         {
             image(handle)
                 .content_fit(iced::ContentFit::Fill)

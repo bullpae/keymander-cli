@@ -1,7 +1,8 @@
 //! 네이티브 아이콘 추출 — OS Shell API로 파일/앱/디렉터리 아이콘 추출
 //!
 //! Windows: SHGetFileInfoW → HICON → BGRA → RGBA pixel data
-//! macOS/Linux: 향후 구현 (현재 None 반환)
+//! macOS: Info.plist → .icns → PNG 디코딩
+//! Linux: .desktop Icon= → 테마/pixmaps 검색 → PNG 로딩
 //!
 //! App/Executable: 경로 기준 캐시
 //! File: 확장자 기준 캐시 (같은 확장자는 같은 아이콘)
@@ -12,35 +13,32 @@ use kmd_core::ItemKind;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-#[allow(dead_code)]
+#[cfg(windows)]
 const FALLBACK_ICON_SIZE: u32 = 32;
-#[allow(dead_code)]
-const TARGET_ICON_SIZE: u32 = 32;
+const TARGET_ICON_SIZE: u32 = 64;
 
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<Handle>>>> =
     LazyLock::new(|| Mutex::new(HashMap::with_capacity(128)));
 
 /// 아이템의 네이티브 아이콘 반환 (캐시됨).
-/// App/Executable: 실행 파일 아이콘 (shell:appsFolder 포함)
-/// File: 연결 프로그램 아이콘 (.lnk는 대상 앱 아이콘)
-/// Directory: 폴더 아이콘
-pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
+pub fn app_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<Handle> {
     if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
         return None;
     }
 
     match kind {
         ItemKind::App | ItemKind::Executable => {
+            let cache_key = icon_path.unwrap_or(path);
             let mut cache = ICON_CACHE.lock().ok()?;
-            if let Some(cached) = cache.get(path) {
+            if let Some(cached) = cache.get(cache_key) {
                 return cached.clone();
             }
             let handle = if path.starts_with("shell:") {
                 platform::extract_pidl_icon(path)
             } else {
-                platform::extract_icon(path)
+                platform::extract_icon(path, icon_path)
             };
-            cache.insert(path.to_string(), handle.clone());
+            cache.insert(cache_key.to_string(), handle.clone());
             handle
         }
         ItemKind::File => {
@@ -52,13 +50,12 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
             if ext.is_empty() {
                 return None;
             }
-            // .lnk 파일은 바로가기 대상의 실제 아이콘을 사용
             if ext == "lnk" {
                 let mut cache = ICON_CACHE.lock().ok()?;
                 if let Some(cached) = cache.get(path) {
                     return cached.clone();
                 }
-                let handle = platform::extract_icon(path);
+                let handle = platform::extract_icon(path, None);
                 cache.insert(path.to_string(), handle.clone());
                 return handle;
             }
@@ -86,6 +83,34 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str) -> Option<Handle> {
     }
 }
 
+/// PNG/이미지 바이트 → TARGET_ICON_SIZE 리사이즈 → Handle
+fn png_bytes_to_handle(png_data: &[u8]) -> Option<Handle> {
+    use image::codecs::png::PngEncoder;
+    use image::imageops::FilterType;
+    use image::ImageEncoder;
+
+    let img = image::load_from_memory(png_data).ok()?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let target = TARGET_ICON_SIZE;
+
+    let resized = if w == target && h == target {
+        img
+    } else {
+        image::imageops::resize(&img, target, target, FilterType::Lanczos3)
+    };
+
+    let mut buf = Vec::new();
+    PngEncoder::new(&mut buf)
+        .write_image(
+            resized.as_raw(),
+            target,
+            target,
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+    Some(Handle::from_bytes(buf))
+}
+
 // ── Windows 구현 ────────────────────────────────────────────────────────────
 
 #[cfg(windows)]
@@ -99,8 +124,7 @@ mod platform {
     };
     use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
-    /// 실제 파일/바로가기 경로에서 아이콘 추출 (App/Executable용)
-    pub fn extract_icon(path: &str) -> Option<Handle> {
+    pub fn extract_icon(path: &str, _icon_path: Option<&str>) -> Option<Handle> {
         extract_shell_icon(path, FILE_FLAGS_AND_ATTRIBUTES(0), false)
     }
 
@@ -340,13 +364,160 @@ mod platform {
     }
 }
 
-// ── 비-Windows 스텁 ─────────────────────────────────────────────────────────
+// ── macOS 구현 ──────────────────────────────────────────────────────────────
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use iced::widget::image::Handle;
+    use std::path::Path;
+
+    pub fn extract_icon(path: &str, _icon_path: Option<&str>) -> Option<Handle> {
+        if path.ends_with(".app") {
+            extract_app_bundle_icon(path)
+        } else {
+            None
+        }
+    }
+
+    fn extract_app_bundle_icon(app_path: &str) -> Option<Handle> {
+        let bundle = Path::new(app_path);
+        let info_plist = bundle.join("Contents/Info.plist");
+
+        let plist_value = plist::Value::from_file(&info_plist).ok()?;
+        let dict = plist_value.as_dictionary()?;
+
+        let icon_name = dict
+            .get("CFBundleIconFile")
+            .and_then(|v| v.as_string())
+            .unwrap_or("AppIcon");
+
+        let icon_filename = if icon_name.ends_with(".icns") {
+            icon_name.to_string()
+        } else {
+            format!("{icon_name}.icns")
+        };
+
+        let icns_path = bundle.join("Contents/Resources").join(&icon_filename);
+        let icns_data = std::fs::read(&icns_path).ok()?;
+        extract_png_from_icns(&icns_data)
+    }
+
+    /// ICNS 파일에서 가장 적합한 PNG 엔트리 추출
+    fn extract_png_from_icns(data: &[u8]) -> Option<Handle> {
+        if data.len() < 8 || &data[0..4] != b"icns" {
+            return None;
+        }
+
+        let mut pos = 8usize;
+        let mut best_png: Option<Vec<u8>> = None;
+        let mut best_size = 0u32;
+
+        while pos + 8 <= data.len() {
+            let entry_type: [u8; 4] = data[pos..pos + 4].try_into().ok()?;
+            let entry_len =
+                u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+
+            if entry_len < 8 || pos + entry_len > data.len() {
+                break;
+            }
+
+            let entry_data = &data[pos + 8..pos + entry_len];
+
+            // PNG 시그니처 확인
+            if entry_data.len() >= 8
+                && entry_data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+            {
+                let size = match &entry_type {
+                    b"icp4" => 16,
+                    b"icp5" => 32,
+                    b"icp6" => 64,
+                    b"ic07" => 128,
+                    b"ic08" => 256,
+                    b"ic09" => 512,
+                    b"ic10" => 1024,
+                    b"ic11" => 64,
+                    b"ic12" => 128,
+                    b"ic13" => 512,
+                    b"ic14" => 1024,
+                    _ => 0,
+                };
+
+                // 128px에 가장 가까운 엔트리 선호 (32 이상만)
+                if size >= 32 {
+                    let dist = (size as i32 - 128).unsigned_abs();
+                    let best_dist = (best_size as i32 - 128).unsigned_abs();
+                    if best_png.is_none() || best_size < 32 || dist < best_dist {
+                        best_png = Some(entry_data.to_vec());
+                        best_size = size;
+                    }
+                } else if best_png.is_none() {
+                    best_png = Some(entry_data.to_vec());
+                    best_size = size;
+                }
+            }
+
+            pos += entry_len;
+        }
+
+        let png_data = best_png?;
+        super::png_bytes_to_handle(&png_data)
+    }
+
+    pub fn extract_pidl_icon(_uri: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_icon_by_ext(_dummy_name: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_folder_icon() -> Option<Handle> {
+        None
+    }
+}
+
+// ── Linux 구현 ──────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
 mod platform {
     use iced::widget::image::Handle;
 
-    pub fn extract_icon(_path: &str) -> Option<Handle> {
+    pub fn extract_icon(_path: &str, icon_path: Option<&str>) -> Option<Handle> {
+        let icon_file = icon_path?;
+        if icon_file.is_empty() {
+            return None;
+        }
+
+        // PNG/BMP 등 image crate가 읽을 수 있는 파일만 처리
+        let lower = icon_file.to_lowercase();
+        if lower.ends_with(".svg") || lower.ends_with(".xpm") {
+            return None;
+        }
+
+        let data = std::fs::read(icon_file).ok()?;
+        super::png_bytes_to_handle(&data)
+    }
+
+    pub fn extract_pidl_icon(_uri: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_icon_by_ext(_dummy_name: &str) -> Option<Handle> {
+        None
+    }
+
+    pub fn extract_folder_icon() -> Option<Handle> {
+        None
+    }
+}
+
+// ── 기타 플랫폼 스텁 ────────────────────────────────────────────────────────
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+mod platform {
+    use iced::widget::image::Handle;
+
+    pub fn extract_icon(_path: &str, _icon_path: Option<&str>) -> Option<Handle> {
         None
     }
 

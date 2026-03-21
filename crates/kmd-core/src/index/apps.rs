@@ -415,6 +415,7 @@ fn parse_desktop_file(
 
     let mut name = None;
     let mut exec = None;
+    let mut icon_field = None;
     let mut no_display = false;
     let mut in_desktop_entry = false;
 
@@ -435,13 +436,17 @@ fn parse_desktop_file(
         if let Some(val) = line.strip_prefix("Name=") {
             name = Some(val.to_string());
         } else if let Some(val) = line.strip_prefix("Exec=") {
-            // Remove field codes like %u, %f, %U, etc.
             let clean = val
                 .split_whitespace()
                 .filter(|s| !s.starts_with('%'))
                 .collect::<Vec<_>>()
                 .join(" ");
             exec = Some(clean);
+        } else if let Some(val) = line.strip_prefix("Icon=") {
+            let v = val.trim();
+            if !v.is_empty() {
+                icon_field = Some(v.to_string());
+            }
         } else if let Some(val) = line.strip_prefix("NoDisplay=") {
             no_display = val.trim().eq_ignore_ascii_case("true");
         }
@@ -458,6 +463,8 @@ fn parse_desktop_file(
         return None;
     }
 
+    let resolved_icon = icon_field.and_then(|ic| resolve_linux_icon_path(&ic));
+
     Some(IndexItem {
         name: name.clone(),
         path: exec.clone(),
@@ -465,6 +472,60 @@ fn parse_desktop_file(
         source: Source::Apps,
         icon: app_icon(use_emoji),
         keywords: format!("{} {}", name, exec),
-        icon_path: None,
+        icon_path: resolved_icon,
     })
+}
+
+/// `.desktop` Icon= 값을 실제 파일 경로로 해석.
+/// 절대 경로면 그대로, 테마 아이콘 이름이면 표준 디렉토리에서 PNG 검색.
+#[cfg(target_os = "linux")]
+fn resolve_linux_icon_path(icon: &str) -> Option<String> {
+    use std::path::Path;
+
+    if icon.is_empty() {
+        return None;
+    }
+
+    // 절대 경로 → 파일 존재 확인
+    if icon.starts_with('/') {
+        let p = Path::new(icon);
+        if p.exists() {
+            return Some(icon.to_string());
+        }
+        // .png 확장자 없이 저장된 경우
+        let with_png = format!("{icon}.png");
+        if Path::new(&with_png).exists() {
+            return Some(with_png);
+        }
+        return None;
+    }
+
+    // 테마 아이콘 이름 → 표준 경로에서 검색 (PNG 우선)
+    let sizes = ["128x128", "64x64", "48x48", "256x256", "scalable"];
+    let categories = ["apps", "mimetypes"];
+
+    for size in &sizes {
+        for cat in &categories {
+            let path = format!("/usr/share/icons/hicolor/{size}/{cat}/{icon}.png");
+            if Path::new(&path).exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    // pixmaps 폴백
+    for ext in ["png", "xpm"] {
+        let path = format!("/usr/share/pixmaps/{icon}.{ext}");
+        if Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
+
+    // SVG (scalable)
+    let svg = format!("/usr/share/icons/hicolor/scalable/apps/{icon}.svg");
+    if Path::new(&svg).exists() {
+        return Some(svg);
+    }
+
+    None
 }
