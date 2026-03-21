@@ -35,6 +35,7 @@ pub struct DesktopTheme {
 
     // Effects
     pub opacity: f32,
+    #[allow(dead_code)]
     pub corner_radius: f32,
 }
 

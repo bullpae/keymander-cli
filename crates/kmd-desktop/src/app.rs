@@ -2263,12 +2263,12 @@ impl App {
             .push(h_sep)
             .push(results_body);
 
-        // ── 카드 스타일 (항상 동일한 corner_radius) ──
+        // ── 카드 스타일 (pill_height 기반 일관된 라운드) ──
         let border_color = Color {
             a: 0.30,
             ..accent_color
         };
-        let radius = t.corner_radius;
+        let radius = u.pill_height / 2.0;
 
         let card = container(card_col)
             .width(Fill)

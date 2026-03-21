@@ -346,6 +346,27 @@ fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
 
 // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
 
+/// OS 플래그 기반으로 modifiers_held를 동기화.
+/// 특정 modifier 플래그가 꺼져 있으면 해당 Left/Right 키 모두 제거.
+fn sync_modifiers_with_flags(held: &mut HashSet<VKey>, flags: u64) {
+    if (flags & CG_EVENT_FLAG_MASK_SHIFT) == 0 {
+        held.remove(&VKey::LShift);
+        held.remove(&VKey::RShift);
+    }
+    if (flags & CG_EVENT_FLAG_MASK_CONTROL) == 0 {
+        held.remove(&VKey::LCtrl);
+        held.remove(&VKey::RCtrl);
+    }
+    if (flags & CG_EVENT_FLAG_MASK_ALTERNATE) == 0 {
+        held.remove(&VKey::LAlt);
+        held.remove(&VKey::RAlt);
+    }
+    if (flags & CG_EVENT_FLAG_MASK_COMMAND) == 0 {
+        held.remove(&VKey::LWin);
+        held.remove(&VKey::RWin);
+    }
+}
+
 // ── 액션 실행 ────────────────────────────────────────────────────────────────
 
 fn execute_action(action: &BindAction) {
@@ -407,12 +428,21 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
-    // 타임아웃으로 비활성화된 경우 재활성화
+    // 타임아웃으로 비활성화된 경우 재활성화 + modifier 상태 리셋
     if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
         let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);
         if !tap.is_null() {
-            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화");
+            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화 및 modifier 상태 리셋");
             CGEventTapEnable(tap, true);
+        }
+        if let Some(state) = HOOK_STATE.get() {
+            if let Ok(mut guard) = state.lock() {
+                guard.modifiers_held.clear();
+                guard.active_layer = None;
+                guard.layer_key_used = false;
+                guard.combo_consumed_key = None;
+                guard.dt_consumed_key = None;
+            }
         }
         return event;
     }
@@ -448,12 +478,23 @@ unsafe extern "C" fn event_tap_callback(
 
     // ── flagsChanged 이벤트: 수정자 키 상태 추적 ──
     if type_ == CG_EVENT_FLAGS_CHANGED {
-        let is_down = !guard.modifiers_held.contains(&vkey);
+        // 실제 OS 플래그에서 modifier 상태 판단 (토글 방식 대신)
+        let flags = CGEventGetFlags(event);
+        let is_down = match vkey {
+            VKey::LShift | VKey::RShift => (flags & CG_EVENT_FLAG_MASK_SHIFT) != 0,
+            VKey::LCtrl | VKey::RCtrl => (flags & CG_EVENT_FLAG_MASK_CONTROL) != 0,
+            VKey::LAlt | VKey::RAlt => (flags & CG_EVENT_FLAG_MASK_ALTERNATE) != 0,
+            VKey::LWin | VKey::RWin => (flags & CG_EVENT_FLAG_MASK_COMMAND) != 0,
+            VKey::CapsLock => (flags & 0x0001_0000) != 0,
+            _ => !guard.modifiers_held.contains(&vkey),
+        };
         if is_down {
             guard.modifiers_held.insert(vkey);
         } else {
             guard.modifiers_held.remove(&vkey);
         }
+        // 플래그가 클리어된 modifier는 held에서도 제거 (동기화)
+        sync_modifiers_with_flags(&mut guard.modifiers_held, flags);
 
         // 레이어 트리거 확인
         for (idx, layer) in guard.config.layers.iter().enumerate() {
@@ -842,6 +883,18 @@ impl KeyboardBackend for MacOSKeyboardBackend {
     }
 
     fn stop(&mut self) -> Result<(), String> {
+        // stuck modifier 방지: 종료 전에 held 상태인 modifier key-up 전송
+        if let Some(state) = HOOK_STATE.get() {
+            if let Ok(mut guard) = state.lock() {
+                for &vkey in guard.modifiers_held.iter() {
+                    let keycode = vkey_to_cg(vkey);
+                    send_key_event(keycode, false, 0);
+                }
+                guard.modifiers_held.clear();
+                guard.active_layer = None;
+            }
+        }
+
         self.running.store(false, Ordering::Relaxed);
         EVENT_TAP_PTR.store(std::ptr::null_mut(), Ordering::Relaxed);
         if let Ok(store) = self.run_loop.lock() {
