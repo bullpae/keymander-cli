@@ -33,13 +33,15 @@ function Write-Ok    { param([string]$Msg) Write-Host "✓ $Msg" -ForegroundColo
 function Write-Warn  { param([string]$Msg) Write-Host "! $Msg" -ForegroundColor Yellow }
 function Write-Fail  { param([string]$Msg) Write-Host "✗ $Msg" -ForegroundColor Red; exit 1 }
 
-# ── 프로세스 재시작 ─────────────────────────────────────────
-function Restart-Daemon {
+# ── 프로세스 종료/시작 ────────────────────────────────────────
+function Stop-KmdProcesses {
     Write-Info "데몬/데스크톱 프로세스 종료 중..."
     Get-Process -Name "kmd-daemon"  -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-Process -Name "kmd-desktop" -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 1
+}
 
+function Start-Daemon {
     Write-Info "데몬 시작 중..."
     $daemonExe = Join-Path $DeployDir "kmd-daemon.exe"
     if (-not (Test-Path $daemonExe)) {
@@ -61,7 +63,8 @@ if ($RestartOnly) {
     Write-Host ""
     Write-Host "=== keymander 재시작 ===" -ForegroundColor Cyan
     Write-Host ""
-    Restart-Daemon
+    Stop-KmdProcesses
+    Start-Daemon
     Write-Host ""
     Write-Ok "완료"
     exit 0
@@ -93,8 +96,10 @@ try {
         Write-Ok "모든 테스트 통과"
     }
 
-    # [3] 배포
+    # [3] 프로세스 종료 → 배포
     Write-Info "[3/4] $DeployDir 에 배포 중..."
+    Stop-KmdProcesses
+
     $dataDir = Join-Path $DeployDir "kmd-data"
     if (-not (Test-Path $DeployDir)) { New-Item -ItemType Directory -Path $DeployDir -Force | Out-Null }
     if (-not (Test-Path $dataDir))   { New-Item -ItemType Directory -Path $dataDir -Force | Out-Null }
@@ -112,9 +117,9 @@ try {
 
     Write-Ok "바이너리 배포 완료"
 
-    # [4] 재시작
-    Write-Info "[4/4] 서비스 재시작..."
-    Restart-Daemon
+    # [4] 데몬 시작
+    Write-Info "[4/4] 서비스 시작..."
+    Start-Daemon
 
     Write-Host ""
     Write-Host "=== 배포 완료 ===" -ForegroundColor Green
