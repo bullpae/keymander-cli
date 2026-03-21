@@ -84,6 +84,7 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) ->
 }
 
 /// PNG/이미지 바이트 → TARGET_ICON_SIZE 리사이즈 → Handle
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn png_bytes_to_handle(png_data: &[u8]) -> Option<Handle> {
     use image::codecs::png::PngEncoder;
     use image::imageops::FilterType;
