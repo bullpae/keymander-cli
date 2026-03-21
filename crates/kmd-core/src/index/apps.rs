@@ -299,12 +299,14 @@ fn scan_lnk_dir(
     }
 }
 
-/// macOS: Scan /Applications for .app bundles
+/// macOS: Scan application directories (재귀) + Homebrew Caskroom
 #[cfg(target_os = "macos")]
 fn collect_macos_apps(use_emoji: bool) -> Vec<IndexItem> {
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     let mut items = Vec::new();
+    let mut seen = HashSet::new();
 
     let app_dirs = vec![
         PathBuf::from("/Applications"),
@@ -315,27 +317,56 @@ fn collect_macos_apps(use_emoji: bool) -> Vec<IndexItem> {
     ];
 
     for dir in app_dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        scan_macos_app_dir(&dir, &mut items, &mut seen, use_emoji, 3);
+    }
+
+    // Homebrew Caskroom — 심볼릭 링크가 /Applications에 없는 경우 보완
+    let caskroom = PathBuf::from("/opt/homebrew/Caskroom");
+    if caskroom.is_dir() {
+        scan_macos_app_dir(&caskroom, &mut items, &mut seen, use_emoji, 4);
+    }
+    let caskroom_local = PathBuf::from("/usr/local/Caskroom");
+    if caskroom_local.is_dir() {
+        scan_macos_app_dir(&caskroom_local, &mut items, &mut seen, use_emoji, 4);
+    }
+
+    items
+}
+
+/// .app 번들을 재귀 탐색 (max_depth 제한으로 과도한 탐색 방지)
+#[cfg(target_os = "macos")]
+fn scan_macos_app_dir(
+    dir: &std::path::Path,
+    items: &mut Vec<IndexItem>,
+    seen: &mut std::collections::HashSet<String>,
+    use_emoji: bool,
+    max_depth: u32,
+) {
+    if max_depth == 0 {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            if path.is_dir() {
+                scan_macos_app_dir(&path, items, seen, use_emoji, max_depth - 1);
+            }
             continue;
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-
-            if ext != "app" {
-                continue;
-            }
-
+        if ext == "app" {
             let name = path
                 .file_stem()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
 
-            if name.is_empty() {
+            if name.is_empty() || !seen.insert(name.clone()) {
                 continue;
             }
 
@@ -350,10 +381,10 @@ fn collect_macos_apps(use_emoji: bool) -> Vec<IndexItem> {
                 keywords: full_path,
                 icon_path: None,
             });
+        } else if path.is_dir() {
+            scan_macos_app_dir(&path, items, seen, use_emoji, max_depth - 1);
         }
     }
-
-    items
 }
 
 /// Linux: Parse .desktop files from XDG data directories

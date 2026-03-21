@@ -198,7 +198,7 @@ impl Index {
     /// do not force unnecessary full reindexing on first launch.
     /// Bump this only when index format/compatibility changes.
     pub fn current_version() -> &'static str {
-        "schema-2"
+        "schema-3"
     }
 
     /// Total number of indexed items

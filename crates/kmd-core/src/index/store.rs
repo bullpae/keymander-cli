@@ -57,14 +57,25 @@ pub fn save_both(index: &Index, bin_path: &Path, json_path: &Path) {
 /// 캐시에서 인덱스 로드 시도 (bincode → JSON fallback).
 /// `expected_version`과 일치해야 반환. JSON 히트 시 bincode 캐시를 자동 생성.
 pub fn try_load_cached(bin_path: &Path, json_path: &Path, expected_version: &str) -> Option<Index> {
-    if bin_path.exists() {
+    try_load_cached_with_max_age(bin_path, json_path, expected_version, None)
+}
+
+/// freshness 기반 캐시 로드. `max_age`가 Some이면 파일 수정 시각 기준으로
+/// 오래된 캐시를 무효화하여 새로 설치된 앱/CLI가 반영되도록 한다.
+pub fn try_load_cached_with_max_age(
+    bin_path: &Path,
+    json_path: &Path,
+    expected_version: &str,
+    max_age: Option<std::time::Duration>,
+) -> Option<Index> {
+    if bin_path.exists() && !is_file_too_old(bin_path, max_age) {
         match load_index_bin(bin_path) {
             Ok(idx) if idx.version == expected_version => return Some(idx),
             Ok(_) => tracing::info!("Bincode cache version mismatch, skipping"),
             Err(e) => tracing::warn!("Failed to read bincode cache: {e}"),
         }
     }
-    if json_path.exists() {
+    if json_path.exists() && !is_file_too_old(json_path, max_age) {
         match load_index(json_path) {
             Ok(idx) if idx.version == expected_version => {
                 let _ = save_index_bin(&idx, bin_path);
@@ -75,6 +86,22 @@ pub fn try_load_cached(bin_path: &Path, json_path: &Path, expected_version: &str
         }
     }
     None
+}
+
+fn is_file_too_old(path: &Path, max_age: Option<std::time::Duration>) -> bool {
+    let Some(max) = max_age else {
+        return false;
+    };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return true;
+    };
+    let Ok(modified) = meta.modified() else {
+        return true;
+    };
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(std::time::Duration::from_secs(u64::MAX));
+    age > max
 }
 
 // ── 에러 타입 ────────────────────────────────────────────────────────────────

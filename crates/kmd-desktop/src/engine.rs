@@ -121,7 +121,8 @@ fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
     index
 }
 
-/// 인덱스 로드: bincode → JSON fallback → 새로 빌드
+/// 인덱스 로드: bincode → JSON fallback → 새로 빌드.
+/// 캐시가 24시간보다 오래되면 새로 빌드하여 새 앱/CLI를 반영한다.
 fn load_or_build_index(config: &kmd_core::Config) -> kmd_core::Index {
     use kmd_core::index::store;
 
@@ -131,11 +132,15 @@ fn load_or_build_index(config: &kmd_core::Config) -> kmd_core::Index {
     let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
     let expected_version = kmd_core::Index::current_version();
 
-    if let Some(cached) = store::try_load_cached(&bin_path, &json_path, expected_version) {
+    let max_age = Some(Duration::from_secs(INDEX_FRESHNESS_SECS));
+    if let Some(cached) =
+        store::try_load_cached_with_max_age(&bin_path, &json_path, expected_version, max_age)
+    {
         tracing::info!("Index cache hit in {} ms", started.elapsed().as_millis());
         return cached;
     }
 
+    tracing::info!("Index cache miss or stale — rebuilding");
     let index = kmd_core::Index::build(&config.launcher, config.general.emoji_icons);
     store::save_both(&index, &bin_path, &json_path);
     tracing::info!(
