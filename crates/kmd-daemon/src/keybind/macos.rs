@@ -112,6 +112,20 @@ extern "C" {
     fn CFRunLoopStop(rl: CFRunLoopRef);
     fn CFRelease(cf: *mut c_void);
     static kCFRunLoopCommonModes: CFStringRef;
+    fn CFArrayGetCount(arr: *const c_void) -> i64;
+    fn CFArrayGetValueAtIndex(arr: *const c_void, idx: i64) -> *const c_void;
+    fn CFStringCompare(s1: *const c_void, s2: *const c_void, opts: u64) -> i32;
+}
+
+// ── Carbon TIS (Text Input Source) API — 한/영 입력 소스 전환 ────────────────
+
+#[link(name = "Carbon", kind = "framework")]
+extern "C" {
+    fn TISCopyCurrentKeyboardInputSource() -> *mut c_void;
+    fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *const c_void;
+    fn TISCreateInputSourceList(properties: *const c_void, all_installed: bool) -> *mut c_void;
+    fn TISSelectInputSource(source: *mut c_void) -> i32;
+    static kTISPropertyInputSourceLanguages: *const c_void;
 }
 
 // ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
@@ -351,6 +365,76 @@ fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
     }
 }
 
+// ── 입력 소스 전환 (한/영 토글) ───────────────────────────────────────────────
+
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+/// macOS TIS API로 한/영 입력 소스를 토글한다.
+/// kVK_JIS_Kana(0x68) 키코드 전송 대신 직접 API 호출 — 비-JIS 키보드에서도 동작.
+fn toggle_input_source() {
+    unsafe {
+        let current = TISCopyCurrentKeyboardInputSource();
+        if current.is_null() {
+            tracing::warn!("TISCopyCurrentKeyboardInputSource 실패");
+            return;
+        }
+        let is_korean = tis_first_language_matches(current, b"ko\0");
+        CFRelease(current);
+
+        let target = if is_korean { b"en\0" } else { b"ko\0" };
+        if !tis_select_source_by_language(target) {
+            tracing::warn!(
+                "입력 소스 전환 실패: {} 소스를 찾을 수 없음",
+                if is_korean { "en" } else { "ko" }
+            );
+        }
+    }
+}
+
+unsafe fn tis_first_language_matches(source: *mut c_void, lang: &[u8]) -> bool {
+    let langs = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages);
+    if langs.is_null() {
+        return false;
+    }
+    if CFArrayGetCount(langs) < 1 {
+        return false;
+    }
+    let first = CFArrayGetValueAtIndex(langs, 0);
+    let target =
+        CFStringCreateWithCString(std::ptr::null(), lang.as_ptr(), K_CF_STRING_ENCODING_UTF8);
+    let eq = CFStringCompare(first, target, 0) == 0;
+    CFRelease(target as *mut c_void);
+    eq
+}
+
+unsafe fn tis_select_source_by_language(lang: &[u8]) -> bool {
+    let all = TISCreateInputSourceList(std::ptr::null(), false);
+    if all.is_null() {
+        return false;
+    }
+    let count = CFArrayGetCount(all);
+    let target =
+        CFStringCreateWithCString(std::ptr::null(), lang.as_ptr(), K_CF_STRING_ENCODING_UTF8);
+    let mut found = false;
+
+    for i in 0..count {
+        let source = CFArrayGetValueAtIndex(all, i) as *mut c_void;
+        if tis_first_language_matches(source, lang) {
+            let status = TISSelectInputSource(source);
+            if status == 0 {
+                found = true;
+            } else {
+                tracing::warn!("TISSelectInputSource 실패: status={status}");
+            }
+            break;
+        }
+    }
+
+    CFRelease(target as *mut c_void);
+    CFRelease(all);
+    found
+}
+
 // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
 
 /// OS 플래그 기반으로 modifiers_held를 동기화.
@@ -379,7 +463,11 @@ fn sync_modifiers_with_flags(held: &mut HashSet<VKey>, flags: u64) {
 fn execute_action(action: &BindAction) {
     match action {
         BindAction::SendKey(key) => {
-            send_key_press(vkey_to_cg(*key));
+            if matches!(key, VKey::Hangul | VKey::Hanja) {
+                toggle_input_source();
+            } else {
+                send_key_press(vkey_to_cg(*key));
+            }
         }
         BindAction::SendCombo { modifiers, key } => {
             send_combo(modifiers, *key);
@@ -406,6 +494,17 @@ fn execute_action(action: &BindAction) {
             });
         }
     }
+}
+
+/// 레이어 내 액션 실행 — 트리거 modifier(Alt 등)를 일시 해제한 뒤 액션을 보낸다.
+/// 물리적으로 Alt를 누르고 있으면 합성 이벤트(Cmd+Left 등)에 잔여 Alt 플래그가
+/// 간섭할 수 있다. 특히 한글 IME 활성 시 이 간섭이 문제가 된다.
+fn execute_layer_action(action: &BindAction, trigger: VKey) {
+    let trigger_kc = vkey_to_cg(trigger);
+    send_key_event(trigger_kc, false, 0);
+    std::thread::sleep(std::time::Duration::from_millis(2));
+
+    execute_action(action);
 }
 
 // ── 글로벌 상태 ──────────────────────────────────────────────────────────────
@@ -602,6 +701,8 @@ unsafe extern "C" fn event_tap_callback(
 
     // ── 활성 레이어 매핑 확인 ──
     if let Some(layer_idx) = guard.active_layer {
+        let trigger = guard.config.layers[layer_idx].trigger;
+
         // 레이어 내 더블탭 매핑
         let dt_opt = guard.config.layers[layer_idx]
             .double_tap_mappings
@@ -618,7 +719,7 @@ unsafe extern "C" fn event_tap_callback(
                         guard.layer_dt_last_key = None;
                         let action = dt.double_action.clone();
                         drop(guard);
-                        execute_action(&action);
+                        execute_layer_action(&action, trigger);
                         return std::ptr::null_mut();
                     }
                 }
@@ -627,7 +728,7 @@ unsafe extern "C" fn event_tap_callback(
                 guard.layer_dt_last_time = now;
                 let action = dt.single_action.clone();
                 drop(guard);
-                execute_action(&action);
+                execute_layer_action(&action, trigger);
                 return std::ptr::null_mut();
             }
             if is_up {
@@ -643,7 +744,7 @@ unsafe extern "C" fn event_tap_callback(
                 guard.layer_key_used = true;
                 guard.layer_dt_last_key = None;
                 drop(guard);
-                execute_action(&action);
+                execute_layer_action(&action, trigger);
                 return std::ptr::null_mut();
             }
             if is_up {
