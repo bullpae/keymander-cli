@@ -80,11 +80,20 @@ fn spawn_open(target: &str) -> std::io::Result<std::process::Child> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-        // Use a single shell-open path to avoid extra cmd parsing.
-        Command::new("explorer.exe")
-            .arg(target)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
+        let t = target.trim();
+        // explorer.exe + URL 은 탐색기만 뜨는 환경이 있어, http(s)는 기본 브라우저 핸들러로 연다.
+        if t.starts_with("http://") || t.starts_with("https://") {
+            Command::new("rundll32")
+                .arg("url.dll,FileProtocolHandler")
+                .arg(t)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        } else {
+            Command::new("explorer.exe")
+                .arg(target)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        }
     }
 
     #[cfg(target_os = "macos")]
