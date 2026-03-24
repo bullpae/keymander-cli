@@ -26,15 +26,20 @@ pub fn execute(result: &SearchResult) -> ActionResult {
         }
         ItemKind::SystemCommand => execute_system_command(&result.item.name),
         ItemKind::WebSearch => {
-            if let Some(url) = result
-                .item
-                .keywords
-                .split_whitespace()
-                .find(|s| s.starts_with("http"))
-            {
-                open_url(url)
+            let url_from_keywords = result.item.keywords.split_whitespace().find(|s| {
+                s.starts_with("http://") || s.starts_with("https://")
+            });
+            if let Some(url) = url_from_keywords {
+                return open_url(url);
+            }
+            let path = result.item.path.trim();
+            if path.starts_with("http://") || path.starts_with("https://") {
+                open_url(path)
             } else {
-                open_url(&result.item.path)
+                ActionResult::Error(format!(
+                    "웹 항목에 열 수 있는 URL이 없습니다: {}",
+                    result.item.name
+                ))
             }
         }
         ItemKind::Calculator => {

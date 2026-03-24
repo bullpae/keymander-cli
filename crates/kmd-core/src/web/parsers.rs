@@ -65,14 +65,18 @@ pub fn parse_web_query(input: &str) -> Option<(&'static WebService, String)> {
         return None;
     }
     let first_space = input.find(' ');
-    let prefix = &input[..first_space.unwrap_or(input.len())];
+    let prefix_raw = &input[..first_space.unwrap_or(input.len())];
     let query = first_space
         .map(|i| input[i + 1..].trim())
         .unwrap_or("")
         .to_string();
     WEB_SERVICES
         .iter()
-        .find(|s| s.prefixes.contains(&prefix))
+        .find(|s| {
+            s.prefixes
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(prefix_raw))
+        })
         .map(|s| (s, query))
 }
 

@@ -15,7 +15,7 @@ pub use items::{
     build_search_url, build_translate_url, extract_batch_urls, extract_multi_llm_urls,
     extract_multi_web_urls, extract_spell_urls, extract_translate_urls, list_services_as_items,
     multi_llm_result_items, multi_web_result_items, search_result_item, spell_result_items,
-    translate_result_items, url_encode,
+    translate_result_items, url_encode, web_browse_hint_seed,
 };
 
 pub use parsers::{
@@ -42,6 +42,25 @@ mod tests {
         let (service, query) = result.unwrap();
         assert_eq!(service.name, "Google");
         assert_eq!(query, "rust tutorial");
+    }
+
+    #[test]
+    fn test_parse_web_query_prefix_case_insensitive() {
+        let result = parse_web_query("@AI why rust");
+        assert!(result.is_some());
+        let (service, query) = result.unwrap();
+        assert_eq!(service.id, "perplexity");
+        assert_eq!(query, "why rust");
+    }
+
+    #[test]
+    fn test_web_browse_hint_seed() {
+        let items = list_services_as_items("", false);
+        let hint_item = items
+            .iter()
+            .find(|i| i.name.starts_with("@ll "))
+            .expect("ll hint row");
+        assert_eq!(web_browse_hint_seed(&hint_item.keywords), Some("@llm "));
     }
 
     #[test]

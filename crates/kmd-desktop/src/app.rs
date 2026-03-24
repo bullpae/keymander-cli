@@ -1953,6 +1953,15 @@ impl App {
             return iced::exit();
         }
 
+        // `@` 브라우징 가상 항목 — 설명 문구를 explorer로 열지 않고 해당 모드로 전환
+        if result.item.kind == ItemKind::WebSearch {
+            if let Some(seed) = web::web_browse_hint_seed(&result.item.keywords) {
+                self.query = seed.to_string();
+                self.selected = 0;
+                return self.perform_search();
+            }
+        }
+
         // 웹 검색 결과 — extract_batch_urls 통합 추출
         if result.item.kind == ItemKind::WebSearch {
             if let Some(urls) = web::extract_batch_urls(&result.item) {
@@ -2932,7 +2941,7 @@ fn ensure_multi_llm_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F9E0}" } else { "Ml" }.to_string(),
-        keywords: "@ll @llm @multi @cmp multi llm compare".to_string(),
+        keywords: "kmd:web_hint:multi_llm\n@ll @llm @multi @cmp multi llm compare".to_string(),
         icon_path: None,
     });
 }
@@ -2950,7 +2959,7 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
-        keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
+        keywords: "kmd:web_hint:multi_web\n@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
         icon_path: None,
     });
 }

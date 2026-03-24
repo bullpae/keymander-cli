@@ -6,6 +6,18 @@ use super::services::*;
 
 // ── URL 빌드 ──────────────────────────────────────────────────────────────────
 
+/// `@` 브라우징용 가상 항목 — `keywords` 첫 줄이 `kmd:web_hint:*` 이면 입력창에 넣을 프리픽스
+pub fn web_browse_hint_seed(keywords: &str) -> Option<&'static str> {
+    let first = keywords.lines().next()?.trim();
+    match first {
+        "kmd:web_hint:multi_llm" => Some("@llm "),
+        "kmd:web_hint:multi_web" => Some("@msearch "),
+        "kmd:web_hint:spell" => Some("@sp "),
+        "kmd:web_hint:translate" => Some("@tr "),
+        _ => None,
+    }
+}
+
 /// 쿼리를 인코딩해 검색 URL 생성
 pub fn build_search_url(service: &WebService, query: &str) -> String {
     let encoded = url_encode(query);
@@ -62,9 +74,10 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
         })
         .collect();
 
-    // 가상 항목 — @ll, @m, @sp, @tr 발견용
-    let virtual_entries: &[(&str, &str, &str, &str, &[&str])] = &[
+    // 가상 항목 — @ll, @m, @sp, @tr 발견용 (path는 안내 문구이므로 URL로 열리면 안 됨)
+    let virtual_entries: &[(&str, &str, &str, &str, &str, &[&str])] = &[
         (
+            "kmd:web_hint:multi_llm",
             "@ll         Compare multiple LLMs with one prompt",
             "Open selected LLM providers (some may require paste/Enter)",
             if use_emoji { "\u{1F9E0}" } else { "Ml" },
@@ -72,6 +85,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
             &["@llm", "multi llm compare", "@multi", "@cmp"],
         ),
         (
+            "kmd:web_hint:multi_web",
             "@m          Search multiple engines at once",
             "Open Google/Naver/Daum in parallel tabs",
             if use_emoji { "\u{1F50E}" } else { "Mw" },
@@ -85,6 +99,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
             ],
         ),
         (
+            "kmd:web_hint:spell",
             "@sp         Korean spelling check",
             "Run spelling check providers with one query",
             if use_emoji { "\u{270D}\u{FE0F}" } else { "Sp" },
@@ -92,6 +107,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
             &["@sp", "@spell", "spelling"],
         ),
         (
+            "kmd:web_hint:translate",
             "@tr         Translate (auto / ko / en)",
             "Open selected translate providers in parallel",
             if use_emoji { "\u{1F5E3}\u{FE0F}" } else { "Tr" },
@@ -100,7 +116,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
         ),
     ];
 
-    for (name, path, icon, keywords, match_terms) in virtual_entries {
+    for (hint, name, path, icon, keywords, match_terms) in virtual_entries {
         let matched =
             filter_lower.is_empty() || match_terms.iter().any(|t| t.contains(&filter_lower));
         if matched {
@@ -110,7 +126,7 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
                 kind: ItemKind::WebSearch,
                 source: Source::Plugin,
                 icon: icon.to_string(),
-                keywords: keywords.to_string(),
+                keywords: format!("{hint}\n{keywords}"),
                 icon_path: None,
             });
         }
