@@ -1,0 +1,8 @@
+# ── 키맵 설정 (Linux + 데몬) ─────────────────────────────────
+#
+# Linux에서는 내장 키 바인딩 엔진이 아직 스텁입니다.
+# 아래처럼 레이어/콤보를 비우고 active_profile 만 두면
+# 코드 내장 vim-nav 프리셋이 적용됩니다 (향후 evdev 지원 시 OS별 조각을 확장하세요).
+
+[launcher.keymap]
+active_profile = "vim-nav"

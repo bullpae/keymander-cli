@@ -41,7 +41,12 @@ mkdir -p "$STAGE/kmd-data"
 cp target/release/kmd "$STAGE/"
 cp target/release/kmd-desktop "$STAGE/"
 cp target/release/kmd-daemon "$STAGE/"
-cp dist/config.toml "$STAGE/kmd-data/"
+case "$OS" in
+  darwin) CONFIG_PLATFORM=macos ;;
+  linux)  CONFIG_PLATFORM=linux ;;
+  *)      CONFIG_PLATFORM=linux ;;
+esac
+"$SCRIPT_DIR/assemble-config.sh" "$CONFIG_PLATFORM" "$STAGE/kmd-data/config.toml"
 cp dist/README.txt "$STAGE/"
 chmod +x "$STAGE/kmd" "$STAGE/kmd-desktop" "$STAGE/kmd-daemon"
 

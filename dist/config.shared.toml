@@ -1,0 +1,98 @@
+# ============================================================
+# keymander (kmd) — 포터블 공통 설정
+# ============================================================
+#
+# 이 파일 단독으로는 완전한 설정이 아닙니다.
+# 배포 시 dist/config.keymap.<windows|macos|linux>.toml 과 합쳐져 kmd-data/config.toml 이 됩니다.
+#
+# 수동 합치기 (예시):
+#   Windows:  Get-Content dist\config.shared.toml, dist\config.keymap.windows.toml | Set-Content kmd-data\config.toml -Encoding utf8
+#   macOS:    cat dist/config.shared.toml dist/config.keymap.macos.toml > kmd-data/config.toml
+#
+# 설정 변경 방법:
+#   - kmd-desktop 에서 :set 또는 :settings 입력
+#   - kmd (TUI) 에서 F2 키
+#   - CLI: kmd config set general.theme "nord"
+
+# ── 일반 설정 ────────────────────────────────────────────────
+[general]
+# TUI 렌더링 FPS (기본: 30)
+# render_fps = 30
+
+# 미리보기 패널 표시 여부
+# show_preview = true
+# preview_width_percent = 40
+
+# 테마: default | midnight | obsidian | snow | rose_pine | nord
+# theme = "default"
+
+# 이모지 아이콘 사용 (false = ASCII 2자 아이콘으로 대체)
+# Windows 10 레거시 콘솔에서는 자동으로 false 적용
+# emoji_icons = true
+
+# Desktop 실행 시 IME를 영어 모드로 전환
+# reset_ime_on_launch = true
+
+# Desktop 런처 기본 폰트 크기 (px)
+# 모든 UI 요소가 이 값에 비례하여 자동 조절됨 (범위: 12–32, 기본: 16)
+# font_size = 16
+
+# Desktop 런처 결과창에 표시되는 행 수 (범위: 4–20, 기본: 8)
+# visible_rows = 8
+
+# ── 런처 설정 ────────────────────────────────────────────────
+[launcher]
+# 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs
+# file_search_provider = "auto"
+
+# 최대 인덱스 항목 수 (기본: 5000)
+# max_results = 5000
+
+# 파일 탐색 최대 깊이 (기본: 4)
+# search_depth = 4
+
+# 실행 후 창 닫기
+# quit_on_launch = true
+
+# 디렉토리도 인덱스에 포함
+# index_directories = true
+
+# 드라이브 자동 스캔 (C:\, D:\ 등) — Windows
+# scan_drives = false
+# drive_scan_depth = 2
+
+# 검색할 디렉토리 (기본: Desktop, Documents, Downloads)
+# Windows 예: search_paths = ["C:\\Users\\사용자\\Documents", "D:\\Projects"]
+# macOS 예:  search_paths = ["/Users/you/Documents"]
+
+# ── 검색 우선순위 가중치 (0-100, 높을수록 상위) ──────────────
+[launcher.kind_weights]
+# directory = 80
+# app = 70
+# file = 50
+# executable = 40
+# system_cmd = 30
+# web_search = 20
+
+# ── 키 바인딩 ────────────────────────────────────────────────
+[keybindings]
+# kmd-desktop 실행 글로벌 핫키 (데몬 모드에서 동작)
+# vim-nav 레이어와 독립적으로 항상 등록됨
+# 형식: "수정자+키" (예: "alt+space", "ctrl+space", "cmd+j")
+# global_hotkey = "alt+space"
+
+# TUI 키 바인딩
+# quit = "ctrl+c"
+# next = "down"
+# prev = "up"
+# select = "enter"
+# toggle_preview = "ctrl+p"
+
+# ── 데몬 자동 시작 ───────────────────────────────────────────
+# kmd-daemon install   → 부팅 시 자동 시작 등록
+# kmd-daemon uninstall → 자동 시작 해제
+# kmd-daemon status    → 현재 상태 및 자동 시작 등록 여부 확인
+#
+# Windows: Startup 폴더에 VBS 스크립트 생성 (콘솔 창 없이 실행)
+# macOS:   ~/Library/LaunchAgents/com.keymander.daemon.plist
+# Linux:   ~/.config/systemd/user/kmd-daemon.service

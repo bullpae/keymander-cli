@@ -1,0 +1,51 @@
+# ── 키맵 설정 (macOS + 데몬) ─────────────────────────────────
+# Alt(Option) 레이어, 붙여넣기/줄 이동은 Cmd 기준
+
+[launcher.keymap]
+active_profile = "vim-nav"
+
+[launcher.keymap.layers.nav]
+trigger = "LAlt"
+tap_action = "Escape"
+tap_hold_ms = 200
+
+[launcher.keymap.layers.nav.mappings]
+H = "Left"
+J = "Down"
+K = "Up"
+L = "Right"
+N = "PageUp"
+M = "PageDown"
+"." = "Backspace"
+Space = "launch:kmd-desktop"
+P = "Cmd+V"
+Y = "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C"
+
+[launcher.keymap.layers.nav.double_taps.I]
+single = "Alt+Left"
+double = "Cmd+Left"
+timeout_ms = 300
+
+[launcher.keymap.layers.nav.double_taps.O]
+single = "Alt+Right"
+double = "Cmd+Right"
+timeout_ms = 300
+
+[launcher.keymap.layers.nav.double_taps.Slash]
+single = "Delete"
+double = "macro:Cmd+Left;Shift+Cmd+Right;Delete"
+timeout_ms = 300
+
+# Shift+Space는 시스템 입력소스 전환에 맡기는 경우가 많음 (데몬 콤보 생략 가능)
+# [[launcher.keymap.combos]]
+# trigger = "Shift+Space"
+# action = "Hangul"
+
+[[launcher.keymap.double_taps]]
+key = "RShift"
+action = "Hangul"
+timeout_ms = 300
+
+# ── 액션 문자열 형식 ──────────────────────────────────────
+# "Cmd+C" → macOS Command+키
+# 기타는 config.keymap.windows.toml 주석과 동일

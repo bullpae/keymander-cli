@@ -110,7 +110,8 @@ try {
 
     $configDest = Join-Path $dataDir "config.toml"
     if (-not (Test-Path $configDest)) {
-        Copy-Item "dist\config.toml" $dataDir -Force
+        $assemble = Join-Path $ROOT "scripts\assemble-config.ps1"
+        & $assemble -Platform windows -OutFile $configDest
     } else {
         Write-Info "기존 config.toml 유지 (덮어쓰기 안 함)"
     }

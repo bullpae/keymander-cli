@@ -1,0 +1,61 @@
+# ── 키맵 설정 (Windows + 데몬) ─────────────────────────────────
+# Alt = LAlt, 붙여넣기/줄복사는 Ctrl 기준
+
+[launcher.keymap]
+active_profile = "vim-nav"
+
+[launcher.keymap.layers.nav]
+trigger = "LAlt"
+tap_action = "Escape"
+tap_hold_ms = 200
+
+[launcher.keymap.layers.nav.mappings]
+H = "Left"
+J = "Down"
+K = "Up"
+L = "Right"
+N = "PageUp"
+M = "PageDown"
+"." = "Backspace"
+Space = "launch:kmd-desktop"
+P = "Ctrl+V"
+Y = "macro:Home;Shift+End;Ctrl+C"
+
+[launcher.keymap.layers.nav.double_taps.I]
+single = "Alt+Left"
+double = "Home"
+timeout_ms = 300
+
+[launcher.keymap.layers.nav.double_taps.O]
+single = "Alt+Right"
+double = "End"
+timeout_ms = 300
+
+[launcher.keymap.layers.nav.double_taps.Slash]
+single = "Delete"
+double = "macro:Home;Shift+End;Delete"
+timeout_ms = 300
+
+# Shift+Space 한영: 데몬이 기본 등록. 재정의하려면 아래 주석 해제.
+# [[launcher.keymap.combos]]
+# trigger = "Shift+Space"
+# action = "Hangul"
+
+[[launcher.keymap.double_taps]]
+key = "RShift"
+action = "Hangul"
+timeout_ms = 300
+
+# ── 액션 문자열 형식 ──────────────────────────────────────
+# "Home"              → 단일 키 전송
+# "Ctrl+Left"         → 수정자+키 콤보 전송
+# "Cmd+C"             → macOS에서만 Command (Windows에서는 LWin 매핑)
+# "launch:kmd-desktop" → 프로그램 실행
+# "macro:Home;Shift+End;Ctrl+C" → 여러 키 순차 실행 (;로 구분)
+#
+# 수정자: Ctrl, Shift, Alt, Cmd (= Win/Super/Meta)
+# 키 이름: a-z, 0-9, f1-f12, Home, End, Left, Right, Up, Down,
+#          PageUp, PageDown, Space, Enter, Escape, Tab, CapsLock,
+#          Backspace, Delete, Insert, LAlt, RAlt, LCtrl, RCtrl,
+#          LShift, RShift, LWin, Hangul, Hanja, Semicolon, Comma,
+#          Period, Slash, Backslash, LBracket, RBracket, Minus, Equal

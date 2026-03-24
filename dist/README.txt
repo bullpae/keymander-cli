@@ -85,6 +85,10 @@
   방법 3: kmd (TUI) 에서 F2 키
   방법 4: kmd config set general.theme "nord"
 
+  (소스에서 번들을 만들 때) Windows/macOS 키맵이 섞이지 않도록
+  저장소의 dist/config.shared.toml + dist/config.keymap.<os>.toml 을
+  합쳐 kmd-data/config.toml 을 만듭니다. 자세한 내용은 dist/CONFIG.md 참고.
+
 ------------------------------------------------------------
   커스텀 키 매핑 설정
 ------------------------------------------------------------

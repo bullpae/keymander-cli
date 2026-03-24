@@ -160,7 +160,12 @@ jobs:
           cp "target/${{ matrix.target }}/release/kmd${{ matrix.ext }}" "$STAGE/"
           cp "target/${{ matrix.target }}/release/kmd-desktop${{ matrix.ext }}" "$STAGE/"
           cp "target/${{ matrix.target }}/release/kmd-daemon${{ matrix.ext }}" "$STAGE/"
-          cp dist/config.toml "$STAGE/kmd-data/"
+          case "${{ matrix.target }}" in
+            *windows*) KEYMAP=windows ;;
+            *apple-darwin*) KEYMAP=macos ;;
+            *) KEYMAP=linux ;;
+          esac
+          cat dist/config.shared.toml "dist/config.keymap.${KEYMAP}.toml" > "$STAGE/kmd-data/config.toml"
           cp dist/README.txt "$STAGE/"
 
       - name: Package (Unix)

@@ -41,7 +41,8 @@ try {
     Copy-Item "target\release\kmd.exe" $stage
     Copy-Item "target\release\kmd-desktop.exe" $stage
     Copy-Item "target\release\kmd-daemon.exe" $stage
-    Copy-Item "dist\config.toml" "$stage\kmd-data\"
+    $assemble = Join-Path $ROOT "scripts\assemble-config.ps1"
+    & $assemble -Platform windows -OutFile (Join-Path $stage "kmd-data\config.toml")
     Copy-Item "dist\README.txt" $stage
 
     Write-Host "`n[3/4] Creating ZIP..." -ForegroundColor Yellow
