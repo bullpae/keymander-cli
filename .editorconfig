@@ -1,0 +1,5 @@
+root = true
+
+# Windows PowerShell 5.x: 한글 리터럴이 깨지지 않으려면 스크립트를 UTF-8 BOM으로 저장할 것
+[*.ps1]
+charset = utf-8-bom

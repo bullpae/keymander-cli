@@ -1,3 +1,6 @@
+﻿# UTF-8 BOM 권장: Windows PowerShell 5.x는 BOM 없으면 이 파일을 cp949로 읽어 한글이 깨짐.
+# Cursor에서 저장 시 'UTF-8 with BOM'으로 저장하거나, 저장소의 파일은 BOM이 붙어 있어야 함.
+
 # ============================================================
 # keymander Windows 로컬 배포 스크립트
 # ============================================================
@@ -38,10 +41,10 @@ if (-not (Test-Path "$ROOT\Cargo.toml")) {
 }
 
 # ── 컬러 헬퍼 ───────────────────────────────────────────────
-function Write-Info  { param([string]$Msg) Write-Host "▸ $Msg" -ForegroundColor Cyan }
-function Write-Ok    { param([string]$Msg) Write-Host "✓ $Msg" -ForegroundColor Green }
-function Write-Warn  { param([string]$Msg) Write-Host "! $Msg" -ForegroundColor Yellow }
-function Write-Fail  { param([string]$Msg) Write-Host "✗ $Msg" -ForegroundColor Red; exit 1 }
+function Write-Info  { param([string]$Msg) Write-Host "[.] $Msg" -ForegroundColor Cyan }
+function Write-Ok    { param([string]$Msg) Write-Host "[ok] $Msg" -ForegroundColor Green }
+function Write-Warn  { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
+function Write-Fail  { param([string]$Msg) Write-Host "[x] $Msg" -ForegroundColor Red; exit 1 }
 
 # ── 프로세스 종료/시작 ────────────────────────────────────────
 function Stop-KmdProcesses {
