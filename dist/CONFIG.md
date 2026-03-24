@@ -22,3 +22,11 @@ The bundle `kmd-data/config.toml` is **assembled** from:
   `./scripts/assemble-config.sh linux kmd-data/config.toml`
 
 Deploy and portable build scripts call these automatically.
+
+## vim-nav 레이어: Alt+I / Alt+O (플랫폼별 단어 이동)
+
+| OS | 한 번 탭 (단어 이동) | 더블 탭 (줄 시작/끝) |
+|----|----------------------|------------------------|
+| **Windows** | `Ctrl+Left` / `Ctrl+Right` | `Home` / `End` |
+| **macOS** | `Alt+Left` / `Alt+Right` (Option+화살표) | `Cmd+Left` / `Cmd+Right` |
+| **Linux** | (스텁) 코드 프리셋과 동일 → **Ctrl+화살표** / Home·End | 내장 `vim_nav_preset` 참고 |

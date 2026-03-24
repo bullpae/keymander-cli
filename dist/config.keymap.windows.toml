@@ -1,5 +1,6 @@
 # ── 키맵 설정 (Windows + 데몬) ─────────────────────────────────
-# Alt = LAlt, 붙여넣기/줄복사는 Ctrl 기준
+# LAlt 홀드 = 네비 레이어. 단어 단위 이동은 Windows 표준대로 Ctrl+화살표 (Alt+화살표 아님).
+# 붙여넣기 P=Ctrl+V, 줄복사 Y=Home→Shift+End→Ctrl+C
 
 [launcher.keymap]
 active_profile = "vim-nav"
@@ -22,12 +23,12 @@ P = "Ctrl+V"
 Y = "macro:Home;Shift+End;Ctrl+C"
 
 [launcher.keymap.layers.nav.double_taps.I]
-single = "Alt+Left"
+single = "Ctrl+Left"
 double = "Home"
 timeout_ms = 300
 
 [launcher.keymap.layers.nav.double_taps.O]
-single = "Alt+Right"
+single = "Ctrl+Right"
 double = "End"
 timeout_ms = 300
 

@@ -1,5 +1,6 @@
 # ── 키맵 설정 (macOS + 데몬) ─────────────────────────────────
-# Alt(Option) 레이어, 붙여넣기/줄 이동은 Cmd 기준
+# LAlt(Option) 홀드 = 네비 레이어. 단어 단위 이동은 macOS 표준 Alt+Left/Right(= Option+화살표).
+# 줄 처음/끝 더블탭은 Cmd+Left/Right. 붙여넣기 P=Cmd+V.
 
 [launcher.keymap]
 active_profile = "vim-nav"
@@ -21,11 +22,13 @@ Space = "launch:kmd-desktop"
 P = "Cmd+V"
 Y = "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C"
 
+# Alt+I 한 번: 이전 단어 (Option+←), 더블: 줄 시작 (Cmd+←)
 [launcher.keymap.layers.nav.double_taps.I]
 single = "Alt+Left"
 double = "Cmd+Left"
 timeout_ms = 300
 
+# Alt+O 한 번: 다음 단어 (Option+→), 더블: 줄 끝 (Cmd+→)
 [launcher.keymap.layers.nav.double_taps.O]
 single = "Alt+Right"
 double = "Cmd+Right"
