@@ -18,6 +18,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# ── 콘솔 인코딩 (한글/특수문자 깨짐 방지) ───────────────────
+# PowerShell 5.x + Cursor·기본 cmd 터미널에서 UTF-8 스크립트를 실행할 때
+# [Console]::OutputEncoding 이 cp949 등이면 Write-Host 출력이 MOJIBAKE 로 보임.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+    chcp 65001 | Out-Null
+} catch { }
+
 # ── 프로젝트 루트 탐색 ──────────────────────────────────────
 $ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not (Test-Path "$ROOT\Cargo.toml")) {
