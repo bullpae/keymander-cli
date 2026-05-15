@@ -13,10 +13,12 @@ mod app_icons;
 mod brand_icons;
 mod engine;
 mod platform;
+mod query_prefix;
 mod theme;
 mod window_state;
 
 use iced::{window, Color, Point, Size};
+use std::fs::{self, OpenOptions};
 use std::sync::Mutex;
 
 use crate::app::{full_window_height, DEFAULT_WIDTH};
@@ -58,19 +60,53 @@ fn main() -> iced::Result {
         return Ok(());
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("kmd_desktop=info".parse().unwrap())
-                .add_directive("kmd_core=info".parse().unwrap()),
-        )
-        .with_target(false)
-        .init();
+    let desktop_data_dir = kmd_core::Config::default_data_dir().join("desktop");
+    let log_dir = desktop_data_dir.join("logs");
+    let log_path = log_dir.join("desktop.log");
+
+    let make_filter = || {
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive("kmd_desktop=warn".parse().unwrap())
+            .add_directive("kmd_core=warn".parse().unwrap())
+    };
+
+    let log_file = fs::create_dir_all(&log_dir).ok().and_then(|_| {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()
+    });
+
+    // 파일 I/O를 백그라운드 스레드로 오프로드 — 키 입력마다 UI 스레드가 디스크
+    // 쓰기로 멈추지 않게 한다. WorkerGuard는 main 종료 시점까지 살아 있어야
+    // 버퍼에 남은 로그가 flush된다.
+    let _log_guard = match log_file {
+        Some(file) => {
+            let (non_blocking, guard) = tracing_appender::non_blocking(file);
+            tracing_subscriber::fmt()
+                .with_env_filter(make_filter())
+                .with_target(false)
+                .with_ansi(false)
+                .with_writer(non_blocking)
+                .init();
+            tracing::info!("로그 파일 경로: {}", log_path.display());
+            Some(guard)
+        }
+        None => {
+            tracing_subscriber::fmt()
+                .with_env_filter(make_filter())
+                .with_target(false)
+                .init();
+            tracing::warn!("파일 로그 초기화 실패: 콘솔 출력만 사용");
+            None
+        }
+    };
 
     tracing::info!("Starting keymander Desktop");
 
     // ── Singleton toggle ──────────────────────────────────────────────────
-    let data_dir = kmd_core::Config::default_data_dir().join("desktop");
+    let data_dir = desktop_data_dir;
     let guard = match kmd_core::single_instance::acquire_or_toggle(&data_dir) {
         kmd_core::single_instance::InstanceAction::Acquired(guard) => guard,
         kmd_core::single_instance::InstanceAction::SignalledExisting => {

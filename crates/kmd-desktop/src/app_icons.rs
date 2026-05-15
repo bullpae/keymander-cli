@@ -83,6 +83,53 @@ pub fn app_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) ->
     }
 }
 
+/// 아이템의 캐시 키 계산 — `app_icon_for_item`의 키 규칙과 동일하게 유지.
+fn cache_key_for(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<String> {
+    if path.is_empty() || path.starts_with("http") || path.starts_with("kmd:") {
+        return None;
+    }
+    match kind {
+        ItemKind::App | ItemKind::Executable => Some(icon_path.unwrap_or(path).to_string()),
+        ItemKind::File => {
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext.is_empty() {
+                None
+            } else if ext == "lnk" {
+                Some(path.to_string())
+            } else {
+                Some(format!("ext:{ext}"))
+            }
+        }
+        ItemKind::Directory => Some("type:dir".to_string()),
+        _ => None,
+    }
+}
+
+/// 이미 캐시에 있는 아이콘만 반환 — OS 추출을 수행하지 않는 논블로킹 조회.
+///
+/// `view()`에서 호출되어 렌더 스레드가 셸 API 호출로 멈추는 것을 막는다.
+/// 캐시 미스 시 `None`을 반환하므로 호출부는 텍스트 placeholder를 그린다.
+/// 실제 추출은 `prefetch_icons`가 백그라운드 스레드에서 채운다.
+pub fn cached_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>) -> Option<Handle> {
+    let cache_key = cache_key_for(kind, path, icon_path)?;
+    let cache = ICON_CACHE.lock().ok()?;
+    cache.get(&cache_key).cloned().flatten()
+}
+
+/// 주어진 아이템들의 아이콘을 OS에서 추출해 캐시에 채운다 (블로킹).
+///
+/// 백그라운드 스레드(`spawn_blocking`)에서 호출되어야 한다. 이미 캐시된
+/// 항목은 `app_icon_for_item` 내부에서 건너뛰므로 반복 호출이 저렴하다.
+pub fn prefetch_icons(items: &[(ItemKind, String, Option<String>)]) {
+    for (kind, path, icon_path) in items {
+        let _ = app_icon_for_item(*kind, path, icon_path.as_deref());
+    }
+}
+
 /// PNG/이미지 바이트 → TARGET_ICON_SIZE 리사이즈 → Handle
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn png_bytes_to_handle(png_data: &[u8]) -> Option<Handle> {

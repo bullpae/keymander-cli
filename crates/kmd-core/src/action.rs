@@ -26,9 +26,11 @@ pub fn execute(result: &SearchResult) -> ActionResult {
         }
         ItemKind::SystemCommand => execute_system_command(&result.item.name),
         ItemKind::WebSearch => {
-            let url_from_keywords = result.item.keywords.split_whitespace().find(|s| {
-                s.starts_with("http://") || s.starts_with("https://")
-            });
+            let url_from_keywords = result
+                .item
+                .keywords
+                .split_whitespace()
+                .find(|s| s.starts_with("http://") || s.starts_with("https://"));
             if let Some(url) = url_from_keywords {
                 return open_url(url);
             }

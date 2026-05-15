@@ -1,0 +1,195 @@
+use super::*;
+
+impl App {
+    fn unfocused_typing_grace_ms(&self) -> u64 {
+        if cfg!(target_os = "macos") {
+            1500
+        } else {
+            500
+        }
+    }
+
+    fn should_hold_unfocus_for_ime(&self) -> bool {
+        if self.query.is_empty() {
+            return false;
+        }
+        let typing_recently = self.last_query_changed_at.elapsed()
+            < Duration::from_millis(self.unfocused_typing_grace_ms());
+        if typing_recently {
+            return true;
+        }
+        cfg!(target_os = "macos") && self.should_limit_reorder_for_ime()
+    }
+
+    pub(super) fn handle_got_raw_window_id(&mut self, raw_id: u64) -> Task<Message> {
+        self.log_ime_state("GotRawWindowId:start");
+        self.raw_window_id = Some(raw_id);
+        crate::platform::force_square_corners(raw_id);
+        crate::platform::force_foreground(raw_id);
+        if self.reset_ime_on_launch {
+            crate::platform::force_english_ime(raw_id);
+        }
+        if self.query.is_empty() {
+            let focus = self.request_focus();
+            #[cfg(target_os = "windows")]
+            {
+                Task::batch([focus, Self::schedule_focus_retry(1)])
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                focus
+            }
+        } else {
+            Task::none()
+        }
+    }
+
+    pub(super) fn handle_ensure_focus(&mut self, attempt: u8) -> Task<Message> {
+        self.log_ime_state("EnsureFocus:start");
+        if attempt > MAX_FOCUS_RETRIES || !self.query.is_empty() {
+            self.log_ime_state("EnsureFocus:skip");
+            return Task::none();
+        }
+
+        if !self.window_focused {
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(raw_id) = self.raw_window_id {
+                    if !crate::platform::is_our_window_foreground(raw_id) {
+                        return Task::none();
+                    }
+                } else {
+                    return Task::none();
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            return Task::none();
+        }
+
+        let focus_task = self.request_focus();
+        if attempt == MAX_FOCUS_RETRIES {
+            focus_task
+        } else {
+            Task::batch([focus_task, Self::schedule_focus_retry(attempt + 1)])
+        }
+    }
+
+    pub(super) fn handle_window_event(&mut self, event: window::Event) -> Task<Message> {
+        match event {
+            window::Event::Focused => {
+                self.log_ime_state("WindowEvent:Focused");
+                self.window_focused = true;
+                // 부팅 안정화 구간이면 이미 initial_boot_tasks에서 포커스를 줬으므로 skip
+                if self.is_boot_settled() {
+                    self.log_ime_state("WindowEvent:Focused:skip_boot_settling");
+                    return Task::none();
+                }
+                let typing_recently =
+                    self.last_query_changed_at.elapsed() < Duration::from_millis(700);
+                if !self.query.is_empty() && typing_recently {
+                    self.log_ime_state("WindowEvent:Focused:skip_recent_typing");
+                    return Task::none();
+                }
+                let focus_now = self.request_focus();
+                if self.query.is_empty() {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let focus_retry = Self::schedule_focus_retry(1);
+                        return Task::batch([focus_now, focus_retry]);
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        return focus_now;
+                    }
+                }
+                focus_now
+            }
+            window::Event::Moved(point) => {
+                self.window_state.x = Some(point.x);
+                self.window_state.y = Some(point.y);
+                self.state_dirty = true;
+                Task::none()
+            }
+            window::Event::Resized(size) => {
+                // 사용자 드래그 리사이즈 시 base width 저장
+                let w = size.width.max(420.0);
+                if (w - self.window_width).abs() > 1.0 {
+                    self.window_width = w;
+                    self.window_state.width = Some(w);
+                    self.state_dirty = true;
+                }
+                Task::none()
+            }
+            window::Event::Unfocused => {
+                self.log_ime_state("WindowEvent:Unfocused");
+                // 부팅 안정화 구간: macOS는 창 생성 직후 Unfocused를 보내므로 무시
+                if self.is_boot_settled() {
+                    self.log_ime_state("WindowEvent:Unfocused:ignored_boot_settling");
+                    return Task::none();
+                }
+                if self.should_hold_unfocus_for_ime() {
+                    self.log_ime_state("WindowEvent:Unfocused:ignored_ime_grace");
+                    return Task::none();
+                }
+                self.window_focused = false;
+                Task::future(async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    Message::CheckUnfocusedExit
+                })
+            }
+            _ => Task::none(),
+        }
+    }
+
+    pub(super) fn handle_delayed_refocus(&mut self) -> Task<Message> {
+        self.log_ime_state("DelayedRefocus:start");
+        // IME 조합 중(최근 타이핑)에는 지연 refocus가 조합 상태를 깨뜨릴 수 있다.
+        if !self.query.is_empty()
+            && self.last_query_changed_at.elapsed() < Duration::from_millis(350)
+        {
+            self.log_ime_state("DelayedRefocus:skip_recent_typing");
+            return Task::none();
+        }
+        self.focus_request_count += 1;
+        iced::widget::operation::focus::<Message>(self.input_id.clone())
+    }
+
+    pub(super) fn handle_check_unfocused_exit(&mut self) -> Task<Message> {
+        self.log_ime_state("CheckUnfocusedExit:start");
+        if self.window_focused {
+            return Task::none();
+        }
+
+        #[cfg(target_os = "macos")]
+        if self.should_hold_unfocus_for_ime() {
+            self.log_ime_state("CheckUnfocusedExit:retry_ime_grace");
+            return Task::future(async {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                Message::CheckUnfocusedExit
+            });
+        }
+
+        // Windows: GetForegroundWindow로 정확히 확인
+        #[cfg(target_os = "windows")]
+        if let Some(raw_id) = self.raw_window_id {
+            if crate::platform::is_our_window_foreground(raw_id) {
+                self.window_focused = true;
+                let typing_recently =
+                    self.last_query_changed_at.elapsed() < Duration::from_millis(700);
+                if !self.query.is_empty() && typing_recently {
+                    return Task::none();
+                }
+                let focus_now = self.request_focus();
+                let focus_retry = Self::schedule_focus_retry(1);
+                return Task::batch([focus_now, focus_retry]);
+            }
+        }
+        // macOS/Linux: spurious unfocus는 이미 Unfocused 핸들러에서 차단했으므로
+        // 여기까지 도달했다면 실제 포커스 유실이다.
+
+        if self.state_dirty {
+            self.window_state.save();
+        }
+        iced::exit()
+    }
+}

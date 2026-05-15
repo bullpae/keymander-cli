@@ -2,7 +2,7 @@
 //!
 //! Extracted so that `app.rs` focuses only on Elm state/update/view,
 //! and this module handles all kmd-core integration concerns.
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 const QUICK_INDEX_CACHE_FILENAME: &str = "quick-index.json";
 const QUICK_INDEX_CACHE_BIN_FILENAME: &str = "quick-index.bin";
@@ -21,38 +21,6 @@ pub fn load_config() -> kmd_core::Config {
             kmd_core::Config::default()
         }
     }
-}
-
-/// Full index 캐시가 24시간 이내에 빌드되었으면 true.
-/// bincode → JSON 순으로 확인.
-pub fn is_full_index_cache_fresh() -> bool {
-    let data_dir = kmd_core::Config::default_data_dir();
-
-    // bincode 캐시 먼저 확인
-    let bin_path = data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME);
-    if let Ok(meta) = std::fs::metadata(&bin_path) {
-        if let Ok(modified) = meta.modified() {
-            let age = SystemTime::now()
-                .duration_since(modified)
-                .unwrap_or(Duration::from_secs(u64::MAX));
-            if age.as_secs() < INDEX_FRESHNESS_SECS {
-                return true;
-            }
-        }
-    }
-
-    // JSON fallback
-    let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
-    let Ok(meta) = std::fs::metadata(&json_path) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    let age = SystemTime::now()
-        .duration_since(modified)
-        .unwrap_or(Duration::from_secs(u64::MAX));
-    age.as_secs() < INDEX_FRESHNESS_SECS
 }
 
 /// Build a search engine loaded with the full index.

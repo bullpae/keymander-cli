@@ -811,19 +811,13 @@ fn parse_action(s: &str) -> Option<BindAction> {
 
     // 수정자+키 콤보 (예: "Ctrl+Left", "Ctrl+Shift+End")
     if s.contains('+') {
-        let parts: Vec<&str> = s.split('+').collect();
-        if parts.len() >= 2 {
-            let key_str = parts.last().unwrap().trim();
-            let mod_strs = &parts[..parts.len() - 1];
-
-            if let Some(key) = VKey::from_name(key_str) {
-                let modifiers: Vec<VKey> = mod_strs
-                    .iter()
-                    .filter_map(|m| parse_modifier_vkey(m.trim()))
-                    .collect();
-                if !modifiers.is_empty() {
-                    return Some(BindAction::SendCombo { modifiers, key });
-                }
+        if let Some((mod_strs, key)) = parse_combo_vkeys(s) {
+            let modifiers: Vec<VKey> = mod_strs
+                .iter()
+                .filter_map(|m| parse_modifier_vkey(m.trim()))
+                .collect();
+            if !modifiers.is_empty() {
+                return Some(BindAction::SendCombo { modifiers, key });
             }
         }
     }
@@ -857,12 +851,8 @@ fn parse_modifier(name: &str) -> Option<Modifier> {
 
 /// 콤보 트리거 문자열 파서 (예: "Shift+Space", "Alt+Space" → ComboTrigger)
 pub fn parse_combo_trigger(s: &str) -> Option<ComboTrigger> {
-    let parts: Vec<&str> = s.split('+').collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    let key = VKey::from_name(parts.last().unwrap().trim())?;
-    let modifiers: Vec<Modifier> = parts[..parts.len() - 1]
+    let (mod_strs, key) = parse_combo_vkeys(s)?;
+    let modifiers: Vec<Modifier> = mod_strs
         .iter()
         .filter_map(|m| parse_modifier(m.trim()))
         .collect();
@@ -881,9 +871,8 @@ fn parse_macro(s: &str) -> Option<BindAction> {
             continue;
         }
         if part.contains('+') {
-            let parts: Vec<&str> = part.split('+').collect();
-            let key = VKey::from_name(parts.last().unwrap().trim())?;
-            let modifiers: Vec<VKey> = parts[..parts.len() - 1]
+            let (mod_strs, key) = parse_combo_vkeys(part)?;
+            let modifiers: Vec<VKey> = mod_strs
                 .iter()
                 .filter_map(|m| parse_modifier_vkey(m.trim()))
                 .collect();
@@ -899,6 +888,22 @@ fn parse_macro(s: &str) -> Option<BindAction> {
     } else {
         Some(BindAction::Macro(steps))
     }
+}
+
+fn parse_combo_vkeys(s: &str) -> Option<(Vec<&str>, VKey)> {
+    let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (key_str, mod_strs) = parts.split_last()?;
+    if key_str.is_empty() {
+        return None;
+    }
+    if mod_strs.iter().any(|m| m.is_empty()) {
+        return None;
+    }
+    let key = VKey::from_name(key_str)?;
+    Some((mod_strs.to_vec(), key))
 }
 
 // ── Backend trait ────────────────────────────────────────────────────────────
@@ -1068,6 +1073,9 @@ mod tests {
             }
             _ => panic!("Ctrl+Shift+End -> SendCombo 예상"),
         }
+
+        assert!(parse_action("Ctrl+").is_none(), "키 누락 콤보는 실패");
+        assert!(parse_action("+End").is_none(), "수정자 누락 콤보는 실패");
     }
 
     #[test]
@@ -1099,6 +1107,14 @@ mod tests {
         assert!(
             parse_combo_trigger("Space").is_none(),
             "수정자 없는 트리거는 실패"
+        );
+        assert!(
+            parse_combo_trigger("Shift+").is_none(),
+            "키가 비어 있으면 실패"
+        );
+        assert!(
+            parse_combo_trigger("+Space").is_none(),
+            "수정자가 비어 있으면 실패"
         );
     }
 

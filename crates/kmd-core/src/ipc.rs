@@ -21,6 +21,12 @@ pub enum Request {
     RebuildIndex,
     /// 데몬 상태 조회
     Status,
+    /// 자동 시작 등록 상태 조회
+    AutostartStatus,
+    /// 자동 시작 등록
+    AutostartEnable,
+    /// 자동 시작 해제
+    AutostartDisable,
     /// 데몬 종료
     Shutdown,
     /// 연결 확인
@@ -44,6 +50,8 @@ pub enum Response {
         index_items: usize,
         pid: u32,
     },
+    /// 자동 시작 등록 상태
+    AutostartStatus { installed: bool },
     /// 단순 성공
     Ok { message: String },
     /// 에러

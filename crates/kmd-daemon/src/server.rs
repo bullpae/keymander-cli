@@ -1,5 +1,6 @@
 //! TCP IPC 서버 — 검색 엔진 메모리 상주 + 요청 처리
 
+use crate::autostart;
 use crate::keybind::{self, KeybindConfig};
 use kmd_core::ipc::{self, Request, Response, SearchHit};
 use kmd_core::{Config, Index, SearchEngine};
@@ -133,6 +134,28 @@ fn process_request(
                 pid: std::process::id(),
             }
         }
+
+        Request::AutostartStatus => Response::AutostartStatus {
+            installed: autostart::is_installed(),
+        },
+
+        Request::AutostartEnable => match autostart::install() {
+            Ok(detail) => Response::Ok {
+                message: format!("자동 시작 등록 완료 ({detail})"),
+            },
+            Err(e) => Response::Error {
+                message: format!("자동 시작 등록 실패: {e}"),
+            },
+        },
+
+        Request::AutostartDisable => match autostart::uninstall() {
+            Ok(()) => Response::Ok {
+                message: "자동 시작 해제 완료".into(),
+            },
+            Err(e) => Response::Error {
+                message: format!("자동 시작 해제 실패: {e}"),
+            },
+        },
 
         Request::Search { query, limit } => {
             let results = match engine.lock() {

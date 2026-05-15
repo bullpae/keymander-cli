@@ -4,6 +4,61 @@ use crate::index::{IndexItem, ItemKind, Source};
 
 use super::services::*;
 
+struct VirtualBrowseEntry {
+    hint: &'static str,
+    name: &'static str,
+    path: &'static str,
+    emoji_icon: &'static str,
+    ascii_icon: &'static str,
+    keywords: &'static str,
+    match_terms: &'static [&'static str],
+}
+
+const VIRTUAL_BROWSE_ENTRIES: &[VirtualBrowseEntry] = &[
+    VirtualBrowseEntry {
+        hint: "kmd:web_hint:multi_llm",
+        name: "@ll         Compare multiple LLMs with one prompt",
+        path: "Open selected LLM providers (some may require paste/Enter)",
+        emoji_icon: "\u{1F9E0}",
+        ascii_icon: "Ml",
+        keywords: "@ll @llm @multi @cmp multi llm compare",
+        match_terms: &["@llm", "multi llm compare", "@multi", "@cmp"],
+    },
+    VirtualBrowseEntry {
+        hint: "kmd:web_hint:multi_web",
+        name: "@m          Search multiple engines at once",
+        path: "Open Google/Naver/Daum in parallel tabs",
+        emoji_icon: "\u{1F50E}",
+        ascii_icon: "Mw",
+        keywords: "@m @mw @msearch @multisearch @searchall @krsearch multi web",
+        match_terms: &[
+            "@msearch",
+            "@multisearch",
+            "@searchall",
+            "@krsearch",
+            "multi web search",
+        ],
+    },
+    VirtualBrowseEntry {
+        hint: "kmd:web_hint:spell",
+        name: "@sp         Korean spelling check",
+        path: "Run spelling check providers with one query",
+        emoji_icon: "\u{270D}\u{FE0F}",
+        ascii_icon: "Sp",
+        keywords: "@sp @spell spelling checker",
+        match_terms: &["@sp", "@spell", "spelling"],
+    },
+    VirtualBrowseEntry {
+        hint: "kmd:web_hint:translate",
+        name: "@tr         Translate (auto / ko / en)",
+        path: "Open selected translate providers in parallel",
+        emoji_icon: "\u{1F5E3}\u{FE0F}",
+        ascii_icon: "Tr",
+        keywords: "@tr @trko @tren translate",
+        match_terms: &["@tr", "@trko", "@tren", "translate"],
+    },
+];
+
 // ── URL 빌드 ──────────────────────────────────────────────────────────────────
 
 /// `@` 브라우징용 가상 항목 — `keywords` 첫 줄이 `kmd:web_hint:*` 이면 입력창에 넣을 프리픽스
@@ -75,58 +130,22 @@ pub fn list_services_as_items(filter: &str, use_emoji: bool) -> Vec<IndexItem> {
         .collect();
 
     // 가상 항목 — @ll, @m, @sp, @tr 발견용 (path는 안내 문구이므로 URL로 열리면 안 됨)
-    let virtual_entries: &[(&str, &str, &str, &str, &str, &[&str])] = &[
-        (
-            "kmd:web_hint:multi_llm",
-            "@ll         Compare multiple LLMs with one prompt",
-            "Open selected LLM providers (some may require paste/Enter)",
-            if use_emoji { "\u{1F9E0}" } else { "Ml" },
-            "@ll @llm @multi @cmp multi llm compare",
-            &["@llm", "multi llm compare", "@multi", "@cmp"],
-        ),
-        (
-            "kmd:web_hint:multi_web",
-            "@m          Search multiple engines at once",
-            "Open Google/Naver/Daum in parallel tabs",
-            if use_emoji { "\u{1F50E}" } else { "Mw" },
-            "@m @mw @msearch @multisearch @searchall @krsearch multi web",
-            &[
-                "@msearch",
-                "@multisearch",
-                "@searchall",
-                "@krsearch",
-                "multi web search",
-            ],
-        ),
-        (
-            "kmd:web_hint:spell",
-            "@sp         Korean spelling check",
-            "Run spelling check providers with one query",
-            if use_emoji { "\u{270D}\u{FE0F}" } else { "Sp" },
-            "@sp @spell spelling checker",
-            &["@sp", "@spell", "spelling"],
-        ),
-        (
-            "kmd:web_hint:translate",
-            "@tr         Translate (auto / ko / en)",
-            "Open selected translate providers in parallel",
-            if use_emoji { "\u{1F5E3}\u{FE0F}" } else { "Tr" },
-            "@tr @trko @tren translate",
-            &["@tr", "@trko", "@tren", "translate"],
-        ),
-    ];
-
-    for (hint, name, path, icon, keywords, match_terms) in virtual_entries {
+    for entry in VIRTUAL_BROWSE_ENTRIES {
         let matched =
-            filter_lower.is_empty() || match_terms.iter().any(|t| t.contains(&filter_lower));
+            filter_lower.is_empty() || entry.match_terms.iter().any(|t| t.contains(&filter_lower));
         if matched {
             items.push(IndexItem {
-                name: name.to_string(),
-                path: path.to_string(),
+                name: entry.name.to_string(),
+                path: entry.path.to_string(),
                 kind: ItemKind::WebSearch,
                 source: Source::Plugin,
-                icon: icon.to_string(),
-                keywords: format!("{hint}\n{keywords}"),
+                icon: if use_emoji {
+                    entry.emoji_icon
+                } else {
+                    entry.ascii_icon
+                }
+                .to_string(),
+                keywords: format!("{}\n{}", entry.hint, entry.keywords),
                 icon_path: None,
             });
         }

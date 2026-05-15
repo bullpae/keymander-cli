@@ -489,6 +489,9 @@ fn execute_action(action: &BindAction) {
             let resolved = resolve_launch_cmd(cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
+                // macOS에서 Alt/Space 단축키 직후 즉시 실행하면 modifier 해제/IME 초기 조합
+                // 타이밍과 겹쳐 첫 한글 조합이 깨질 수 있다. 짧은 지연 후 실행한다.
+                std::thread::sleep(std::time::Duration::from_millis(45));
                 if let Err(e) = std::process::Command::new(&resolved).spawn() {
                     tracing::error!("프로그램 실행 실패: {resolved} — {e}");
                 }
@@ -504,6 +507,13 @@ fn execute_action(action: &BindAction) {
 /// 단순 keyUp이 아닌 flagsChanged(타입 12) 이벤트를 직접 생성하여
 /// OS modifier 상태를 확실히 클리어한다.
 fn execute_layer_action(action: &BindAction, trigger: VKey) {
+    // Launch 액션은 합성 키 조합을 보내지 않으므로, trigger modifier(Alt) 강제 해제가
+    // 오히려 런처 최초 IME 조합 컨텍스트를 깨뜨릴 수 있다.
+    if matches!(action, BindAction::Launch(_)) {
+        execute_action(action);
+        return;
+    }
+
     unsafe {
         let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
         if !source.is_null() {

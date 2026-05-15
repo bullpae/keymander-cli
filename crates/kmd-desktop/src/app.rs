@@ -11,6 +11,10 @@
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use iced::keyboard;
 use iced::widget::operation::scroll_to;
@@ -31,6 +35,9 @@ use kmd_core::{IndexItem, ItemKind, Source};
 
 use crate::theme::DesktopTheme;
 use crate::window_state::WindowState;
+
+mod focus_flow;
+mod search_routing;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -71,7 +78,7 @@ impl UiScale {
     pub fn new(raw_font: f32, raw_rows: usize) -> Self {
         let f = raw_font.clamp(12.0, 32.0);
         let visible_rows = raw_rows.clamp(4, 20);
-        let pill_height = (f * 2.625).round(); // 16→42
+        let pill_height = (f * 2.9).round(); // 16→46
         let search_bar_height = pill_height + DRAG_STRIP;
         let row_height = (f * 3.0).round(); // 16→48
         let status_bar_height = (f * 1.75).round(); // 16→28
@@ -154,6 +161,9 @@ pub struct App {
     spell_prefixes: Vec<String>,
     translate_providers: Vec<String>,
     translate_prefixes: Vec<String>,
+    daemon_autostart_enabled: Option<bool>,
+    runtime_config: kmd_core::Config,
+    last_results_signature: u64,
     loading: bool,
     engine_slot: EngineSlot,
     _guard: Guard,
@@ -164,10 +174,15 @@ pub struct App {
     state_dirty: bool,
     window_focused: bool,
     last_query_changed_at: std::time::Instant,
+    app_started_at: std::time::Instant,
+    ime_trace_seq: u64,
+    ime_trace_enabled: bool,
 
     // ── Focus tracking ─────────────────────────────────────────────────
     /// 디버그/테스트용: focus 요청 총 횟수
     focus_request_count: u32,
+    /// 부팅 직후 포커스 폭주를 방지 — 첫 포커스 이후 안정화 기간에는 재포커싱 차단
+    boot_focus_done: bool,
 
     // ── IME ───────────────────────────────────────────────────────────
     reset_ime_on_launch: bool,
@@ -205,6 +220,10 @@ pub enum Message {
     BackgroundClicked,
     /// view 재렌더 후 1프레임 뒤 포커스 재요청 (트리 변경 후 포커스 유실 복구)
     DelayedRefocus,
+    /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
+    IconsReady,
+    /// 엔진 교체(EngineReady) 후 IME 조합이 끝나면 검색 결과를 갱신
+    EngineSwapSettled,
 }
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
@@ -266,30 +285,33 @@ fn context_actions_for(kind: ItemKind) -> Vec<ContextAction> {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
+    /// 첫 화면 표시를 막지 않도록 항상 quick 인덱스로 부팅한다.
+    /// 풀 인덱스는 부팅 후 비동기 워밍업(spawn_full_engine_load_task)으로 교체된다.
+    /// 반환하는 bool은 `full_warmup_started` 초기값 — 항상 false라 워밍업이 예약된다.
     fn build_initial_engine(config: &kmd_core::Config) -> (kmd_core::SearchEngine, bool) {
-        let cache_fresh = crate::engine::is_full_index_cache_fresh();
-        let engine = if cache_fresh {
-            tracing::info!("Full index cache is fresh — loading directly");
-            crate::engine::create_search_engine(config)
-        } else {
-            tracing::info!("Full index cache stale/missing — using quick index");
-            crate::engine::create_quick_search_engine(config)
-        };
-        (engine, cache_fresh)
+        tracing::info!("Booting with quick index — full index loads asynchronously");
+        let engine = crate::engine::create_quick_search_engine(config);
+        (engine, false)
     }
 
     fn initial_boot_tasks(input_id: iced::widget::Id, skip_warmup: bool) -> Task<Message> {
         let focus_task = iced::widget::operation::focus::<Message>(input_id);
-        let delayed = Task::future(async {
-            tokio::time::sleep(Duration::from_millis(16)).await;
-            Message::DelayedRefocus
-        });
         let id_task = window::oldest().map(Message::GotWindowId);
+        #[cfg(target_os = "windows")]
+        let focus_chain = {
+            let delayed = Task::future(async {
+                tokio::time::sleep(Duration::from_millis(16)).await;
+                Message::DelayedRefocus
+            });
+            Task::batch([focus_task, delayed])
+        };
+        #[cfg(not(target_os = "windows"))]
+        let focus_chain = focus_task;
         if skip_warmup {
-            Task::batch([focus_task, delayed, id_task])
+            Task::batch([focus_chain, id_task])
         } else {
             let warmup_task = Self::schedule_warmup_tick(0);
-            Task::batch([focus_task, delayed, id_task, warmup_task])
+            Task::batch([focus_chain, id_task, warmup_task])
         }
     }
 
@@ -307,9 +329,103 @@ impl App {
     where
         I: IntoIterator<Item = IndexItem>,
     {
-        self.results = items_to_results(items);
-        self.search_mode = kmd_core::SearchMode::Contains;
+        self.apply_contains_results(items_to_results(items));
+    }
+
+    fn apply_contains_results(&mut self, results: Vec<kmd_core::SearchResult>) {
+        self.commit_results(results, kmd_core::SearchMode::Contains, true);
+    }
+
+    fn clear_results_state(&mut self, mode: kmd_core::SearchMode) {
+        self.results.clear();
+        self.last_results_signature = 0;
+        self.search_mode = mode;
         self.selected = 0;
+    }
+
+    fn should_limit_reorder_for_ime(&self) -> bool {
+        self.query
+            .chars()
+            .rev()
+            .find(|c| !c.is_whitespace())
+            .is_some_and(Self::is_hangul_jamo)
+    }
+
+    fn is_hangul_jamo(ch: char) -> bool {
+        matches!(
+            ch as u32,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xD7B0..=0xD7FF
+        )
+    }
+
+    fn kind_code(kind: ItemKind) -> u8 {
+        match kind {
+            ItemKind::App => 1,
+            ItemKind::Directory => 2,
+            ItemKind::File => 3,
+            ItemKind::Executable => 4,
+            ItemKind::SystemCommand => 5,
+            ItemKind::WebSearch => 6,
+            ItemKind::Calculator => 7,
+            ItemKind::Emoji => 8,
+            ItemKind::Shell => 9,
+        }
+    }
+
+    fn results_signature(results: &[kmd_core::SearchResult]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        results.len().hash(&mut hasher);
+        for r in results.iter().take(64) {
+            Self::kind_code(r.item.kind).hash(&mut hasher);
+            r.item.name.hash(&mut hasher);
+            r.item.path.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn commit_results(
+        &mut self,
+        new_results: Vec<kmd_core::SearchResult>,
+        mode: kmd_core::SearchMode,
+        reset_selection: bool,
+    ) {
+        let signature = Self::results_signature(&new_results);
+        self.search_mode = mode;
+
+        if signature == self.last_results_signature {
+            return;
+        }
+
+        // IME 조합 중에는 결과 재정렬을 잠시 제한해 조합 안정성을 우선한다.
+        if self.should_limit_reorder_for_ime() && !self.results.is_empty() {
+            return;
+        }
+
+        self.results = new_results;
+        self.last_results_signature = signature;
+        if reset_selection {
+            self.selected = 0;
+        } else if self.selected >= self.results.len() {
+            self.selected = self.results.len().saturating_sub(1);
+        }
+    }
+
+    fn log_ime_state(&mut self, label: &str) {
+        if !self.ime_trace_enabled {
+            return;
+        }
+        self.ime_trace_seq = self.ime_trace_seq.wrapping_add(1);
+        tracing::debug!(
+            seq = self.ime_trace_seq,
+            elapsed_ms = self.app_started_at.elapsed().as_millis() as u64,
+            since_input_ms = self.last_query_changed_at.elapsed().as_millis() as u64,
+            window_focused = self.window_focused,
+            raw_window_id = ?self.raw_window_id,
+            query = %self.query,
+            query_len = self.query.chars().count(),
+            jamo_tail = self.should_limit_reorder_for_ime(),
+            "{label}"
+        );
     }
 
     pub fn new(
@@ -359,6 +475,9 @@ impl App {
             spell_prefixes,
             translate_providers,
             translate_prefixes,
+            daemon_autostart_enabled: None,
+            runtime_config: config,
+            last_results_signature: 0,
             loading: false,
             engine_slot,
             _guard: guard,
@@ -367,7 +486,11 @@ impl App {
             state_dirty: false,
             window_focused: true,
             last_query_changed_at: std::time::Instant::now(),
+            app_started_at: std::time::Instant::now(),
+            ime_trace_seq: 0,
+            ime_trace_enabled: std::env::var_os("KMD_IME_TRACE").is_some(),
             focus_request_count: 0,
+            boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
             full_warmup_started: cache_fresh,
             warmup_token: 0,
@@ -384,15 +507,35 @@ impl App {
         })
     }
 
-    /// focus 요청 + 카운터 증가 + 16ms 뒤 지연 refocus 스케줄링
+    /// 부팅 안정화 구간(첫 포커스 후 1초 이내) 여부
+    fn is_boot_settled(&self) -> bool {
+        self.boot_focus_done && self.app_started_at.elapsed() < Duration::from_millis(1000)
+    }
+
+    /// focus 요청 + 카운터 증가 + (Windows만) 16ms 뒤 지연 refocus 스케줄링
     fn request_focus(&mut self) -> Task<Message> {
+        // 부팅 안정화 구간: 최초 1회 이후 추가 포커싱 차단
+        if self.is_boot_settled() {
+            self.log_ime_state("request_focus:skip_boot_settling");
+            return Task::none();
+        }
+        self.boot_focus_done = true;
+
+        self.log_ime_state("request_focus");
         self.focus_request_count += 1;
         let immediate = iced::widget::operation::focus::<Message>(self.input_id.clone());
-        let delayed = Task::future(async {
-            tokio::time::sleep(Duration::from_millis(16)).await;
-            Message::DelayedRefocus
-        });
-        Task::batch([immediate, delayed])
+        #[cfg(not(target_os = "windows"))]
+        {
+            immediate
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let delayed = Task::future(async {
+                tokio::time::sleep(Duration::from_millis(16)).await;
+                Message::DelayedRefocus
+            });
+            Task::batch([immediate, delayed])
+        }
     }
 
     fn schedule_focus_retry(attempt: u8) -> Task<Message> {
@@ -434,19 +577,55 @@ impl App {
         })
     }
 
+    /// 현재 결과 목록의 아이콘을 백그라운드 스레드에서 미리 추출해 캐시에 채운다.
+    ///
+    /// `view()`는 캐시만 조회하므로(`cached_icon_for_item`), 렌더 스레드가 OS
+    /// 셸 API 호출로 멈추지 않는다. 완료되면 `IconsReady`로 리렌더를 유도한다.
+    fn spawn_icon_prefetch(&self) -> Task<Message> {
+        let items: Vec<(ItemKind, String, Option<String>)> = self
+            .results
+            .iter()
+            .map(|r| (r.item.kind, r.item.path.clone(), r.item.icon_path.clone()))
+            .collect();
+        if items.is_empty() {
+            return Task::none();
+        }
+        Task::future(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::app_icons::prefetch_icons(&items);
+            })
+            .await;
+            Message::IconsReady
+        })
+    }
+
+    /// IME 조합이 진행 중일 가능성이 높은지 — 최근 입력 직후이거나 자모 꼬리 상태.
+    fn is_typing_in_progress(&self) -> bool {
+        self.last_query_changed_at.elapsed() < Duration::from_millis(350)
+            || self.should_limit_reorder_for_ime()
+    }
+
     // ─── Update ───────────────────────────────────────────────────────────
 
     /// 포커스 가드: UI 상태(query/results)가 변경되면 자동으로 포커스를 복원한다.
     /// 개별 핸들러가 request_focus()를 빠뜨려도 안전하게 보장하는 최후의 안전망.
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        let skip_focus_guard = matches!(message, Message::DelayedRefocus | Message::EnsureFocus(_));
+        let skip_focus_guard = matches!(
+            message,
+            Message::QueryChanged(_)
+                | Message::DelayedRefocus
+                | Message::EnsureFocus(_)
+                | Message::EngineReady
+                | Message::EngineSwapSettled
+                | Message::IconsReady
+        );
 
         let old_query_len = self.query.len();
         let old_results_len = self.results.len();
 
         let task = self.update_inner(message);
 
-        if skip_focus_guard || !self.window_focused {
+        if skip_focus_guard || !self.window_focused || self.is_boot_settled() {
             return task;
         }
 
@@ -467,9 +646,15 @@ impl App {
                 self.query = query;
                 self.selected = 0;
                 self.last_query_changed_at = std::time::Instant::now();
+                self.log_ime_state("QueryChanged:assigned");
+                // 한글 IME 조합 중에는 검색/리렌더를 지연해 자모 분리 가능성을 줄인다.
+                if self.should_limit_reorder_for_ime() {
+                    self.log_ime_state("QueryChanged:skip_search_due_to_jamo");
+                    return Task::none();
+                }
                 let search_task = self.perform_search();
-                let refocus = self.request_focus();
-                Task::batch([self.with_activity_warmup(search_task), refocus])
+                self.log_ime_state("QueryChanged:perform_search");
+                self.with_activity_warmup(search_task)
             }
             Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
@@ -551,20 +736,7 @@ impl App {
                     None => self.request_focus(),
                 }
             }
-            Message::GotRawWindowId(raw_id) => {
-                self.raw_window_id = Some(raw_id);
-                crate::platform::force_square_corners(raw_id);
-                crate::platform::force_foreground(raw_id);
-                if self.reset_ime_on_launch {
-                    crate::platform::force_english_ime(raw_id);
-                }
-                if self.query.is_empty() {
-                    let focus = self.request_focus();
-                    Task::batch([focus, Self::schedule_focus_retry(1)])
-                } else {
-                    Task::none()
-                }
-            }
+            Message::GotRawWindowId(raw_id) => self.handle_got_raw_window_id(raw_id),
             Message::WarmupTick(token) => {
                 if self.full_warmup_started || token != self.warmup_token {
                     return Task::none();
@@ -578,33 +750,7 @@ impl App {
                 );
                 self.spawn_full_engine_load_task()
             }
-            Message::EnsureFocus(attempt) => {
-                if attempt > MAX_FOCUS_RETRIES || !self.query.is_empty() {
-                    return Task::none();
-                }
-
-                if !self.window_focused {
-                    #[cfg(target_os = "windows")]
-                    {
-                        if let Some(raw_id) = self.raw_window_id {
-                            if !crate::platform::is_our_window_foreground(raw_id) {
-                                return Task::none();
-                            }
-                        } else {
-                            return Task::none();
-                        }
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    return Task::none();
-                }
-
-                let focus_task = self.request_focus();
-                if attempt == MAX_FOCUS_RETRIES {
-                    focus_task
-                } else {
-                    Task::batch([focus_task, Self::schedule_focus_retry(attempt + 1)])
-                }
-            }
+            Message::EnsureFocus(attempt) => self.handle_ensure_focus(attempt),
             Message::EngineReady => {
                 let loaded = self
                     .engine_slot
@@ -626,9 +772,17 @@ impl App {
                     self.spell_prefixes = res.spell_prefixes;
                     self.translate_providers = res.translate_providers;
                     self.translate_prefixes = res.translate_prefixes;
+                    self.runtime_config = crate::engine::load_config();
                     self.loading = false;
                     tracing::info!("Search engine ready");
                     if !self.query.trim().is_empty() {
+                        // IME 조합 중이면 검색/뷰 갱신을 미뤄 자모 분리를 막는다.
+                        if self.is_typing_in_progress() {
+                            return Task::future(async {
+                                tokio::time::sleep(Duration::from_millis(400)).await;
+                                Message::EngineSwapSettled
+                            });
+                        }
                         return self.perform_search();
                     }
                 } else {
@@ -636,6 +790,20 @@ impl App {
                 }
                 Task::none()
             }
+            Message::EngineSwapSettled => {
+                if self.query.trim().is_empty() {
+                    return Task::none();
+                }
+                // 아직 입력 중이면 다시 미룬다 — 조합이 끝난 뒤에만 갱신.
+                if self.is_typing_in_progress() {
+                    return Task::future(async {
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        Message::EngineSwapSettled
+                    });
+                }
+                self.perform_search()
+            }
+            Message::IconsReady => Task::none(),
             Message::CheckQuitSignal => {
                 if self.state_dirty {
                     self.window_state.save();
@@ -649,47 +817,7 @@ impl App {
                 }
                 Task::none()
             }
-            Message::WindowEvent(_id, event) => {
-                match event {
-                    window::Event::Focused => {
-                        self.window_focused = true;
-                        let focus_now = self.request_focus();
-                        if self.query.is_empty() {
-                            let focus_retry = Self::schedule_focus_retry(1);
-                            return Task::batch([focus_now, focus_retry]);
-                        }
-                        return focus_now;
-                    }
-                    window::Event::Moved(point) => {
-                        self.window_state.x = Some(point.x);
-                        self.window_state.y = Some(point.y);
-                        self.state_dirty = true;
-                    }
-                    window::Event::Resized(size) => {
-                        // 사용자 드래그 리사이즈 시 base width 저장
-                        let w = size.width.max(420.0);
-                        if (w - self.window_width).abs() > 1.0 {
-                            self.window_width = w;
-                            self.window_state.width = Some(w);
-                            self.state_dirty = true;
-                        }
-                    }
-                    window::Event::Unfocused => {
-                        let typing_recently =
-                            self.last_query_changed_at.elapsed() < Duration::from_millis(500);
-                        if typing_recently {
-                            return Task::none();
-                        }
-                        self.window_focused = false;
-                        return Task::future(async {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
-                            Message::CheckUnfocusedExit
-                        });
-                    }
-                    _ => {}
-                }
-                Task::none()
-            }
+            Message::WindowEvent(_id, event) => self.handle_window_event(event),
             Message::ShellDone(result) => {
                 match result {
                     Ok(output) => {
@@ -714,32 +842,8 @@ impl App {
                 }
                 iced::exit()
             }
-            Message::DelayedRefocus => {
-                self.focus_request_count += 1;
-                iced::widget::operation::focus::<Message>(self.input_id.clone())
-            }
-            Message::CheckUnfocusedExit => {
-                if self.window_focused {
-                    return Task::none();
-                }
-                // Windows: GetForegroundWindow로 정확히 확인
-                #[cfg(target_os = "windows")]
-                if let Some(raw_id) = self.raw_window_id {
-                    if crate::platform::is_our_window_foreground(raw_id) {
-                        self.window_focused = true;
-                        let focus_now = self.request_focus();
-                        let focus_retry = Self::schedule_focus_retry(1);
-                        return Task::batch([focus_now, focus_retry]);
-                    }
-                }
-                // macOS/Linux: spurious unfocus는 이미 Unfocused 핸들러에서 차단했으므로
-                // 여기까지 도달했다면 실제 포커스 유실이다.
-
-                if self.state_dirty {
-                    self.window_state.save();
-                }
-                iced::exit()
-            }
+            Message::DelayedRefocus => self.handle_delayed_refocus(),
+            Message::CheckUnfocusedExit => self.handle_check_unfocused_exit(),
         }
     }
 
@@ -881,377 +985,14 @@ impl App {
         }
     }
 
-    fn perform_search(&mut self) -> Task<Message> {
-        let query = self.query.clone();
-        let trimmed = query.trim();
-
-        if trimmed.is_empty() {
-            self.results.clear();
-            self.search_mode = kmd_core::SearchMode::Fuzzy;
-            return Task::none();
-        }
-
-        match prefix_of(trimmed) {
-            Prefix::Web => self.handle_web_query(trimmed),
-            Prefix::Transform => self.handle_transform_query(trimmed),
-            Prefix::Prompt => self.handle_prompt_query(trimmed),
-            Prefix::Calc => self.handle_calc_query(trimmed),
-            Prefix::Emoji => self.handle_emoji_query(trimmed),
-            Prefix::Settings => self.handle_settings_query(trimmed),
-            Prefix::Help => self.handle_help_query(),
-            Prefix::Version => self.handle_version_query(),
-            Prefix::Shell => self.handle_shell_query(trimmed),
-            Prefix::Keymap => self.handle_keymap_query(trimmed),
-            Prefix::Keys => self.handle_keys_query(),
-            Prefix::General => self.handle_main_search(trimmed),
-        }
-
-        Task::none()
-    }
-
-    /// classify_web_query 통합 분류기 사용
-    fn handle_web_query(&mut self, query: &str) {
-        let emoji = self.use_emoji;
-        let cfg = web::WebQueryConfig {
-            spell_prefixes: &self.spell_prefixes,
-            translate_prefixes: &self.translate_prefixes,
-            multi_llm_prefixes: &self.multi_llm_prefixes,
-            multi_llm_ids: &self.selected_llm_providers,
-            multi_web_prefixes: &self.multi_web_prefixes,
-            multi_web_ids: &self.selected_multi_web_providers,
-        };
-
-        match web::classify_web_query(query, &cfg) {
-            web::WebQueryResult::Spell(q) => {
-                self.results =
-                    items_to_results(web::spell_result_items(&q, &self.spell_providers, emoji));
-            }
-            web::WebQueryResult::Translate(dir, q) => {
-                self.results = items_to_results(web::translate_result_items(
-                    &q,
-                    dir,
-                    &self.translate_providers,
-                    emoji,
-                ));
-            }
-            web::WebQueryResult::MultiLlm(_svcs, q) => {
-                self.results = items_to_results(web::multi_llm_result_items(
-                    &q,
-                    &self.selected_llm_providers,
-                    emoji,
-                ));
-            }
-            web::WebQueryResult::MultiWeb(_svcs, q) => {
-                self.results = items_to_results(web::multi_web_result_items(
-                    &q,
-                    &self.selected_multi_web_providers,
-                    emoji,
-                ));
-            }
-            web::WebQueryResult::Single(service, q) => {
-                if q.is_empty() {
-                    let mut items = web::list_services_as_items("", emoji);
-                    ensure_multi_llm_hint(&mut items, emoji);
-                    ensure_multi_web_hint(&mut items, emoji);
-                    self.results = items_to_results(items);
-                } else {
-                    let item = web::search_result_item(service, &q, emoji);
-                    self.results = items_to_results(std::iter::once(item));
-                }
-            }
-            web::WebQueryResult::Browse(filter) => {
-                let mut items = web::list_services_as_items(&filter, emoji);
-                ensure_multi_llm_hint(&mut items, emoji);
-                ensure_multi_web_hint(&mut items, emoji);
-                self.results = items_to_results(items);
-            }
-        }
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
-    }
-
-    fn handle_version_query(&mut self) {
-        let emoji = self.use_emoji;
-        let version_items = vec![
-            IndexItem {
-                name: format!("kmd-desktop {}", env!("CARGO_PKG_VERSION")),
-                path: "Desktop launcher version".to_string(),
-                icon: if emoji { "\u{1F4E6}" } else { "[VER]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-            IndexItem {
-                name: format!("kmd-core {}", kmd_core::Index::current_version()),
-                path: "Search index schema version".to_string(),
-                icon: if emoji { "\u{1F9E0}" } else { "[CORE]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-            IndexItem {
-                name: format!("target {}", std::env::consts::ARCH),
-                path: format!("os {}", std::env::consts::OS),
-                icon: if emoji { "\u{1F5A5}\u{FE0F}" } else { "[SYS]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-        ];
-        self.apply_contains_items(version_items);
-    }
-
-    /// :t / :transform 쿼리 처리 (클립보드 변환)
-    fn handle_transform_query(&mut self, query: &str) {
-        use kmd_core::transform;
-
-        match transform::parse_transform_query(query) {
-            Some(mut tq) => {
-                // 텍스트가 비어있으면 클립보드에서 가져오기
-                if tq.text.is_empty() {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(text) = clipboard.get_text() {
-                            tq.text = text;
-                        }
-                    }
-                }
-                if tq.text.is_empty() {
-                    self.results = items_to_results(std::iter::once(IndexItem {
-                        name: "❌ 클립보드가 비어 있습니다".to_string(),
-                        path: "텍스트를 복사한 후 다시 시도하세요".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji {
-                            "\u{2139}\u{FE0F}"
-                        } else {
-                            "[!]"
-                        }
-                        .to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    }));
-                    self.selected = 0;
-                    return;
-                }
-
-                let urls = transform::build_transform_urls(
-                    &tq,
-                    &self.spell_providers,
-                    &self.translate_providers,
-                );
-                for url in &urls {
-                    if let kmd_core::action::ActionResult::Error(e) =
-                        kmd_core::action::open_url(url)
-                    {
-                        tracing::warn!("URL 열기 실패: {url} — {e}");
-                    }
-                }
-                self.results.clear();
-                self.selected = 0;
-            }
-            None => {
-                let items = transform::help_items(self.use_emoji);
-                self.results = items_to_results(items);
-                self.search_mode = kmd_core::SearchMode::Contains;
-                self.selected = 0;
-            }
-        }
-    }
-
-    /// :prompt / :pt 쿼리 처리
-    fn handle_prompt_query(&mut self, query: &str) {
-        let sub = query
-            .strip_prefix(":prompt")
-            .or_else(|| query.strip_prefix(":pt"))
-            .unwrap_or("")
-            .trim();
-
-        let config = crate::engine::load_config();
-        let templates = &config.launcher.prompt_templates;
-
-        // :prompt add <name> <body>
-        if sub.starts_with("add ") {
-            let rest = sub.strip_prefix("add ").unwrap_or("").trim();
-            if let Some(pos) = rest.find(char::is_whitespace) {
-                let name = &rest[..pos];
-                let body = rest[pos..].trim();
-                if !kmd_core::prompt::validate_template_name(name) {
-                    self.results = items_to_results(std::iter::once(IndexItem {
-                        name: format!("❌ 잘못된 이름: '{name}'"),
-                        path: "영문/숫자/하이픈/언더스코어만, 최대 32자".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    }));
-                } else if body.is_empty() {
-                    self.results = items_to_results(std::iter::once(IndexItem {
-                        name: "❌ 본문이 비어 있습니다".to_string(),
-                        path: ":prompt add <name> <body> 형태로 입력하세요".to_string(),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    }));
-                } else {
-                    let mut cfg = config;
-                    cfg.launcher
-                        .prompt_templates
-                        .retain(|t| !t.name.eq_ignore_ascii_case(name));
-                    cfg.launcher
-                        .prompt_templates
-                        .push(kmd_core::config::PromptTemplate {
-                            name: name.to_string(),
-                            body: body.to_string(),
-                        });
-                    save_config(move |c| {
-                        c.launcher.prompt_templates = cfg.launcher.prompt_templates
-                    });
-                    self.results = items_to_results(std::iter::once(IndexItem {
-                        name: format!("✅ 템플릿 '{name}' 저장됨"),
-                        path: format!("@ll :{name} <query> 형태로 사용"),
-                        kind: ItemKind::SystemCommand,
-                        source: Source::Plugin,
-                        icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
-                        keywords: "kmd:settings:noop".to_string(),
-                        icon_path: None,
-                    }));
-                }
-            } else {
-                self.results = items_to_results(std::iter::once(IndexItem {
-                    name: "사용법: :prompt add <name> <body>".to_string(),
-                    path: "예: :prompt add review 코드를 리뷰해주세요".to_string(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji {
-                        "\u{2139}\u{FE0F}"
-                    } else {
-                        "[?]"
-                    }
-                    .to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                }));
-            }
-            self.selected = 0;
-            return;
-        }
-
-        // :prompt remove/rm/del <name>
-        if sub.starts_with("remove ") || sub.starts_with("rm ") || sub.starts_with("del ") {
-            let name = sub
-                .strip_prefix("remove ")
-                .or_else(|| sub.strip_prefix("rm "))
-                .or_else(|| sub.strip_prefix("del "))
-                .unwrap_or("")
-                .trim();
-            if name.is_empty() {
-                self.results = items_to_results(std::iter::once(IndexItem {
-                    name: "사용법: :prompt remove <name>".to_string(),
-                    path: "삭제할 템플릿 이름을 입력하세요".to_string(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji {
-                        "\u{2139}\u{FE0F}"
-                    } else {
-                        "[?]"
-                    }
-                    .to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                }));
-            } else if templates.iter().any(|t| t.name.eq_ignore_ascii_case(name)) {
-                let name_owned = name.to_string();
-                let display_name = name.to_string();
-                save_config(move |cfg| {
-                    cfg.launcher
-                        .prompt_templates
-                        .retain(|t| !t.name.eq_ignore_ascii_case(&name_owned));
-                });
-                self.results = items_to_results(std::iter::once(IndexItem {
-                    name: format!("✅ 템플릿 '{display_name}' 삭제됨"),
-                    path: String::new(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{2705}" } else { "[OK]" }.to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                }));
-            } else {
-                self.results = items_to_results(std::iter::once(IndexItem {
-                    name: format!("❌ 템플릿 '{name}'을 찾을 수 없습니다"),
-                    path: String::new(),
-                    kind: ItemKind::SystemCommand,
-                    source: Source::Plugin,
-                    icon: if self.use_emoji { "\u{274C}" } else { "[!]" }.to_string(),
-                    keywords: "kmd:settings:noop".to_string(),
-                    icon_path: None,
-                }));
-            }
-            self.selected = 0;
-            return;
-        }
-
-        let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
-        let items = kmd_core::prompt::list_templates_as_items(templates, filter, self.use_emoji);
-        self.results = items_to_results(items);
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
-    }
-
-    fn handle_calc_query(&mut self, query: &str) {
-        let expr = query.strip_prefix(":calc").unwrap_or("").trim();
-        let calc = builtin_calc::CalcExtension;
-        self.apply_contains_items(calc.search_with_emoji(expr, self.use_emoji));
-    }
-
-    fn handle_emoji_query(&mut self, query: &str) {
-        let search_query = query
-            .strip_prefix(":emoji")
-            .or_else(|| query.strip_prefix(":e"))
-            .unwrap_or("")
-            .trim();
-        let emoji_ext = builtin_emoji::EmojiExtension;
-        self.apply_contains_items(emoji_ext.search_emoji(search_query));
-    }
-
-    fn handle_shell_query(&mut self, query: &str) {
-        let shell_query = query.strip_prefix('!').unwrap_or("").trim();
-        let shell_ext = builtin_shell::ShellExtension;
-        self.apply_contains_items(shell_ext.search(shell_query));
-    }
-
-    /// :keys / :k — 키 맵핑 치트시트
-    fn handle_keys_query(&mut self) {
-        let config = crate::engine::load_config();
-        let items = kmd_core::keymap::keybinding_cheatsheet(&config, self.use_emoji);
-        self.apply_contains_items(items);
-    }
-
-    /// :keymap / :km 쿼리 처리
-    fn handle_keymap_query(&mut self, query: &str) {
-        let sub = query
-            .strip_prefix(":keymap")
-            .or_else(|| query.strip_prefix(":km"))
-            .unwrap_or("")
-            .trim();
-        let config = crate::engine::load_config();
-        let items = kmd_core::keymap::keymap_items(&config, sub, self.use_emoji);
-        self.apply_contains_items(items);
-    }
-
     fn handle_keymap_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
         let keywords = &result.item.keywords;
         if keywords.ends_with(":noop") || keywords.contains(":noop:") {
             return Task::none();
         }
-        let mut config = crate::engine::load_config();
-        if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, keywords) {
+        if let Some(msg) =
+            kmd_core::keymap::execute_keymap_action(&mut self.runtime_config, keywords)
+        {
             tracing::info!("keymap action: {msg}");
         }
         let current_query = self.query.clone();
@@ -1267,11 +1008,17 @@ impl App {
 
         let emoji = self.use_emoji;
         let current_theme = self.theme.name;
+        let autostart_enabled = self.refresh_daemon_autostart_status();
 
         let ime_label = if self.reset_ime_on_launch {
             "IME: Reset to English on Launch [ON]"
         } else {
             "IME: Reset to English on Launch [OFF]"
+        };
+        let daemon_autostart_label = match autostart_enabled {
+            Some(true) => "Daemon Auto Start [ON]",
+            Some(false) => "Daemon Auto Start [OFF]",
+            None => "Daemon Auto Start [UNKNOWN]",
         };
 
         let label = |base: &str, theme_name: &str| -> String {
@@ -1316,6 +1063,12 @@ impl App {
                 "kmd:settings:toggle_ime_reset".to_string(),
                 if emoji { "\u{1F310}" } else { "[IME]" }.to_string(),
                 "Toggle English input on launch".to_string(),
+            ),
+            (
+                daemon_autostart_label.to_string(),
+                "kmd:settings:toggle_autostart".to_string(),
+                if emoji { "\u{23FB}\u{FE0F}" } else { "[BOOT]" }.to_string(),
+                "Toggle daemon start at login".to_string(),
             ),
             (
                 label("Theme: Midnight (default)", "Midnight"),
@@ -1474,9 +1227,7 @@ impl App {
             })
             .collect();
 
-        self.results = items_to_results(items);
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(items);
     }
 
     fn handle_help_query(&mut self) {
@@ -1594,9 +1345,7 @@ impl App {
             })
             .collect();
 
-        self.results = items_to_results(items);
-        self.search_mode = kmd_core::SearchMode::Contains;
-        self.selected = 0;
+        self.apply_contains_items(items);
     }
 
     fn handle_settings_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
@@ -1652,8 +1401,7 @@ impl App {
                 };
 
                 self.query.clear();
-                self.results.clear();
-                self.selected = 0;
+                self.clear_results_state(kmd_core::SearchMode::Fuzzy);
 
                 return match self.window_id {
                     Some(id) => run_reset(id),
@@ -1668,16 +1416,43 @@ impl App {
                 self.loading = true;
                 let task = self.spawn_full_engine_load_task();
                 self.query.clear();
-                self.results.clear();
-                self.selected = 0;
+                self.clear_results_state(kmd_core::SearchMode::Fuzzy);
                 return task;
             }
             "toggle_ime_reset" => {
                 self.reset_ime_on_launch = !self.reset_ime_on_launch;
                 let new_val = self.reset_ime_on_launch;
+                self.runtime_config.general.reset_ime_on_launch = new_val;
                 tracing::info!("reset_ime_on_launch = {new_val}");
                 save_config(|cfg| cfg.general.reset_ime_on_launch = new_val);
 
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.request_focus();
+            }
+            "toggle_autostart" => {
+                let enabled = self
+                    .daemon_autostart_enabled
+                    .or_else(|| self.refresh_daemon_autostart_status());
+                let request = if enabled.unwrap_or(false) {
+                    kmd_core::ipc::Request::AutostartDisable
+                } else {
+                    kmd_core::ipc::Request::AutostartEnable
+                };
+                match kmd_core::ipc::send_request_result(&request) {
+                    Ok(kmd_core::ipc::Response::Ok { message }) => {
+                        tracing::info!("autostart: {message}");
+                    }
+                    Ok(kmd_core::ipc::Response::Error { message }) => {
+                        tracing::warn!("autostart toggle 실패: {message}");
+                    }
+                    Ok(other) => {
+                        tracing::warn!("autostart toggle 예기치 않은 응답: {other:?}");
+                    }
+                    Err(e) => {
+                        tracing::warn!("autostart toggle IPC 실패: {e}");
+                    }
+                }
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
                 return self.request_focus();
@@ -1708,6 +1483,7 @@ impl App {
                     }
 
                     let selected = self.selected_llm_providers.clone();
+                    self.runtime_config.launcher.multi_llm_providers = selected.clone();
                     save_config(move |cfg| cfg.launcher.multi_llm_providers = selected);
                 }
 
@@ -1738,6 +1514,7 @@ impl App {
                     }
 
                     let selected = self.selected_multi_web_providers.clone();
+                    self.runtime_config.launcher.multi_web_providers = selected.clone();
                     save_config(move |cfg| cfg.launcher.multi_web_providers = selected);
                 }
 
@@ -1763,6 +1540,7 @@ impl App {
                             vec!["naver_spell".to_string(), "pusan_spell".to_string()];
                     }
                     let selected = self.spell_providers.clone();
+                    self.runtime_config.launcher.spell_providers = selected.clone();
                     save_config(move |cfg| cfg.launcher.spell_providers = selected);
                 }
                 self.query = ":set".to_string();
@@ -1792,6 +1570,7 @@ impl App {
                         ];
                     }
                     let selected = self.translate_providers.clone();
+                    self.runtime_config.launcher.translate_providers = selected.clone();
                     save_config(move |cfg| cfg.launcher.translate_providers = selected);
                 }
                 self.query = ":set".to_string();
@@ -1801,6 +1580,7 @@ impl App {
             theme_action if theme_action.starts_with("theme:") => {
                 let theme_name = theme_action.strip_prefix("theme:").unwrap_or("midnight");
                 self.theme = crate::theme::from_name(theme_name);
+                self.runtime_config.general.theme = theme_name.to_string();
                 tracing::info!("Theme changed to: {}", self.theme.name);
 
                 // Persist theme selection to config file.
@@ -1812,89 +1592,27 @@ impl App {
             }
         }
         self.query.clear();
-        self.results.clear();
-        self.selected = 0;
+        self.clear_results_state(kmd_core::SearchMode::Fuzzy);
         self.request_focus()
     }
 
-    fn handle_main_search(&mut self, query: &str) {
-        let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
-        self.search_mode = mode;
-
-        if builtin_calc::looks_like_math(query) {
-            let calc = builtin_calc::CalcExtension;
-            let calc_items = calc.search_with_emoji(query, self.use_emoji);
-            let calc_results: Vec<kmd_core::SearchResult> = calc_items
-                .into_iter()
-                .map(|item| kmd_core::SearchResult {
-                    item,
-                    score: SCORE_PLUGIN,
-                })
-                .collect();
-            results.splice(0..0, calc_results);
-        }
-
-        if results.is_empty() && !query.is_empty() {
-            if let Some(relaxed) = relaxed_hangul_query(query) {
-                let relaxed_results = self.engine.search_with_mode(
-                    kmd_core::SearchMode::Contains,
-                    &relaxed,
-                    SEARCH_LIMIT,
-                );
-                if !relaxed_results.is_empty() {
-                    results = relaxed_results;
-                    self.search_mode = kmd_core::SearchMode::Contains;
-                }
+    fn refresh_daemon_autostart_status(&mut self) -> Option<bool> {
+        match kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::AutostartStatus) {
+            Ok(kmd_core::ipc::Response::AutostartStatus { installed }) => {
+                self.daemon_autostart_enabled = Some(installed);
+                Some(installed)
+            }
+            Ok(other) => {
+                tracing::warn!("autostart status 예기치 않은 응답: {other:?}");
+                self.daemon_autostart_enabled = None;
+                None
+            }
+            Err(e) => {
+                tracing::warn!("autostart status IPC 실패: {e}");
+                self.daemon_autostart_enabled = None;
+                None
             }
         }
-
-        if results.is_empty() && !query.is_empty() {
-            results = self.build_fallback_suggestions(query);
-            self.search_mode = kmd_core::SearchMode::Contains;
-        }
-
-        self.results = results;
-        self.selected = 0;
-    }
-
-    fn build_fallback_suggestions(&self, query: &str) -> Vec<kmd_core::SearchResult> {
-        use kmd_core::web::{self, WEB_SERVICES};
-
-        const FALLBACK_IDS: &[&str] = &[
-            "google",
-            "perplexity",
-            "chatgpt",
-            "claude",
-            "gemini",
-            "naver_search",
-            "youtube",
-            "github",
-            "stackoverflow",
-            "wikipedia",
-        ];
-
-        let emoji = self.use_emoji;
-        let mut items: Vec<kmd_core::SearchResult> = FALLBACK_IDS
-            .iter()
-            .filter_map(|id| WEB_SERVICES.iter().find(|s| s.id == *id))
-            .map(|service| {
-                let item = web::search_result_item(service, query, emoji);
-                kmd_core::SearchResult { item, score: 0 }
-            })
-            .collect();
-
-        let multi_items = web::multi_llm_result_items(query, &self.selected_llm_providers, emoji);
-        if let Some(multi_item) = multi_items.into_iter().next() {
-            items.insert(
-                5,
-                kmd_core::SearchResult {
-                    item: multi_item,
-                    score: 0,
-                },
-            );
-        }
-
-        items
     }
 
     fn launch_selected(&mut self) -> Task<Message> {
@@ -2087,58 +1805,8 @@ impl App {
 
     fn clear_query_and_refocus(&mut self) -> Task<Message> {
         self.query.clear();
-        self.results.clear();
-        self.selected = 0;
+        self.clear_results_state(kmd_core::SearchMode::Fuzzy);
         self.request_focus()
-    }
-}
-
-// ─── Prefix Detection ─────────────────────────────────────────────────────────
-
-enum Prefix {
-    Web,
-    Transform,
-    Prompt,
-    Calc,
-    Emoji,
-    Settings,
-    Help,
-    Version,
-    Shell,
-    Keymap,
-    Keys,
-    General,
-}
-
-fn prefix_of(query: &str) -> Prefix {
-    if query.starts_with('@') {
-        Prefix::Web
-    } else if query.starts_with(":transform") || query.starts_with(":t ") || query == ":t" {
-        Prefix::Transform
-    } else if query.starts_with(":prompt") || query.starts_with(":pt") {
-        Prefix::Prompt
-    } else if query.starts_with(":calc") {
-        Prefix::Calc
-    } else if query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e" {
-        Prefix::Emoji
-    } else if query.starts_with(":set") {
-        Prefix::Settings
-    } else if query.starts_with(":help") || query.starts_with(":h ") || query == ":h" {
-        Prefix::Help
-    } else if query.starts_with(":version")
-        || query.starts_with(":ver")
-        || query == ":v"
-        || query.starts_with(":v ")
-    {
-        Prefix::Version
-    } else if query.starts_with(":keymap") || query.starts_with(":km ") || query == ":km" {
-        Prefix::Keymap
-    } else if query.starts_with(":keys") || query == ":k" || query.starts_with(":k ") {
-        Prefix::Keys
-    } else if query.starts_with('!') {
-        Prefix::Shell
-    } else {
-        Prefix::General
     }
 }
 
@@ -2181,7 +1849,7 @@ impl App {
             .on_submit(Message::Submit)
             .width(Fill)
             .size(u.font)
-            .padding(Padding::from([2, 6]))
+            .padding(Padding::from([4, 8]))
             .style(move |_theme, status| {
                 let is_focused = matches!(status, text_input::Status::Focused { .. });
                 let ph_color = if is_focused {
@@ -2384,7 +2052,7 @@ impl App {
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
                 .or_else(|| {
-                    crate::app_icons::app_icon_for_item(
+                    crate::app_icons::cached_icon_for_item(
                         item.kind,
                         &item.path,
                         item.icon_path.as_deref(),
@@ -2616,7 +2284,7 @@ impl App {
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
                 .or_else(|| {
-                    crate::app_icons::app_icon_for_item(
+                    crate::app_icons::cached_icon_for_item(
                         item.kind,
                         &item.path,
                         item.icon_path.as_deref(),
@@ -2959,7 +2627,9 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
         kind: ItemKind::WebSearch,
         source: Source::Plugin,
         icon: if use_emoji { "\u{1F50E}" } else { "Mw" }.to_string(),
-        keywords: "kmd:web_hint:multi_web\n@m @mw @msearch @multisearch @searchall @krsearch multi web".to_string(),
+        keywords:
+            "kmd:web_hint:multi_web\n@m @mw @msearch @multisearch @searchall @krsearch multi web"
+                .to_string(),
         icon_path: None,
     });
 }
@@ -3126,15 +2796,14 @@ mod tests {
     // ── 포커스 요청 카운트 검증 ──
 
     #[test]
-    fn 쿼리_변경시_focus_요청_발생() {
+    fn 쿼리_변경시_focus_요청_미발생() {
         let mut app = make_test_app();
         let before = app.focus_request_count;
 
         let _task = app.update(Message::QueryChanged("test".to_string()));
-        assert!(
-            app.focus_request_count > before,
-            "QueryChanged가 request_focus를 호출해야 함 (before={before}, after={})",
-            app.focus_request_count
+        assert_eq!(
+            app.focus_request_count, before,
+            "입력 중에는 refocus를 강제하지 않아야 함"
         );
         assert_eq!(app.query, "test");
         assert!(app.window_focused);
@@ -3234,11 +2903,32 @@ mod tests {
     // ── Focused 이벤트 — 항상 refocus + 카운트 ──
 
     #[test]
-    fn 쿼리_있어도_focused시_focus_요청() {
+    fn 쿼리_있고_최근타이핑시_focused_refocus_안함() {
         let mut app = make_test_app();
         app.window_id = Some(window::Id::unique());
         app.window_focused = false;
         app.query = "검색어".to_string();
+        app.last_query_changed_at = std::time::Instant::now();
+        let before = app.focus_request_count;
+
+        let _task = app.update(Message::WindowEvent(
+            app.window_id.unwrap(),
+            window::Event::Focused,
+        ));
+        assert!(app.window_focused);
+        assert_eq!(
+            app.focus_request_count, before,
+            "조합/타이핑 직후 Focused 이벤트에서는 refocus를 생략"
+        );
+    }
+
+    #[test]
+    fn 쿼리_있어도_타이핑아님_focused시_focus_요청() {
+        let mut app = make_test_app();
+        app.window_id = Some(window::Id::unique());
+        app.window_focused = false;
+        app.query = "검색어".to_string();
+        app.last_query_changed_at = std::time::Instant::now() - Duration::from_secs(2);
         let before = app.focus_request_count;
 
         let _task = app.update(Message::WindowEvent(
@@ -3248,7 +2938,7 @@ mod tests {
         assert!(app.window_focused);
         assert!(
             app.focus_request_count > before,
-            "Focused 이벤트 시 query 무관하게 focus 요청"
+            "타이핑 직후가 아니면 Focused 이벤트에서 focus 요청"
         );
     }
 
@@ -3282,7 +2972,7 @@ mod tests {
         // 1단계: 첫 글자 입력
         let _task = app.update(Message::QueryChanged("h".to_string()));
         let c1 = app.focus_request_count;
-        assert!(c1 > c0, "QueryChanged → request_focus 호출됨");
+        assert_eq!(c1, c0, "QueryChanged에서는 request_focus를 호출하지 않음");
 
         // 2단계: macOS spurious Unfocused (view 재렌더 시 발생 가능)
         let _task = app.update(Message::WindowEvent(
@@ -3294,13 +2984,27 @@ mod tests {
         // 3단계: DelayedRefocus (16ms 후 iced 이벤트 루프가 전달)
         let _task = app.update(Message::DelayedRefocus);
         let c2 = app.focus_request_count;
-        assert!(c2 > c1, "DelayedRefocus가 추가 focus 요청 (새 트리에 적용)");
+        assert_eq!(c2, c1, "입력 중 DelayedRefocus는 IME 안정성을 위해 스킵");
 
         // 4단계: 두 번째 글자 입력 가능
         let _task = app.update(Message::QueryChanged("he".to_string()));
         assert_eq!(app.query, "he");
         let c3 = app.focus_request_count;
-        assert!(c3 > c2, "두 번째 입력에도 focus 요청");
+        assert_eq!(c3, c2, "두 번째 입력에서도 refocus를 강제하지 않음");
+    }
+
+    #[test]
+    fn 첫_입력시_중복_refocus_없음() {
+        let mut app = make_test_app();
+        let before = app.focus_request_count;
+
+        let _task = app.update(Message::QueryChanged("h".to_string()));
+        let after = app.focus_request_count;
+
+        assert_eq!(
+            after, before,
+            "QueryChanged에서 request_focus를 하지 않아야 IME 조합 안정성 유지"
+        );
     }
 
     #[test]
@@ -3312,7 +3016,7 @@ mod tests {
         // ㄱ 입력
         let _task = app.update(Message::QueryChanged("ㄱ".to_string()));
         let c1 = app.focus_request_count;
-        assert!(c1 > c0, "한글 첫 자음 입력 시 focus 요청");
+        assert_eq!(c1, c0, "한글 첫 자음 입력 시 강제 refocus 없음");
 
         // macOS spurious Unfocused + Focused
         let _task = app.update(Message::WindowEvent(
@@ -3326,17 +3030,17 @@ mod tests {
             window::Event::Focused,
         ));
         let c2 = app.focus_request_count;
-        assert!(c2 > c1, "Focused 이벤트에서 focus 재요청");
+        assert_eq!(c2, c1, "최근 타이핑 중 Focused refocus 생략");
 
         // DelayedRefocus (view 재렌더 후)
         let _task = app.update(Message::DelayedRefocus);
         let c3 = app.focus_request_count;
-        assert!(c3 > c2, "DelayedRefocus 추가 focus 요청");
+        assert_eq!(c3, c2, "입력 중 DelayedRefocus는 스킵");
 
         // ㅏ 결합 → 가
         let _task = app.update(Message::QueryChanged("가".to_string()));
         assert_eq!(app.query, "가", "한글 조합 완료");
-        assert!(app.focus_request_count > c3, "결합 시에도 focus 요청");
+        assert!(app.window_focused, "조합 이후에도 포커스 유지");
     }
 
     // ── 기타 focus 관련 ──
@@ -3375,25 +3079,24 @@ mod tests {
 
         let _task = app.update(Message::QueryChanged("".to_string()));
         assert_eq!(app.query, "");
-        assert!(
-            app.focus_request_count > before,
-            "쿼리 비움 시에도 focus 요청"
+        assert_eq!(
+            app.focus_request_count, before,
+            "쿼리 비움 시 refocus 강제 없음"
         );
     }
 
     // ── 포커스 가드 (근본적 안전망) 테스트 ──
 
     #[test]
-    fn 포커스_가드_쿼리_변경시_자동_refocus() {
+    fn 포커스_가드_쿼리_변경시_자동_refocus_안함() {
         let mut app = make_test_app();
         app.window_focused = true;
         let before = app.focus_request_count;
 
         let _task = app.update(Message::QueryChanged("abc".to_string()));
-        assert!(
-            app.focus_request_count > before,
-            "쿼리 변경 → 포커스 가드가 refocus 보장 (before={before}, after={})",
-            app.focus_request_count
+        assert_eq!(
+            app.focus_request_count, before,
+            "QueryChanged는 포커스 가드 제외"
         );
     }
 
@@ -3408,9 +3111,9 @@ mod tests {
 
         // results.clear()로 결과가 바뀌는 상황 시뮬레이션
         let _task = app.update(Message::QueryChanged("".to_string()));
-        assert!(
-            app.focus_request_count > after_help,
-            "결과 변경 → 포커스 가드가 refocus 보장"
+        assert_eq!(
+            app.focus_request_count, after_help,
+            "입력 중 refocus는 금지"
         );
     }
 
@@ -3451,13 +3154,11 @@ mod tests {
         let before = app.focus_request_count;
 
         let _task = app.update(Message::QueryChanged("test".to_string()));
-        // update_inner의 QueryChanged는 항상 request_focus를 호출하지만,
-        // 포커스 가드는 window_focused=false이면 추가 refocus를 하지 않음
-        // (update_inner 자체에서 호출된 것은 여전히 카운트됨)
+        // 창이 비활성 상태에서는 QueryChanged 경로에서도 refocus를 시도하지 않아야 한다.
         let after = app.focus_request_count;
-        assert!(
-            after > before,
-            "update_inner에서 최소 1회 focus 요청은 발생 (before={before}, after={after})"
+        assert_eq!(
+            after, before,
+            "window_focused=false이면 입력 중 불필요한 focus 요청이 없어야 함"
         );
     }
 
@@ -3529,16 +3230,16 @@ mod tests {
         for i in 0..3 {
             let before = app.focus_request_count;
             let _task = app.update(Message::QueryChanged(":set".to_string()));
-            assert!(
-                app.focus_request_count > before,
-                "#{i} settings 진입 시 focus 보장"
+            assert_eq!(
+                app.focus_request_count, before,
+                "#{i} settings 진입 입력 처리에서는 refocus 강제 없음"
             );
 
             let before2 = app.focus_request_count;
             let _task = app.update(Message::QueryChanged("".to_string()));
-            assert!(
-                app.focus_request_count > before2,
-                "#{i} settings 나가기 시 focus 보장"
+            assert_eq!(
+                app.focus_request_count, before2,
+                "#{i} settings 나가기 입력 처리에서도 refocus 강제 없음"
             );
         }
     }
