@@ -12,13 +12,19 @@ impl App {
             return Task::none();
         }
 
+        let prev_signature = self.last_results_signature;
+        let mut post_task: Task<Message> = Task::none();
+
         match prefix_of(trimmed) {
             Prefix::Web => self.handle_web_query(trimmed),
             Prefix::Transform => self.handle_transform_query(trimmed),
             Prefix::Prompt => self.handle_prompt_query(trimmed),
             Prefix::Calc => self.handle_calc_query(trimmed),
             Prefix::Emoji => self.handle_emoji_query(trimmed),
-            Prefix::Settings => self.handle_settings_query(trimmed),
+            Prefix::Settings => {
+                self.handle_settings_query(trimmed);
+                post_task = self.schedule_autostart_status_refresh(false);
+            }
             Prefix::Help => self.handle_help_query(),
             Prefix::Version => self.handle_version_query(),
             Prefix::Shell => self.handle_shell_query(trimmed),
@@ -27,8 +33,13 @@ impl App {
             Prefix::General => self.handle_main_search(trimmed),
         }
 
-        // 결과가 바뀌었으니 새 아이콘을 백그라운드에서 미리 추출한다.
-        self.spawn_icon_prefetch()
+        // 결과가 실제로 바뀐 경우에만 아이콘 prefetch를 실행한다.
+        let icon_task = if self.last_results_signature != prev_signature {
+            self.spawn_icon_prefetch()
+        } else {
+            Task::none()
+        };
+        Task::batch([icon_task, post_task])
     }
 
     /// classify_web_query 통합 분류기 사용

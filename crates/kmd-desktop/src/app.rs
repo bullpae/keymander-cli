@@ -120,6 +120,7 @@ const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 120;
 const MAX_FOCUS_RETRIES: u8 = 3;
+const AUTOSTART_STATUS_REFRESH_MS: u64 = 1500;
 // ─── Shared slot for async engine hand-off ────────────────────────────────────
 
 /// 비동기 엔진 로드 결과 — 10-tuple 대신 명확한 필드로 관리
@@ -162,6 +163,9 @@ pub struct App {
     translate_providers: Vec<String>,
     translate_prefixes: Vec<String>,
     daemon_autostart_enabled: Option<bool>,
+    daemon_autostart_last_checked_at: Option<std::time::Instant>,
+    daemon_autostart_check_in_flight: bool,
+    daemon_autostart_toggle_in_flight: bool,
     runtime_config: kmd_core::Config,
     last_results_signature: u64,
     loading: bool,
@@ -222,6 +226,10 @@ pub enum Message {
     DelayedRefocus,
     /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
     IconsReady,
+    /// 데몬 자동시작 상태 조회 완료
+    AutostartStatusLoaded(Result<bool, String>),
+    /// 데몬 자동시작 토글 완료
+    AutostartToggleFinished(Result<String, String>),
     /// 엔진 교체(EngineReady) 후 IME 조합이 끝나면 검색 결과를 갱신
     EngineSwapSettled,
 }
@@ -476,6 +484,9 @@ impl App {
             translate_providers,
             translate_prefixes,
             daemon_autostart_enabled: None,
+            daemon_autostart_last_checked_at: None,
+            daemon_autostart_check_in_flight: false,
+            daemon_autostart_toggle_in_flight: false,
             runtime_config: config,
             last_results_signature: 0,
             loading: false,
@@ -618,6 +629,8 @@ impl App {
                 | Message::EngineReady
                 | Message::EngineSwapSettled
                 | Message::IconsReady
+                | Message::AutostartStatusLoaded(_)
+                | Message::AutostartToggleFinished(_)
         );
 
         let old_query_len = self.query.len();
@@ -804,6 +817,35 @@ impl App {
                 self.perform_search()
             }
             Message::IconsReady => Task::none(),
+            Message::AutostartStatusLoaded(result) => {
+                self.daemon_autostart_check_in_flight = false;
+                self.daemon_autostart_last_checked_at = Some(std::time::Instant::now());
+                match result {
+                    Ok(installed) => {
+                        self.daemon_autostart_enabled = Some(installed);
+                    }
+                    Err(message) => {
+                        tracing::warn!("autostart status 조회 실패: {message}");
+                        self.daemon_autostart_enabled = None;
+                    }
+                }
+                if self.query.starts_with(":set") {
+                    self.handle_settings_query(":set");
+                }
+                Task::none()
+            }
+            Message::AutostartToggleFinished(result) => {
+                self.daemon_autostart_toggle_in_flight = false;
+                match result {
+                    Ok(message) => tracing::info!("autostart: {message}"),
+                    Err(message) => tracing::warn!("autostart toggle 실패: {message}"),
+                }
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                let refresh = self.schedule_autostart_status_refresh(true);
+                let focus = self.request_focus();
+                Task::batch([refresh, focus])
+            }
             Message::CheckQuitSignal => {
                 if self.state_dirty {
                     self.window_state.save();
@@ -1008,7 +1050,7 @@ impl App {
 
         let emoji = self.use_emoji;
         let current_theme = self.theme.name;
-        let autostart_enabled = self.refresh_daemon_autostart_status();
+        let autostart_enabled = self.daemon_autostart_enabled;
 
         let ime_label = if self.reset_ime_on_launch {
             "IME: Reset to English on Launch [ON]"
@@ -1431,31 +1473,31 @@ impl App {
                 return self.request_focus();
             }
             "toggle_autostart" => {
-                let enabled = self
-                    .daemon_autostart_enabled
-                    .or_else(|| self.refresh_daemon_autostart_status());
-                let request = if enabled.unwrap_or(false) {
+                if self.daemon_autostart_toggle_in_flight {
+                    return Task::none();
+                }
+                self.daemon_autostart_toggle_in_flight = true;
+                let request = if self.daemon_autostart_enabled.unwrap_or(false) {
                     kmd_core::ipc::Request::AutostartDisable
                 } else {
                     kmd_core::ipc::Request::AutostartEnable
                 };
-                match kmd_core::ipc::send_request_result(&request) {
-                    Ok(kmd_core::ipc::Response::Ok { message }) => {
-                        tracing::info!("autostart: {message}");
-                    }
-                    Ok(kmd_core::ipc::Response::Error { message }) => {
-                        tracing::warn!("autostart toggle 실패: {message}");
-                    }
-                    Ok(other) => {
-                        tracing::warn!("autostart toggle 예기치 않은 응답: {other:?}");
-                    }
-                    Err(e) => {
-                        tracing::warn!("autostart toggle IPC 실패: {e}");
-                    }
-                }
                 self.query = ":set".to_string();
                 self.handle_settings_query(":set");
-                return self.request_focus();
+                return Task::future(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        kmd_core::ipc::send_request_result(&request)
+                    })
+                    .await;
+                    let mapped = match result {
+                        Ok(Ok(kmd_core::ipc::Response::Ok { message })) => Ok(message),
+                        Ok(Ok(kmd_core::ipc::Response::Error { message })) => Err(message),
+                        Ok(Ok(other)) => Err(format!("예기치 않은 응답: {other:?}")),
+                        Ok(Err(e)) => Err(format!("IPC 실패: {e}")),
+                        Err(e) => Err(format!("작업 실패: {e}")),
+                    };
+                    Message::AutostartToggleFinished(mapped)
+                });
             }
             llm_toggle if llm_toggle.starts_with("llm:toggle:") => {
                 let target = llm_toggle.strip_prefix("llm:toggle:").unwrap_or("");
@@ -1596,23 +1638,31 @@ impl App {
         self.request_focus()
     }
 
-    fn refresh_daemon_autostart_status(&mut self) -> Option<bool> {
-        match kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::AutostartStatus) {
-            Ok(kmd_core::ipc::Response::AutostartStatus { installed }) => {
-                self.daemon_autostart_enabled = Some(installed);
-                Some(installed)
-            }
-            Ok(other) => {
-                tracing::warn!("autostart status 예기치 않은 응답: {other:?}");
-                self.daemon_autostart_enabled = None;
-                None
-            }
-            Err(e) => {
-                tracing::warn!("autostart status IPC 실패: {e}");
-                self.daemon_autostart_enabled = None;
-                None
-            }
+    fn schedule_autostart_status_refresh(&mut self, force: bool) -> Task<Message> {
+        if self.daemon_autostart_check_in_flight {
+            return Task::none();
         }
+        if !force
+            && self
+                .daemon_autostart_last_checked_at
+                .is_some_and(|ts| ts.elapsed() < Duration::from_millis(AUTOSTART_STATUS_REFRESH_MS))
+        {
+            return Task::none();
+        }
+        self.daemon_autostart_check_in_flight = true;
+        Task::future(async move {
+            let result = tokio::task::spawn_blocking(|| {
+                kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::AutostartStatus)
+            })
+            .await;
+            let mapped = match result {
+                Ok(Ok(kmd_core::ipc::Response::AutostartStatus { installed })) => Ok(installed),
+                Ok(Ok(other)) => Err(format!("예기치 않은 응답: {other:?}")),
+                Ok(Err(e)) => Err(format!("IPC 실패: {e}")),
+                Err(e) => Err(format!("작업 실패: {e}")),
+            };
+            Message::AutostartStatusLoaded(mapped)
+        })
     }
 
     fn launch_selected(&mut self) -> Task<Message> {
@@ -1740,13 +1790,20 @@ impl App {
             return Some(ContextAction::OpenAsAdmin);
         }
 
-        if modifiers.control() && !modifiers.shift() {
+        #[cfg(target_os = "macos")]
+        let ctrl_like = modifiers.control() || modifiers.logo();
+        #[cfg(not(target_os = "macos"))]
+        let ctrl_like = modifiers.control();
+
+        if ctrl_like {
             let idx = match key {
                 keyboard::Key::Character(c) => match c.as_str() {
-                    "1" => Some(0usize),
-                    "2" => Some(1),
-                    "3" => Some(2),
-                    "4" => Some(3),
+                    // Shift가 눌린 숫자 기호(!,@,#,$)나 레이아웃 변형에서도
+                    // 같은 단축키 인덱스로 해석한다.
+                    "1" | "!" => Some(0usize),
+                    "2" | "@" => Some(1),
+                    "3" | "#" => Some(2),
+                    "4" | "$" => Some(3),
                     _ => None,
                 },
                 _ => None,
@@ -1924,7 +1981,9 @@ impl App {
             row![
                 container(left_col).width(Length::FillPortion(2)),
                 vert_divider,
-                container(self.view_detail_panel()).width(Length::FillPortion(1)),
+                container(self.view_detail_panel())
+                    .width(Length::FillPortion(1))
+                    .clip(true),
             ]
             .width(Fill)
             .height(if has_results {
@@ -2319,16 +2378,23 @@ impl App {
             ..Default::default()
         });
 
-        // ── 이름 (Bold, 중앙) ──
-        let name_str = truncate_str(&item.name, 25);
+        // ── 이름 (Bold) ──
+        // 상세 패널 폭 기준으로 타이틀 최대 폭/글자 수를 동적으로 계산한다.
+        // 좌우 마진을 항상 확보해 패널 경계를 넘지 않도록 한다.
+        let detail_panel_width = (self.window_width / 3.0).max(220.0);
+        let title_side_margin = 24.0;
+        let title_width = (detail_panel_width - (title_side_margin * 2.0)).max(120.0);
+        let title_max_chars = estimate_title_max_chars(title_width, u.detail_name_font);
+        let name_str = truncate_str(&item.name, title_max_chars);
         let name_label = container(
             text(name_str)
                 .size(u.detail_name_font)
                 .color(t.text)
-                .wrapping(Wrapping::None)
-                .center(),
+                .width(Length::Fixed(title_width))
+                .wrapping(Wrapping::WordOrGlyph),
         )
         .width(Fill)
+        .clip(true)
         .center_x(Fill)
         .padding(Padding::from([8, 12]));
 
@@ -2549,6 +2615,14 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars).collect();
         format!("{truncated}...")
     }
+}
+
+/// 상세 타이틀 영역 픽셀 폭과 폰트 크기로 안전한 최대 글자 수를 추정한다.
+///
+/// 한글/전각 문자를 고려해 보수적인 폭 계수(0.95em)를 사용한다.
+fn estimate_title_max_chars(width_px: f32, font_size: f32) -> usize {
+    let em = (font_size * 0.95).max(1.0);
+    ((width_px / em).floor() as usize).clamp(8, 64)
 }
 
 /// IME 조합 중 생성되는 trailing 자모를 완화해 즉시 검색 반응성을 높인다.

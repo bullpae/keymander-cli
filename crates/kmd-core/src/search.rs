@@ -181,7 +181,7 @@ impl SearchEngine {
             let boost = self.kind_weights.weight_for(result.item.kind);
             result.score = result.score.saturating_add(boost);
         }
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by_key(|entry| std::cmp::Reverse(entry.score));
     }
 
     /// Fuzzy search using Nucleo
@@ -340,7 +340,7 @@ impl SearchEngine {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by_key(|entry| std::cmp::Reverse(entry.score));
         results.truncate(limit);
         results
     }

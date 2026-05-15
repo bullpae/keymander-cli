@@ -202,15 +202,11 @@ pub fn collect_priority_files(config: &ProviderConfig) -> Vec<IndexItem> {
 pub fn detect_provider(preference: &str, everything_path: Option<&PathBuf>) -> ProviderKind {
     match preference.to_lowercase().as_str() {
         "builtin" | "walkdir" => return ProviderKind::Builtin,
-        "fd" => {
-            if which("fd").is_some() || which("fdfind").is_some() {
-                return ProviderKind::Fd;
-            }
-        }
-        "everything" => {
-            if cfg!(target_os = "windows") && find_everything_cli(everything_path).is_some() {
-                return ProviderKind::Everything;
-            }
+        "fd" if which("fd").is_some() || which("fdfind").is_some() => return ProviderKind::Fd,
+        "everything"
+            if cfg!(target_os = "windows") && find_everything_cli(everything_path).is_some() =>
+        {
+            return ProviderKind::Everything;
         }
         "winfs" | "powershell" => {
             if cfg!(target_os = "windows") {
@@ -222,10 +218,8 @@ pub fn detect_provider(preference: &str, everything_path: Option<&PathBuf>) -> P
                 return ProviderKind::Spotlight;
             }
         }
-        "locate" | "plocate" => {
-            if which("plocate").is_some() || which("locate").is_some() {
-                return ProviderKind::Locate;
-            }
+        "locate" | "plocate" if which("plocate").is_some() || which("locate").is_some() => {
+            return ProviderKind::Locate;
         }
         _ => {} // "auto" → fall through to auto-detect
     }
