@@ -170,6 +170,7 @@ pub struct App {
     last_results_signature: u64,
     loading: bool,
     engine_slot: EngineSlot,
+    db: kmd_core::db::Database,
     _guard: Guard,
 
     // ── Window geometry ───────────────────────────────────────────────
@@ -236,7 +237,7 @@ pub enum Message {
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ContextAction {
     Open,
     OpenAsAdmin,
@@ -256,6 +257,16 @@ impl ContextAction {
         }
     }
 
+    /// Calculator/Emoji 컨텍스트에서 보여줄 레이블 (값 복사)
+    fn label_for_kind(&self, kind: ItemKind) -> &str {
+        match (self, kind) {
+            (Self::CopyName, ItemKind::Calculator) => "값 복사",
+            (Self::CopyName, ItemKind::Emoji) => "이모지 복사",
+            (Self::Open, ItemKind::Calculator) => "복사 후 닫기",
+            _ => self.label(),
+        }
+    }
+
     fn shortcut(&self) -> &str {
         match self {
             Self::Open => "Ctrl+1",
@@ -263,6 +274,18 @@ impl ContextAction {
             Self::OpenFolder => "Ctrl+2",
             Self::CopyPath => "Ctrl+3",
             Self::CopyName => "Ctrl+4",
+        }
+    }
+
+    /// 이 액션에 할당된 Ctrl+N 인덱스 (0-based). 위치가 아닌 타입으로 결정.
+    /// Calculator처럼 액션이 1개뿐이어도 CopyName은 항상 Ctrl+4(=3)로 동작.
+    fn shortcut_index(&self) -> usize {
+        match self {
+            Self::Open => 0,
+            Self::OpenFolder => 1,
+            Self::CopyPath => 2,
+            Self::CopyName => 3,
+            Self::OpenAsAdmin => usize::MAX,
         }
     }
 }
@@ -444,6 +467,11 @@ impl App {
         // 캐시된 full index가 24시간 이내 → 직접 로드 (2-stage 불필요)
         // 캐시 없거나 오래됨 → quick index로 즉시 표시 후 full index를 비동기 빌드
         let (engine, cache_fresh) = Self::build_initial_engine(&config);
+        let db_path = kmd_core::Config::default_data_dir()
+            .join("desktop")
+            .join("kmd.db");
+        let db = kmd_core::db::Database::open(&db_path)
+            .unwrap_or_else(|_| kmd_core::db::Database::open_in_memory().unwrap());
         let theme = crate::theme::from_name(&config.general.theme);
         let use_emoji = config.general.emoji_icons;
         let selected_llm_providers = config.launcher.multi_llm_providers.clone();
@@ -491,6 +519,7 @@ impl App {
             last_results_signature: 0,
             loading: false,
             engine_slot,
+            db,
             _guard: guard,
             window_width,
             window_state,
@@ -1721,6 +1750,17 @@ impl App {
             return iced::exit();
         }
 
+        // 폴더 검색 제안 항목 — path가 ":f  <query>" 형태이면 해당 쿼리로 전환
+        if result.item.keywords.starts_with("kmd:folder_search:") {
+            let seed = result.item.path.trim().to_string();
+            if seed.starts_with(":f") {
+                self.query = seed;
+                self.selected = 0;
+                return self.perform_search();
+            }
+            return Task::none();
+        }
+
         // `@` 브라우징 가상 항목 — 설명 문구를 explorer로 열지 않고 해당 모드로 전환
         if result.item.kind == ItemKind::WebSearch {
             if let Some(seed) = web::web_browse_hint_seed(&result.item.keywords) {
@@ -1748,9 +1788,33 @@ impl App {
             }
         }
 
+        // 계산기 결과: 값을 클립보드에 복사 후 종료
+        if result.item.kind == ItemKind::Calculator {
+            if !result.item.path.is_empty() {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set_text(&result.item.path);
+                }
+            }
+            return iced::exit();
+        }
+
         let action_result = kmd_core::action::execute(&result);
         match action_result {
             kmd_core::action::ActionResult::Launched => {
+                // 앱/파일 실행 기록 → 다음 검색 시 frecency 부스트에 사용
+                let kind_str = match result.item.kind {
+                    ItemKind::App => "app",
+                    ItemKind::Executable => "app",
+                    ItemKind::File => "file",
+                    ItemKind::Directory => "dir",
+                    _ => "misc",
+                };
+                kmd_core::history::record_launch(
+                    &self.db,
+                    kind_str,
+                    &result.item.path,
+                    Some(&result.item.name),
+                );
                 tracing::debug!("Launched: {}", result.item.name);
             }
             kmd_core::action::ActionResult::OpenedUrl(url) => {
@@ -1809,7 +1873,14 @@ impl App {
                 _ => None,
             };
             if let Some(i) = idx {
-                return available.into_iter().nth(i);
+                // 먼저 위치(position) 기반으로 시도
+                if let Some(action) = available.get(i).copied() {
+                    return Some(action);
+                }
+                // 위치 기반으로 해당 액션이 없으면 shortcut_index 기반으로 매칭.
+                // Calculator(CopyName 1개)처럼 액션이 적은 항목에서도
+                // 해당 액션의 고유 단축키 번호(Ctrl+4 등)가 동작하도록 한다.
+                return available.into_iter().find(|a| a.shortcut_index() == i);
             }
         }
 
@@ -2467,7 +2538,7 @@ impl App {
         let mut action_list = Column::new().spacing(1);
         for (i, action) in actions.iter().enumerate() {
             let action_clone = action.clone();
-            let label_text = action.label().to_string();
+            let label_text = action.label_for_kind(item.kind).to_string();
             let shortcut_text = action.shortcut().to_string();
             let is_primary = i == 0;
 

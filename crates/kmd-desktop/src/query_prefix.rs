@@ -11,6 +11,8 @@ pub(crate) enum Prefix {
     Shell,
     Keymap,
     Keys,
+    /// :f /경로 쿼리 — 특정 폴더 내 즉석 파일 검색
+    FolderSearch,
     General,
 }
 
@@ -41,6 +43,8 @@ pub(crate) fn prefix_of(query: &str) -> Prefix {
         Prefix::Keys
     } else if query.starts_with('!') {
         Prefix::Shell
+    } else if query.starts_with(":f ") || query == ":f" {
+        Prefix::FolderSearch
     } else {
         Prefix::General
     }
