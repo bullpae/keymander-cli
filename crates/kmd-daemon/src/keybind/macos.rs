@@ -547,6 +547,7 @@ struct HookState {
     active_layer: Option<usize>,
     trigger_down_time: Instant,
     layer_key_used: bool,
+    pending_layer_launch: Option<BindAction>,
     modifiers_held: HashSet<VKey>,
     last_tap_key: Option<VKey>,
     last_tap_time: Instant,
@@ -581,6 +582,7 @@ unsafe extern "C" fn event_tap_callback(
                 guard.modifiers_held.clear();
                 guard.active_layer = None;
                 guard.layer_key_used = false;
+                guard.pending_layer_launch = None;
                 guard.combo_consumed_key = None;
                 guard.dt_consumed_key = None;
             }
@@ -646,6 +648,7 @@ unsafe extern "C" fn event_tap_callback(
                         guard.active_layer = Some(idx);
                         guard.trigger_down_time = now;
                         guard.layer_key_used = false;
+                        guard.pending_layer_launch = None;
                     }
                     return std::ptr::null_mut(); // 억제
                 } else if guard.active_layer == Some(idx) {
@@ -653,6 +656,7 @@ unsafe extern "C" fn event_tap_callback(
                     let tap_hold_ms = layer.tap_hold_ms;
                     let tap_action = layer.tap_action;
                     let was_used = guard.layer_key_used;
+                    let pending_launch = guard.pending_layer_launch.take();
 
                     guard.active_layer = None;
                     guard.layer_key_used = false;
@@ -663,6 +667,9 @@ unsafe extern "C" fn event_tap_callback(
                             drop(guard);
                             execute_action(&action);
                         }
+                    } else if let Some(action) = pending_launch {
+                        drop(guard);
+                        execute_action(&action);
                     }
                     return std::ptr::null_mut(); // 억제
                 }
@@ -775,6 +782,10 @@ unsafe extern "C" fn event_tap_callback(
             if is_down {
                 guard.layer_key_used = true;
                 guard.layer_dt_last_key = None;
+                if matches!(action, BindAction::Launch(_)) {
+                    guard.pending_layer_launch = Some(action);
+                    return std::ptr::null_mut();
+                }
                 drop(guard);
                 execute_layer_action(&action, trigger);
                 return std::ptr::null_mut();
@@ -933,6 +944,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             active_layer: None,
             trigger_down_time: now,
             layer_key_used: false,
+            pending_layer_launch: None,
             modifiers_held: HashSet::new(),
             last_tap_key: None,
             last_tap_time: now,
@@ -1035,6 +1047,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                 }
                 guard.modifiers_held.clear();
                 guard.active_layer = None;
+                guard.pending_layer_launch = None;
             }
         }
 
