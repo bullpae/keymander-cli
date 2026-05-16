@@ -60,7 +60,6 @@ pub struct UiScale {
     pub row_height: f32,
     pub status_bar_height: f32,
     pub full_window_height: f32,
-    pub brand_icon: f32,
     pub result_icon: f32,
     pub title_font: f32,
     pub subtitle_font: f32,
@@ -95,7 +94,6 @@ impl UiScale {
             row_height,
             status_bar_height,
             full_window_height,
-            brand_icon: (f * 1.5).round(),             // 16→24
             result_icon: (f * 2.0).round(),            // 16→32
             title_font: (f * 1.0).round(),             // 16→16
             subtitle_font: (f * 0.8125).round(),       // 16→13

@@ -62,22 +62,22 @@ impl DesktopTheme {
 
 // ─── Built-in Presets ─────────────────────────────────────────────────────────
 
-/// 1. Midnight (Default) — CLI theme lineage, keymander signature
+/// 1. Keymander (Default) — ink, copper, and signal cyan
 pub fn midnight() -> DesktopTheme {
     DesktopTheme {
-        name: "Midnight",
-        background: rgb(0x18, 0x18, 0x28),
-        surface2: rgb(0x37, 0x3A, 0x50),
-        border: rgb(0x44, 0x48, 0x62),
-        text: rgb(0xDC, 0xE4, 0xFF),
-        subtext: rgb(0xB4, 0xBE, 0xDC),
-        overlay: rgb(0x82, 0x8C, 0xAA),
-        accent: rgb(0x56, 0xD2, 0xFF),
-        green: rgb(0x50, 0xFA, 0x7B),
-        peach: rgb(0xFF, 0xA5, 0x60),
-        yellow: rgb(0xFF, 0xE6, 0x78),
-        red: rgb(0xFF, 0x6E, 0x8C),
-        teal: rgb(0x50, 0xF0, 0xD2),
+        name: "Keymander",
+        background: rgb(0x12, 0x13, 0x16),
+        surface2: rgb(0x23, 0x27, 0x2B),
+        border: rgb(0x38, 0x69, 0x72),
+        text: rgb(0xF2, 0xF6, 0xF8),
+        subtext: rgb(0xA8, 0xB3, 0xB8),
+        overlay: rgb(0x65, 0x70, 0x78),
+        accent: rgb(0x4D, 0xD7, 0xC8),
+        green: rgb(0x7A, 0xE5, 0x9A),
+        peach: rgb(0xFF, 0x8A, 0x4C),
+        yellow: rgb(0xFF, 0xD1, 0x66),
+        red: rgb(0xFF, 0x5C, 0x7A),
+        teal: rgb(0x52, 0xBF, 0xFF),
         opacity: 0.95,
     }
 }
@@ -165,6 +165,7 @@ pub fn nord() -> DesktopTheme {
 /// Resolve a preset name to a theme instance.
 pub fn from_name(name: &str) -> DesktopTheme {
     match name.to_lowercase().as_str() {
+        "keymander" | "default" | "midnight" => midnight(),
         "obsidian" => obsidian(),
         "snow" | "light" => snow(),
         "rose_pine" | "rose-pine" | "rosepine" => rose_pine(),

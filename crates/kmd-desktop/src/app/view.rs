@@ -1,9 +1,80 @@
 //! UI 렌더링 — view, 결과 목록, 상세 패널, 치트시트
 
 use super::*;
-use super::{truncate_str, estimate_title_max_chars, context_actions_for};
+use super::{context_actions_for, estimate_title_max_chars, truncate_str};
 
 impl App {
+    fn view_brand_mark(&self) -> Element<'_, Message> {
+        let t = &self.theme;
+        let u = self.ui;
+        let accent = t.accent;
+        let copper = t.peach;
+        let mark_bg = Color {
+            a: 0.14,
+            ..accent
+        };
+        let mark_border = Color {
+            a: 0.46,
+            ..accent
+        };
+        let wordmark_color = Color {
+            a: 0.72,
+            ..t.text
+        };
+
+        let monogram = row![
+            text("K").size((u.font * 0.92).round()).color(t.text),
+            text(">").size((u.font * 0.95).round()).color(copper),
+        ]
+        .spacing(0)
+        .align_y(iced::Alignment::Center);
+
+        let mark = container(monogram)
+            .width(u.pill_height - 12.0)
+            .height(u.pill_height - 12.0)
+            .center_x(Fill)
+            .center_y(Fill)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(mark_bg)),
+                border: Border {
+                    radius: 9.0.into(),
+                    width: 1.0,
+                    color: mark_border,
+                },
+                ..Default::default()
+            });
+
+        let pulse = container(text(""))
+            .width(2)
+            .height(u.pill_height - 18.0)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(copper)),
+                border: Border {
+                    radius: 1.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+        let wordmark = text("keymander")
+            .size((u.font * 0.72).round())
+            .color(wordmark_color)
+            .wrapping(Wrapping::None);
+
+        let mut brand_row = row![mark, pulse]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+        if self.window_width >= 560.0 {
+            brand_row = brand_row.push(wordmark);
+        }
+
+        mouse_area(brand_row)
+        .on_press(Message::BrandClicked)
+        .on_right_press(Message::BrandRightClicked)
+        .interaction(iced::mouse::Interaction::Pointer)
+        .into()
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let has_results = !self.results.is_empty();
@@ -12,7 +83,6 @@ impl App {
         let accent_color = t.accent;
         let bg = t.background_with_opacity();
 
-        let peach = t.peach;
         let divider_c = t.border;
 
         // ── 드래그 스트립 (투명) ──
@@ -22,19 +92,9 @@ impl App {
 
         // ── 검색바 콘텐츠 ──
         let u = self.ui;
-        let brand = mouse_area(
-            container(text("\u{00BB}").size(u.brand_icon).color(peach)).padding(Padding {
-                top: 0.0,
-                right: 4.0,
-                bottom: 0.0,
-                left: 6.0,
-            }),
-        )
-        .on_press(Message::BrandClicked)
-        .on_right_press(Message::BrandRightClicked)
-        .interaction(iced::mouse::Interaction::Pointer);
+        let brand = self.view_brand_mark();
 
-        let input = text_input("Search anything...", &self.query)
+        let input = text_input("Command anything...", &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
@@ -65,9 +125,9 @@ impl App {
             });
 
         let search_row = row![brand, input]
-            .spacing(6)
+            .spacing(12)
             .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 12]));
+            .padding(Padding::from([0, 14]));
 
         let search_bar = container(search_row).width(Fill).center_y(u.pill_height);
 
@@ -135,12 +195,16 @@ impl App {
 
         // ── 카드 스타일 (pill_height 기반 일관된 라운드) ──
         let border_color = Color {
-            a: 0.30,
+            a: if has_results { 0.28 } else { 0.52 },
             ..accent_color
+        };
+        let inner_line = Color {
+            a: 0.16,
+            ..t.peach
         };
         let radius = u.pill_height / 2.0;
 
-        let card = container(card_col)
+        let card_surface = container(card_col)
             .width(Fill)
             .style(move |_: &_| container::Style {
                 background: Some(Background::Color(bg)),
@@ -148,6 +212,18 @@ impl App {
                     radius: radius.into(),
                     width: 2.0,
                     color: border_color,
+                },
+                ..Default::default()
+            });
+
+        let card = container(card_surface)
+            .width(Fill)
+            .padding(2)
+            .style(move |_: &_| container::Style {
+                border: Border {
+                    radius: (radius + 2.0).into(),
+                    width: 1.0,
+                    color: inner_line,
                 },
                 ..Default::default()
             });

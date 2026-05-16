@@ -112,8 +112,8 @@ impl App {
                 "Toggle daemon start at login".to_string(),
             ),
             (
-                label("Theme: Midnight (default)", "Midnight"),
-                "kmd:settings:theme:midnight".to_string(),
+                label("Theme: Keymander (default)", "Keymander"),
+                "kmd:settings:theme:keymander".to_string(),
                 if emoji { "\u{1F319}" } else { "[THM]" }.to_string(),
                 "Switch desktop theme".to_string(),
             ),
