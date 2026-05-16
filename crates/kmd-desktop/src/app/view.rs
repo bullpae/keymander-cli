@@ -7,72 +7,36 @@ impl App {
     fn view_brand_mark(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let u = self.ui;
-        let accent = t.accent;
         let copper = t.peach;
-        let mark_bg = Color {
-            a: 0.14,
-            ..accent
-        };
-        let mark_border = Color {
-            a: 0.46,
-            ..accent
-        };
-        let wordmark_color = Color {
-            a: 0.72,
-            ..t.text
-        };
 
-        let monogram = row![
-            text("K").size((u.font * 0.92).round()).color(t.text),
-            text(">").size((u.font * 0.95).round()).color(copper),
-        ]
-        .spacing(0)
-        .align_y(iced::Alignment::Center);
+        // copper 색으로 아주 연한 원형 뱃지 배경
+        let badge_bg = Color { a: 0.12, ..copper };
+        let badge_border = Color { a: 0.35, ..copper };
 
-        let mark = container(monogram)
-            .width(u.pill_height - 12.0)
-            .height(u.pill_height - 12.0)
-            .center_x(Fill)
-            .center_y(Fill)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(mark_bg)),
-                border: Border {
-                    radius: 9.0.into(),
-                    width: 1.0,
-                    color: mark_border,
-                },
-                ..Default::default()
-            });
+        let icon = container(
+            text("\u{00BB}")                 // »
+                .size((u.font * 1.15).round())
+                .color(copper),
+        )
+        .width(u.pill_height - 16.0)
+        .height(u.pill_height - 16.0)
+        .center_x(Fill)
+        .center_y(Fill)
+        .style(move |_: &_| container::Style {
+            background: Some(Background::Color(badge_bg)),
+            border: Border {
+                radius: ((u.pill_height - 16.0) / 2.0).into(),
+                width: 1.0,
+                color: badge_border,
+            },
+            ..Default::default()
+        });
 
-        let pulse = container(text(""))
-            .width(2)
-            .height(u.pill_height - 18.0)
-            .style(move |_: &_| container::Style {
-                background: Some(Background::Color(copper)),
-                border: Border {
-                    radius: 1.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            });
-
-        let wordmark = text("keymander")
-            .size((u.font * 0.72).round())
-            .color(wordmark_color)
-            .wrapping(Wrapping::None);
-
-        let mut brand_row = row![mark, pulse]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
-        if self.window_width >= 560.0 {
-            brand_row = brand_row.push(wordmark);
-        }
-
-        mouse_area(brand_row)
-        .on_press(Message::BrandClicked)
-        .on_right_press(Message::BrandRightClicked)
-        .interaction(iced::mouse::Interaction::Pointer)
-        .into()
+        mouse_area(icon)
+            .on_press(Message::BrandClicked)
+            .on_right_press(Message::BrandRightClicked)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .into()
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -94,7 +58,7 @@ impl App {
         let u = self.ui;
         let brand = self.view_brand_mark();
 
-        let input = text_input("Command anything...", &self.query)
+        let input = text_input("Search anything...", &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
             .on_submit(Message::Submit)
@@ -125,9 +89,9 @@ impl App {
             });
 
         let search_row = row![brand, input]
-            .spacing(12)
+            .spacing(8)
             .align_y(iced::Alignment::Center)
-            .padding(Padding::from([0, 14]));
+            .padding(Padding::from([0, 12]));
 
         let search_bar = container(search_row).width(Fill).center_y(u.pill_height);
 
