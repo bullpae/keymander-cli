@@ -990,12 +990,8 @@ mod tests {
         must_mkdir(&dir);
         must_write(&file, "r");
 
-        let stdout = format!(
-            "{}\n{}\n\n",
-            dir.to_string_lossy(),
-            file.to_string_lossy()
-        )
-        .into_bytes();
+        let stdout =
+            format!("{}\n{}\n\n", dir.to_string_lossy(), file.to_string_lossy()).into_bytes();
 
         let mut items = Vec::new();
         parse_line_output_into(&stdout, &mut items, 1, false);

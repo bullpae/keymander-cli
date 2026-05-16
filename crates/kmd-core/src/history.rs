@@ -32,7 +32,7 @@ pub fn boost_results(results: &mut [SearchResult], db: &Database) {
     }
 
     // 점수 기준 내림차순 재정렬
-    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.sort_by_key(|r| std::cmp::Reverse(r.score));
 }
 
 /// Frecency 점수 계산: frequency × recency_weight

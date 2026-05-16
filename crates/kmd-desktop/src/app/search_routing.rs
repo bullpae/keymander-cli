@@ -413,10 +413,7 @@ impl App {
 
         // 첫 번째 토큰을 경로로, 나머지를 검색어로 사용
         let (dir_part, name_query) = match after_prefix.find(' ') {
-            Some(pos) => (
-                after_prefix[..pos].trim(),
-                after_prefix[pos + 1..].trim(),
-            ),
+            Some(pos) => (after_prefix[..pos].trim(), after_prefix[pos + 1..].trim()),
             None => (after_prefix, ""),
         };
 
@@ -472,15 +469,27 @@ impl App {
                 };
                 // 이모지 설정 여부에 따라 아이콘 선택
                 let icon = if is_dir {
-                    if self.use_emoji { "\u{1F4C1}" } else { "D/" }
+                    if self.use_emoji {
+                        "\u{1F4C1}"
+                    } else {
+                        "D/"
+                    }
                 } else {
-                    if self.use_emoji { "\u{1F4C4}" } else { "F " }
+                    if self.use_emoji {
+                        "\u{1F4C4}"
+                    } else {
+                        "F "
+                    }
                 };
 
                 // 검색어와 얼마나 일치하는지 점수 부여 (이름 접두사 일치 우대)
                 let score: u32 = if !query_lower.is_empty() {
                     let nl = file_name.to_ascii_lowercase();
-                    if nl.starts_with(query_lower.as_str()) { 20 } else { 10 }
+                    if nl.starts_with(query_lower.as_str()) {
+                        20
+                    } else {
+                        10
+                    }
                 } else {
                     0
                 };

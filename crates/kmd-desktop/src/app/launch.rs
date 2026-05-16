@@ -1,7 +1,7 @@
 //! 항목 실행, 컨텍스트 액션, 단축키 처리
 
 use super::*;
-use super::{launch_in_terminal, help_query_seed, context_actions_for};
+use super::{context_actions_for, help_query_seed, launch_in_terminal};
 
 impl App {
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {

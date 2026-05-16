@@ -15,11 +15,11 @@ impl App {
 
         let badge_size = u.pill_height - 16.0;
         let icon = container(
-            text("\u{00BB}")                 // »
+            text("\u{00BB}") // »
                 .size((u.font * 1.15).round())
                 .color(copper),
         )
-        .center_x(badge_size)   // center_x(len)은 너비를 len으로 설정하며 가운데 정렬
+        .center_x(badge_size) // center_x(len)은 너비를 len으로 설정하며 가운데 정렬
         .center_y(badge_size)
         .style(move |_: &_| container::Style {
             background: Some(Background::Color(badge_bg)),
@@ -161,10 +161,7 @@ impl App {
             a: if has_results { 0.28 } else { 0.52 },
             ..accent_color
         };
-        let inner_line = Color {
-            a: 0.16,
-            ..t.peach
-        };
+        let inner_line = Color { a: 0.16, ..t.peach };
         let radius = u.pill_height / 2.0;
 
         let card_surface = container(card_col)
@@ -309,7 +306,10 @@ impl App {
             .size(u.subtitle_font)
             .color(t.subtext)
             .wrapping(Wrapping::None);
-        let info = iced::widget::column![title, subtitle].spacing(2).width(Fill).clip(true);
+        let info = iced::widget::column![title, subtitle]
+            .spacing(2)
+            .width(Fill)
+            .clip(true);
 
         let kind_color = t.kind_color(item.kind);
         let kind_label = item.kind.to_string();

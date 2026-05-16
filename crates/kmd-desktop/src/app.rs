@@ -37,9 +37,9 @@ use crate::theme::DesktopTheme;
 use crate::window_state::WindowState;
 
 mod focus_flow;
+mod launch;
 mod search_routing;
 mod settings;
-mod launch;
 mod view;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -494,9 +494,11 @@ impl App {
             Err(e) => {
                 // 파일 DB 열기 실패 시 in-memory로 폴백하되 경고 기록.
                 // frecency 히스토리는 이 세션에서만 유효하고 영구 저장되지 않는다.
-                tracing::warn!("DB 파일 열기 실패 ({e}) — in-memory로 폴백, 히스토리가 저장되지 않습니다: {}", db_path.display());
-                kmd_core::db::Database::open_in_memory()
-                    .expect("in-memory DB 초기화 실패")
+                tracing::warn!(
+                    "DB 파일 열기 실패 ({e}) — in-memory로 폴백, 히스토리가 저장되지 않습니다: {}",
+                    db_path.display()
+                );
+                kmd_core::db::Database::open_in_memory().expect("in-memory DB 초기화 실패")
             }
         };
         let theme = crate::theme::from_name(&config.general.theme);
@@ -737,12 +739,8 @@ impl App {
                 let key_task = self.handle_key(key);
                 self.with_activity_warmup(key_task)
             }
-            Message::BrandClicked => {
-                self.toggle_query_mode(":help")
-            }
-            Message::BrandRightClicked => {
-                self.toggle_query_mode(":set")
-            }
+            Message::BrandClicked => self.toggle_query_mode(":help"),
+            Message::BrandRightClicked => self.toggle_query_mode(":set"),
             Message::StartWindowDrag => match self.window_id {
                 Some(id) => window::drag(id),
                 None => window::oldest().then(|maybe_id| match maybe_id {
@@ -980,8 +978,6 @@ impl App {
 /// | `:help`   | Help / commands   | `:help`, `:h`                  |
 /// | `!`       | Shell command     | `!ip`, `!echo hello`           |
 /// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
-
-
 
 // ─── Shell Terminal Launch ────────────────────────────────────────────────────
 

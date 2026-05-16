@@ -65,8 +65,7 @@ pub fn run() -> color_eyre::Result<()> {
                     let engine = engine.clone();
                     let accept_shutdown = accept_shutdown.clone();
                     std::thread::spawn(move || {
-                        if let Err(e) =
-                            handle_client(stream, &engine, &accept_shutdown, started_at)
+                        if let Err(e) = handle_client(stream, &engine, &accept_shutdown, started_at)
                         {
                             tracing::warn!("클라이언트 처리 에러: {e}");
                         }

@@ -37,12 +37,18 @@ fn test_windows_command_calls_use_hidden_flags() {
             continue;
         }
         visit_rs_files(&root, &mut |path| {
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             if EXEMPT_FILES.contains(&file_name) {
                 return;
             }
-            let path_s = path.to_string_lossy();
-            if EXEMPT_PATH_SUFFIXES.iter().any(|suffix| path_s.ends_with(suffix)) {
+            let path_s = path.to_string_lossy().replace('\\', "/");
+            if EXEMPT_PATH_SUFFIXES
+                .iter()
+                .any(|suffix| path_s.ends_with(suffix))
+            {
                 return;
             }
 

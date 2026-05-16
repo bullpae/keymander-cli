@@ -2,7 +2,7 @@
 
 use super::*;
 #[allow(unused_imports)]
-use super::{save_config, items_to_results};
+use super::{items_to_results, save_config};
 
 impl App {
     pub(super) fn copy_multi_llm_prompt_to_clipboard(&self) {
@@ -26,7 +26,10 @@ impl App {
         }
     }
 
-    pub(super) fn handle_keymap_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
+    pub(super) fn handle_keymap_action(
+        &mut self,
+        result: &kmd_core::SearchResult,
+    ) -> Task<Message> {
         let keywords = &result.item.keywords;
         if keywords.ends_with(":noop") || keywords.contains(":noop:") {
             return Task::none();
@@ -389,7 +392,10 @@ impl App {
         self.apply_contains_items(items);
     }
 
-    pub(super) fn handle_settings_action(&mut self, result: &kmd_core::SearchResult) -> Task<Message> {
+    pub(super) fn handle_settings_action(
+        &mut self,
+        result: &kmd_core::SearchResult,
+    ) -> Task<Message> {
         let action_src = if result.item.keywords.starts_with("kmd:settings:") {
             result.item.keywords.as_str()
         } else {
