@@ -47,41 +47,50 @@ pub fn run() -> color_eyre::Result<()> {
     // 포트/PID 파일 기록
     write_runtime_files(port)?;
 
-    listener.set_nonblocking(true)?;
-
     println!(
         "kmd-daemon 실행 중 (port={port}, pid={})",
         std::process::id()
     );
 
-    // 메인 accept 루프 (non-blocking + poll)
+    // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
+    // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
+    let accept_shutdown = shutdown.clone();
+    let accept_handle = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            if accept_shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+            match stream {
+                Ok(stream) => {
+                    let engine = engine.clone();
+                    let accept_shutdown = accept_shutdown.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) =
+                            handle_client(stream, &engine, &accept_shutdown, started_at)
+                        {
+                            tracing::warn!("클라이언트 처리 에러: {e}");
+                        }
+                    });
+                }
+                Err(e) => {
+                    if accept_shutdown.load(Ordering::Relaxed) {
+                        break; // 정상 종료 신호
+                    }
+                    tracing::warn!("accept 에러: {e}");
+                }
+            }
+        }
+    });
+
+    // 종료 신호가 올 때까지 대기 — shutdown 플래그를 주기적으로 확인
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-
-        match listener.accept() {
-            Ok((stream, _addr)) => {
-                let engine = engine.clone();
-                let shutdown = shutdown.clone();
-
-                std::thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, &engine, &shutdown, started_at) {
-                        tracing::warn!("클라이언트 처리 에러: {e}");
-                    }
-                });
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(e) => {
-                if shutdown.load(Ordering::Relaxed) {
-                    break;
-                }
-                tracing::warn!("accept 에러: {e}");
-            }
-        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
+
+    let _ = accept_handle.join();
 
     // 키 바인딩 종료
     if let Err(e) = kb_backend.stop() {

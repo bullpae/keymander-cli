@@ -670,7 +670,4 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         Ok(())
     }
 
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
 }

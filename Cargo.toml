@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "keymander"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 build = "build.rs"
 description = "키보드 하나로 모든 것을 지휘한다 — CLI-first 크로스플랫폼 런처"

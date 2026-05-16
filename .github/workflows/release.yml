@@ -94,6 +94,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps (iced/winit)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
 
       - name: Validate
         run: cargo check --workspace
@@ -145,6 +153,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps (iced/winit)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
 
       - name: Build all binaries
         run: |

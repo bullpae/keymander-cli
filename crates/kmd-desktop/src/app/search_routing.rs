@@ -372,12 +372,13 @@ impl App {
 
         if results.is_empty() && !query.is_empty() {
             if let Some(relaxed) = relaxed_hangul_query(query) {
-                let relaxed_results = self.engine.search_with_mode(
+                let mut relaxed_results = self.engine.search_with_mode(
                     kmd_core::SearchMode::Contains,
                     &relaxed,
                     SEARCH_LIMIT,
                 );
                 if !relaxed_results.is_empty() {
+                    kmd_core::history::boost_results(&mut relaxed_results, &self.db);
                     results = relaxed_results;
                     self.search_mode = kmd_core::SearchMode::Contains;
                 }
@@ -469,7 +470,20 @@ impl App {
                 } else {
                     kmd_core::index::ItemKind::File
                 };
-                let icon = if is_dir { "D/" } else { "F " };
+                // 이모지 설정 여부에 따라 아이콘 선택
+                let icon = if is_dir {
+                    if self.use_emoji { "\u{1F4C1}" } else { "D/" }
+                } else {
+                    if self.use_emoji { "\u{1F4C4}" } else { "F " }
+                };
+
+                // 검색어와 얼마나 일치하는지 점수 부여 (이름 접두사 일치 우대)
+                let score: u32 = if !query_lower.is_empty() {
+                    let nl = file_name.to_ascii_lowercase();
+                    if nl.starts_with(query_lower.as_str()) { 20 } else { 10 }
+                } else {
+                    0
+                };
 
                 results.push(kmd_core::SearchResult {
                     item: kmd_core::index::IndexItem {
@@ -481,16 +495,21 @@ impl App {
                         keywords: String::new(),
                         icon_path: None,
                     },
-                    score: 0,
+                    score,
                 });
             }
         }
 
-        // 이름 오름차순 정렬 (폴더 우선)
+        // 점수 내림차순 → 같은 점수는 폴더 우선 → 이름 오름차순
         results.sort_by(|a, b| {
-            let a_dir = a.item.kind == kmd_core::index::ItemKind::Directory;
-            let b_dir = b.item.kind == kmd_core::index::ItemKind::Directory;
-            b_dir.cmp(&a_dir).then(a.item.name.cmp(&b.item.name))
+            b.score
+                .cmp(&a.score)
+                .then_with(|| {
+                    let a_dir = a.item.kind == kmd_core::index::ItemKind::Directory;
+                    let b_dir = b.item.kind == kmd_core::index::ItemKind::Directory;
+                    b_dir.cmp(&a_dir)
+                })
+                .then(a.item.name.cmp(&b.item.name))
         });
 
         if results.is_empty() {
@@ -560,11 +579,11 @@ impl App {
 fn folder_search_help_item() -> kmd_core::SearchResult {
     kmd_core::SearchResult {
         item: kmd_core::index::IndexItem {
-            name: ":f /경로 검색어  — 폴더 지정 검색".to_string(),
-            path: String::new(),
+            name: ":f /경로  또는  :f ~/경로 검색어".to_string(),
+            path: "Enter로 폴더를 열거나, 경로 뒤에 검색어를 입력해 파일을 찾으세요".to_string(),
             kind: kmd_core::index::ItemKind::SystemCommand,
             source: kmd_core::index::Source::Plugin,
-            icon: "F?".to_string(),
+            icon: "\u{1F4C2}".to_string(),
             keywords: "kmd:folder_search:hint".to_string(),
             icon_path: None,
         },
@@ -575,11 +594,11 @@ fn folder_search_help_item() -> kmd_core::SearchResult {
 fn folder_not_found_item(dir: &str) -> kmd_core::SearchResult {
     kmd_core::SearchResult {
         item: kmd_core::index::IndexItem {
-            name: format!("폴더 없음: {dir}"),
-            path: String::new(),
+            name: format!("폴더를 찾을 수 없음: {dir}"),
+            path: "경로가 올바른지 확인하거나 Tab으로 경로를 완성해 보세요".to_string(),
             kind: kmd_core::index::ItemKind::SystemCommand,
             source: kmd_core::index::Source::Plugin,
-            icon: "F!".to_string(),
+            icon: "\u{26A0}\u{FE0F}".to_string(),
             keywords: "kmd:folder_search:error".to_string(),
             icon_path: None,
         },
@@ -590,11 +609,11 @@ fn folder_not_found_item(dir: &str) -> kmd_core::SearchResult {
 fn no_match_in_folder_item(dir: &str, query: &str) -> kmd_core::SearchResult {
     kmd_core::SearchResult {
         item: kmd_core::index::IndexItem {
-            name: format!("'{query}' — {dir} 안에 결과 없음"),
-            path: String::new(),
+            name: format!("'{query}'에 해당하는 파일이 없습니다"),
+            path: format!("검색 위치: {dir}"),
             kind: kmd_core::index::ItemKind::SystemCommand,
             source: kmd_core::index::Source::Plugin,
-            icon: "F0".to_string(),
+            icon: "\u{1F50D}".to_string(),
             keywords: "kmd:folder_search:empty".to_string(),
             icon_path: None,
         },

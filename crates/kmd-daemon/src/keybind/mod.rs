@@ -912,8 +912,6 @@ fn parse_combo_vkeys(s: &str) -> Option<(Vec<&str>, VKey)> {
 pub trait KeyboardBackend: Send {
     fn start(&mut self, config: KeybindConfig) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
-    #[allow(dead_code)]
-    fn is_running(&self) -> bool;
 }
 
 /// 현재 플랫폼에 맞는 KeyboardBackend 생성
@@ -943,9 +941,6 @@ impl KeyboardBackend for StubBackend {
     }
     fn stop(&mut self) -> Result<(), String> {
         Ok(())
-    }
-    fn is_running(&self) -> bool {
-        false
     }
 }
 

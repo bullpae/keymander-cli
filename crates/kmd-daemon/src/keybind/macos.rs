@@ -1066,7 +1066,4 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         Ok(())
     }
 
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
 }

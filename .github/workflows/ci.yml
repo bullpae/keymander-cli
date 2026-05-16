@@ -20,6 +20,14 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps (iced/winit requires libx11, libxcb, etc.)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
       - run: cargo check --all-targets
 
   test:
@@ -32,6 +40,14 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
       - run: cargo test --workspace
 
   clippy:
@@ -43,6 +59,13 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev
       - run: cargo clippy --all-targets -- -D warnings
 
   fmt:
