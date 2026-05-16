@@ -106,7 +106,7 @@ fn print_stats(index: &kmd_core::Index) {
             *ext_counts.entry(ext).or_default() += 1;
         }
         let mut ext_vec: Vec<_> = ext_counts.into_iter().collect();
-        ext_vec.sort_by(|a, b| b.1.cmp(&a.1));
+        ext_vec.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         println!("\n  Top file extensions:");
         for (ext, count) in ext_vec.iter().take(15) {
             println!("    .{:<10} {}", ext, count);
