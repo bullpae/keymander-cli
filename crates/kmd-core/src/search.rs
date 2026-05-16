@@ -302,7 +302,9 @@ impl SearchEngine {
             .iter()
             .zip(self.lowercase_cache.entries.iter())
             .filter_map(|(item, lc)| {
-                let segments: Vec<&str> = lc
+                // 경로 세그먼트를 HashSet으로 구성해 O(1) 조회 — 멀티 토큰 시
+                // 기존 segments.contains(&t) (O(n)) 반복을 제거한다.
+                let segment_set: std::collections::HashSet<&str> = lc
                     .path
                     .split(['\\', '/'])
                     .filter(|s| !s.is_empty())
@@ -314,7 +316,7 @@ impl SearchEngine {
                 for token in &tokens {
                     let t = token.as_str();
                     // 우선순위 기반 점수 — 최고 점수만 적용
-                    if segments.contains(&t) {
+                    if segment_set.contains(t) {
                         total_score += SEGMENT_EXACT;
                         exact_segments += 1;
                     } else if lc.path.contains(t) {

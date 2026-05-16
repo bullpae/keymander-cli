@@ -13,8 +13,6 @@ pub struct DesktopTheme {
 
     // Surfaces
     pub background: Color,
-    #[allow(dead_code)]
-    pub surface: Color,
     pub surface2: Color,
     pub border: Color,
 
@@ -35,8 +33,6 @@ pub struct DesktopTheme {
 
     // Effects
     pub opacity: f32,
-    #[allow(dead_code)]
-    pub corner_radius: f32,
 }
 
 impl DesktopTheme {
@@ -71,7 +67,6 @@ pub fn midnight() -> DesktopTheme {
     DesktopTheme {
         name: "Midnight",
         background: rgb(0x18, 0x18, 0x28),
-        surface: rgb(0x2A, 0x2A, 0x40),
         surface2: rgb(0x37, 0x3A, 0x50),
         border: rgb(0x44, 0x48, 0x62),
         text: rgb(0xDC, 0xE4, 0xFF),
@@ -84,7 +79,6 @@ pub fn midnight() -> DesktopTheme {
         red: rgb(0xFF, 0x6E, 0x8C),
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.95,
-        corner_radius: 12.0,
     }
 }
 
@@ -93,7 +87,6 @@ pub fn obsidian() -> DesktopTheme {
     DesktopTheme {
         name: "Obsidian",
         background: rgb(0x00, 0x00, 0x00),
-        surface: rgb(0x0A, 0x0A, 0x0A),
         surface2: rgb(0x1A, 0x1A, 0x1A),
         border: rgb(0x2A, 0x2A, 0x2A),
         text: rgb(0xE0, 0xE0, 0xE0),
@@ -106,7 +99,6 @@ pub fn obsidian() -> DesktopTheme {
         red: rgb(0xFF, 0x6E, 0x8C),
         teal: rgb(0x50, 0xF0, 0xD2),
         opacity: 0.98,
-        corner_radius: 12.0,
     }
 }
 
@@ -115,7 +107,6 @@ pub fn snow() -> DesktopTheme {
     DesktopTheme {
         name: "Snow",
         background: rgb(0xFA, 0xFA, 0xFA),
-        surface: rgb(0xFF, 0xFF, 0xFF),
         surface2: rgb(0xF0, 0xF0, 0xF8),
         border: rgb(0xE0, 0xE0, 0xE8),
         text: rgb(0x1A, 0x1A, 0x2E),
@@ -128,7 +119,6 @@ pub fn snow() -> DesktopTheme {
         red: rgb(0xD0, 0x30, 0x50),
         teal: rgb(0x00, 0x88, 0x80),
         opacity: 0.95,
-        corner_radius: 12.0,
     }
 }
 
@@ -137,7 +127,6 @@ pub fn rose_pine() -> DesktopTheme {
     DesktopTheme {
         name: "Rose Pine",
         background: rgb(0x19, 0x17, 0x24),
-        surface: rgb(0x1F, 0x1D, 0x2E),
         surface2: rgb(0x26, 0x23, 0x3A),
         border: rgb(0x39, 0x35, 0x52),
         text: rgb(0xE0, 0xDE, 0xF4),
@@ -150,7 +139,6 @@ pub fn rose_pine() -> DesktopTheme {
         red: rgb(0xEB, 0x6F, 0x92),
         teal: rgb(0x9C, 0xCF, 0xD8),
         opacity: 0.93,
-        corner_radius: 12.0,
     }
 }
 
@@ -159,7 +147,6 @@ pub fn nord() -> DesktopTheme {
     DesktopTheme {
         name: "Nord",
         background: rgb(0x2E, 0x34, 0x40),
-        surface: rgb(0x3B, 0x42, 0x52),
         surface2: rgb(0x43, 0x4C, 0x5E),
         border: rgb(0x4C, 0x56, 0x6A),
         text: rgb(0xEC, 0xEF, 0xF4),
@@ -172,7 +159,6 @@ pub fn nord() -> DesktopTheme {
         red: rgb(0xBF, 0x61, 0x6A),
         teal: rgb(0x8F, 0xBC, 0xBB),
         opacity: 0.95,
-        corner_radius: 12.0,
     }
 }
 

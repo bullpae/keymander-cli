@@ -455,11 +455,12 @@ impl App {
                     continue;
                 }
 
-                // 검색어 필터
-                if !query_lower.is_empty()
-                    && !file_name.to_lowercase().contains(&query_lower)
-                {
-                    continue;
+                // 검색어 필터 — 쿼리가 있을 때만 lowercase 변환 (할당 최소화)
+                if !query_lower.is_empty() {
+                    let name_lower = file_name.to_ascii_lowercase();
+                    if !name_lower.contains(query_lower.as_str()) {
+                        continue;
+                    }
                 }
 
                 let is_dir = path.is_dir();

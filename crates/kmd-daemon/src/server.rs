@@ -175,7 +175,7 @@ fn process_request(
                 .map(|r| SearchHit {
                     name: r.item.name,
                     path: r.item.path,
-                    kind: format!("{:?}", r.item.kind),
+                    kind: r.item.kind.to_string(),
                     icon: r.item.icon,
                     score: r.score,
                 })

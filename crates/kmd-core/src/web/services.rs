@@ -285,7 +285,8 @@ fn select_services<T: HasId>(
     all: &'static [T],
     is_valid: fn(&str) -> bool,
 ) -> Vec<&'static T> {
-    let mut matched = Vec::new();
+    let mut matched: Vec<&'static T> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for id in selected_ids {
         let normalized = id.trim().to_lowercase();
         if normalized.is_empty() || !is_valid(&normalized) {
@@ -295,7 +296,10 @@ fn select_services<T: HasId>(
             .iter()
             .find(|svc| svc.service_id().eq_ignore_ascii_case(&normalized))
         {
-            matched.push(service);
+            // 동일 서비스가 config에 중복 등록되어도 한 번만 추가
+            if seen.insert(service.service_id()) {
+                matched.push(service);
+            }
         }
     }
     if matched.is_empty() {
