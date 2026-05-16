@@ -918,3 +918,121 @@ pub fn dir_icon(use_emoji: bool) -> String {
         DIR_ASCII.into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn must_mkdir(path: &Path) {
+        std::fs::create_dir_all(path).expect("디렉터리 생성 실패");
+    }
+
+    fn must_write(path: &Path, content: &str) {
+        std::fs::write(path, content).expect("파일 쓰기 실패");
+    }
+
+    #[test]
+    fn walkdir_into_items_skips_hidden_and_root_and_respects_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let root = tmp.path();
+
+        let visible = root.join("visible.txt");
+        let hidden = root.join(".hidden.txt");
+        let docs = root.join("docs");
+        let nested = docs.join("note.md");
+
+        must_write(&visible, "ok");
+        must_write(&hidden, "hidden");
+        must_mkdir(&docs);
+        must_write(&nested, "nested");
+
+        let walker = WalkDir::new(root).max_depth(3).into_iter();
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        walkdir_into_items(walker, &mut items, &mut seen, 2, false);
+
+        // hidden 파일은 제외되고, root(depth=0) 디렉터리는 제외됨
+        assert!(!items.iter().any(|it| it.name.starts_with('.')));
+        assert!(!items.iter().any(|it| it.path == root.to_string_lossy()));
+        assert!(items.len() <= 2, "limit를 넘기면 안 됨");
+    }
+
+    #[test]
+    fn walkdir_into_items_deduplicates_seen_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let root = tmp.path();
+        let file = root.join("a.txt");
+        must_write(&file, "a");
+
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        let walker1 = WalkDir::new(root).max_depth(2).into_iter();
+        walkdir_into_items(walker1, &mut items, &mut seen, 100, false);
+        let len_after_first = items.len();
+
+        let walker2 = WalkDir::new(root).max_depth(2).into_iter();
+        walkdir_into_items(walker2, &mut items, &mut seen, 100, false);
+        let len_after_second = items.len();
+
+        assert_eq!(
+            len_after_first, len_after_second,
+            "seen dedup으로 중복 추가가 없어야 함"
+        );
+    }
+
+    #[test]
+    fn parse_line_output_into_sets_kind_and_respects_max() {
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let root = tmp.path();
+        let dir = root.join("folder");
+        let file = root.join("report.txt");
+        must_mkdir(&dir);
+        must_write(&file, "r");
+
+        let stdout = format!(
+            "{}\n{}\n\n",
+            dir.to_string_lossy(),
+            file.to_string_lossy()
+        )
+        .into_bytes();
+
+        let mut items = Vec::new();
+        parse_line_output_into(&stdout, &mut items, 1, false);
+        assert_eq!(items.len(), 1, "max=1이면 1개만 파싱되어야 함");
+
+        let mut items = Vec::new();
+        parse_line_output_into(&stdout, &mut items, 10, false);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, ItemKind::Directory);
+        assert_eq!(items[1].kind, ItemKind::File);
+    }
+
+    #[test]
+    fn is_ignored_dir_handles_hidden_dollar_and_patterns() {
+        let tmp = tempfile::tempdir().expect("tempdir 생성 실패");
+        let root = tmp.path();
+        must_mkdir(&root.join(".git"));
+        must_mkdir(&root.join("$Recycle.Bin"));
+        must_mkdir(&root.join("node_modules"));
+        must_mkdir(&root.join("keep"));
+
+        let ignore_set: HashSet<&str> = ["node_modules"].into_iter().collect();
+        let mut states = std::collections::HashMap::new();
+
+        for entry in WalkDir::new(root)
+            .min_depth(1)
+            .max_depth(1)
+            .into_iter()
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            states.insert(name, is_ignored_dir(&entry, &ignore_set));
+        }
+
+        assert_eq!(states.get(".git"), Some(&true));
+        assert_eq!(states.get("$Recycle.Bin"), Some(&true));
+        assert_eq!(states.get("node_modules"), Some(&true));
+        assert_eq!(states.get("keep"), Some(&false));
+    }
+}

@@ -462,12 +462,33 @@ impl App {
         config: kmd_core::Config,
         window_state: WindowState,
     ) -> (Self, Task<Message>) {
+        Self::new_with_db_path(guard, config, window_state, None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        guard: Guard,
+        config: kmd_core::Config,
+        window_state: WindowState,
+        db_path: std::path::PathBuf,
+    ) -> (Self, Task<Message>) {
+        Self::new_with_db_path(guard, config, window_state, Some(db_path))
+    }
+
+    fn new_with_db_path(
+        guard: Guard,
+        config: kmd_core::Config,
+        window_state: WindowState,
+        db_path_override: Option<std::path::PathBuf>,
+    ) -> (Self, Task<Message>) {
         // 캐시된 full index가 24시간 이내 → 직접 로드 (2-stage 불필요)
         // 캐시 없거나 오래됨 → quick index로 즉시 표시 후 full index를 비동기 빌드
         let (engine, cache_fresh) = Self::build_initial_engine(&config);
-        let db_path = kmd_core::Config::default_data_dir()
-            .join("desktop")
-            .join("kmd.db");
+        let db_path = db_path_override.unwrap_or_else(|| {
+            kmd_core::Config::default_data_dir()
+                .join("desktop")
+                .join("kmd.db")
+        });
         let db = match kmd_core::db::Database::open(&db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -1167,6 +1188,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("kmd_test_app_{}_{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
+        let test_db_path = tmp.join("kmd_test.db");
 
         let guard = match kmd_core::single_instance::acquire_or_toggle(&tmp) {
             kmd_core::single_instance::InstanceAction::Acquired(g) => g,
@@ -1174,7 +1196,7 @@ mod tests {
         };
         let config = kmd_core::Config::default();
         let window_state = WindowState::default();
-        let (app, _task) = App::new(guard, config, window_state);
+        let (app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
         app
     }
 
