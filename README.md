@@ -429,6 +429,7 @@ web_search = 20
 
 [keybindings]
 global_hotkey = "alt+space"
+toggle_keymap = "ctrl+alt+k"   # temporarily disable/enable daemon key mappings
 quit = "ctrl+c"
 next = "down"
 prev = "up"

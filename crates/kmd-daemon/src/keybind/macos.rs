@@ -544,6 +544,7 @@ static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
 
 struct HookState {
     config: KeybindConfig,
+    keymap_enabled: bool,
     active_layer: Option<usize>,
     trigger_down_time: Instant,
     layer_key_used: bool,
@@ -555,6 +556,28 @@ struct HookState {
     dt_consumed_key: Option<VKey>,
     layer_dt_last_key: Option<VKey>,
     layer_dt_last_time: Instant,
+}
+
+fn combo_trigger_matches(
+    trigger: &super::ComboTrigger,
+    vkey: VKey,
+    modifiers_held: &HashSet<VKey>,
+) -> bool {
+    trigger.key == vkey
+        && trigger
+            .modifiers
+            .iter()
+            .all(|m| modifier_satisfied(m, modifiers_held))
+}
+
+fn reset_keymap_runtime_state(guard: &mut HookState) {
+    guard.active_layer = None;
+    guard.layer_key_used = false;
+    guard.pending_layer_launch = None;
+    guard.last_tap_key = None;
+    guard.combo_consumed_key = None;
+    guard.dt_consumed_key = None;
+    guard.layer_dt_last_key = None;
 }
 
 // ── CGEventTap 콜백 ─────────────────────────────────────────────────────────
@@ -638,6 +661,10 @@ unsafe extern "C" fn event_tap_callback(
         }
         // 플래그가 클리어된 modifier는 held에서도 제거 (동기화)
         sync_modifiers_with_flags(&mut guard.modifiers_held, flags);
+
+        if !guard.keymap_enabled {
+            return event;
+        }
 
         // 레이어 트리거 확인
         for (idx, layer) in guard.config.layers.iter().enumerate() {
@@ -726,6 +753,26 @@ unsafe extern "C" fn event_tap_callback(
     let is_down = type_ == CG_EVENT_KEY_DOWN;
     let is_up = type_ == CG_EVENT_KEY_UP;
 
+    if is_down && !is_modifier_key(&vkey) {
+        if let Some(toggle) = guard.config.toggle_keymap.clone() {
+            if combo_trigger_matches(&toggle, vkey, &guard.modifiers_held) {
+                let enabled = !guard.keymap_enabled;
+                reset_keymap_runtime_state(&mut guard);
+                guard.keymap_enabled = enabled;
+                guard.combo_consumed_key = Some(vkey);
+                tracing::info!(
+                    "keymap {}",
+                    if guard.keymap_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
     // 콤보/더블탭으로 소비된 키의 keyup 억제
     if is_up {
         if guard.combo_consumed_key == Some(vkey) {
@@ -736,6 +783,30 @@ unsafe extern "C" fn event_tap_callback(
             guard.dt_consumed_key = None;
             return std::ptr::null_mut();
         }
+    }
+
+    if !guard.keymap_enabled {
+        if is_down && !is_modifier_key(&vkey) {
+            let combo_action = guard
+                .config
+                .combos
+                .iter()
+                .find(|(trigger, action)| {
+                    matches!(action, BindAction::Launch(_))
+                        && combo_trigger_matches(trigger, vkey, &guard.modifiers_held)
+                })
+                .map(|(_, action)| action.clone());
+
+            if let Some(action) = combo_action {
+                guard.combo_consumed_key = Some(vkey);
+                drop(guard);
+                execute_action(&action);
+                return std::ptr::null_mut();
+            }
+        }
+
+        drop(guard);
+        return event;
     }
 
     // ── 활성 레이어 매핑 확인 ──
@@ -941,6 +1012,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         let now = Instant::now();
         let state = Arc::new(Mutex::new(HookState {
             config,
+            keymap_enabled: true,
             active_layer: None,
             trigger_down_time: now,
             layer_key_used: false,

@@ -20,6 +20,7 @@ static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
 
 struct HookState {
     config: KeybindConfig,
+    keymap_enabled: bool,
     /// 현재 홀드 중인 레이어 트리거 키
     active_layer: Option<usize>,
     /// 레이어 트리거 키가 다운된 시각 (tick count)
@@ -42,6 +43,27 @@ struct HookState {
     layer_dt_last_key: Option<VKey>,
     /// 레이어 내 더블탭: 마지막 실행 시각 (tick count)
     layer_dt_last_tick: u32,
+}
+
+fn combo_trigger_matches(
+    trigger: &super::ComboTrigger,
+    vkey: VKey,
+    modifiers_held: &HashSet<VKey>,
+) -> bool {
+    trigger.key == vkey
+        && trigger
+            .modifiers
+            .iter()
+            .all(|m| modifier_satisfied(m, modifiers_held))
+}
+
+fn reset_keymap_runtime_state(guard: &mut HookState) {
+    guard.active_layer = None;
+    guard.layer_key_used = false;
+    guard.last_tap_key = None;
+    guard.combo_consumed_key = None;
+    guard.dt_consumed_key = None;
+    guard.layer_dt_last_key = None;
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -416,6 +438,26 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
     }
 
+    if is_down && !is_modifier_key(&vkey) {
+        if let Some(toggle) = guard.config.toggle_keymap.clone() {
+            if combo_trigger_matches(&toggle, vkey, &guard.modifiers_held) {
+                let enabled = !guard.keymap_enabled;
+                reset_keymap_runtime_state(&mut guard);
+                guard.keymap_enabled = enabled;
+                guard.combo_consumed_key = Some(vkey);
+                tracing::info!(
+                    "keymap {}",
+                    if guard.keymap_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+                return 1;
+            }
+        }
+    }
+
     // ── 2. 콤보/더블탭으로 소비된 키의 keyup 억제 ──
     if is_up {
         if guard.combo_consumed_key == Some(vkey) {
@@ -426,6 +468,29 @@ unsafe extern "system" fn keyboard_hook_proc(
             guard.dt_consumed_key = None;
             return 1;
         }
+    }
+
+    if !guard.keymap_enabled {
+        if is_down && !is_modifier_key(&vkey) {
+            let combo_action = guard
+                .config
+                .combos
+                .iter()
+                .find(|(trigger, action)| {
+                    matches!(action, BindAction::Launch(_))
+                        && combo_trigger_matches(trigger, vkey, &guard.modifiers_held)
+                })
+                .map(|(_, action)| action.clone());
+
+            if let Some(action) = combo_action {
+                guard.combo_consumed_key = Some(vkey);
+                dispatch_action(guard, state, &action);
+                return 1;
+            }
+        }
+
+        drop(guard);
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
 
     // ── 3. 레이어 트리거 키 처리 ──
@@ -606,6 +671,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
         let state = Arc::new(Mutex::new(HookState {
             config,
+            keymap_enabled: true,
             active_layer: None,
             trigger_down_tick: 0,
             layer_key_used: false,

@@ -479,6 +479,8 @@ pub struct CustomWebService {
 pub struct KeybindingsConfig {
     /// Global hotkey for daemon mode
     pub global_hotkey: String,
+    /// Toggle daemon keymap processing on/off while keeping this hotkey alive.
+    pub toggle_keymap: String,
     pub quit: String,
     pub next: String,
     pub prev: String,
@@ -490,6 +492,7 @@ impl Default for KeybindingsConfig {
     fn default() -> Self {
         Self {
             global_hotkey: String::new(),
+            toggle_keymap: "ctrl+alt+k".to_string(),
             quit: "ctrl+c".to_string(),
             next: "down".to_string(),
             prev: "up".to_string(),
@@ -605,6 +608,7 @@ impl Config {
             "launcher.keymap.active_profile" => Some(self.launcher.keymap.active_profile.clone()),
             // keybindings
             "keybindings.global_hotkey" => get!(str self.keybindings.global_hotkey),
+            "keybindings.toggle_keymap" => get!(str self.keybindings.toggle_keymap),
             "keybindings.quit" => get!(str self.keybindings.quit),
             "keybindings.next" => get!(str self.keybindings.next),
             "keybindings.prev" => get!(str self.keybindings.prev),
@@ -806,6 +810,7 @@ impl Config {
             }
             // keybindings
             "keybindings.global_hotkey" => self.keybindings.global_hotkey = value.to_string(),
+            "keybindings.toggle_keymap" => self.keybindings.toggle_keymap = value.to_string(),
             "keybindings.quit" => self.keybindings.quit = value.to_string(),
             "keybindings.next" => self.keybindings.next = value.to_string(),
             "keybindings.prev" => self.keybindings.prev = value.to_string(),

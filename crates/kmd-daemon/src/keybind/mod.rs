@@ -463,6 +463,8 @@ pub struct KeybindConfig {
     pub combos: Vec<(ComboTrigger, BindAction)>,
     /// 더블탭 바인딩 (예: RShift 두 번 → 한영 전환)
     pub double_taps: Vec<DoubleTapBinding>,
+    /// Runtime toggle hotkey. When disabled, this and Launch combos still run.
+    pub toggle_keymap: Option<ComboTrigger>,
 }
 
 impl KeybindConfig {
@@ -472,6 +474,7 @@ impl KeybindConfig {
             layers: Vec::new(),
             combos: Vec::new(),
             double_taps: Vec::new(),
+            toggle_keymap: None,
         }
     }
 
@@ -551,6 +554,7 @@ impl KeybindConfig {
             }],
             combos: default_hangul_combos(),
             double_taps: default_hangul_double_taps(),
+            toggle_keymap: None,
         }
     }
 
@@ -563,6 +567,7 @@ impl KeybindConfig {
             layers: vec![],
             combos: default_hangul_combos(),
             double_taps: default_hangul_double_taps(),
+            toggle_keymap: None,
         }
     }
 
@@ -615,6 +620,10 @@ impl KeybindConfig {
             } else {
                 self.double_taps.push(dt);
             }
+        }
+
+        if custom.toggle_keymap.is_some() {
+            self.toggle_keymap = custom.toggle_keymap;
         }
 
         self
@@ -783,6 +792,7 @@ impl KeybindConfig {
             layers,
             combos,
             double_taps,
+            toggle_keymap: None,
         })
     }
 }

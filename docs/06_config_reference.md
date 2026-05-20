@@ -71,6 +71,7 @@ web_search = 20
 
 [keybindings]
 global_hotkey = "alt+space"       # 데몬 글로벌 핫키
+toggle_keymap = "ctrl+alt+k"      # daemon keymap on/off
 quit = "ctrl+c"
 next = "down"
 prev = "up"
@@ -179,6 +180,7 @@ active_profile = "vim-nav"
 
 | 키 | 기본값 | 설명 |
 |----|--------|------|
+| toggle_keymap | ctrl+alt+k | daemon keymap on/off |
 | global_hotkey | alt+space | 데몬 핫키 |
 | quit | ctrl+c | 종료 |
 | next | down | 다음 항목 |

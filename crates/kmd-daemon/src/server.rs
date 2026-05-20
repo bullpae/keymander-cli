@@ -268,6 +268,16 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
         }
     }
 
+    let toggle_keymap = config.keybindings.toggle_keymap.trim();
+    if !toggle_keymap.is_empty() {
+        if let Some(trigger) = keybind::parse_combo_trigger(toggle_keymap) {
+            kb.toggle_keymap = Some(trigger);
+            tracing::info!("keymap toggle hotkey registered: {toggle_keymap}");
+        } else {
+            tracing::warn!("keymap toggle hotkey parse failed: {toggle_keymap}");
+        }
+    }
+
     kb
 }
 
@@ -336,6 +346,7 @@ mod tests {
             layers: vec![],
             combos: vec![],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
@@ -354,6 +365,7 @@ mod tests {
             layers: vec![],
             combos: vec![],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
@@ -378,6 +390,7 @@ mod tests {
                 keybind::BindAction::SendKey(keybind::VKey::Hanja),
             )],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
@@ -421,6 +434,7 @@ mod tests {
             }],
             combos: vec![],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
@@ -478,6 +492,7 @@ mod tests {
             }],
             combos: vec![],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
@@ -515,6 +530,7 @@ mod tests {
             }],
             combos: vec![],
             double_taps: vec![],
+            toggle_keymap: None,
         };
 
         let merged = merge_keybind_config(base, custom);
