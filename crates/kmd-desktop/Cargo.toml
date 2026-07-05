@@ -34,6 +34,7 @@ tracing-appender = "0.2"
 # macOS: Info.plist 파싱 (.app 번들 아이콘 추출)
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
+core-foundation-sys = "0.8"
 
 # Windows APIs (DWM square corners, IME/keyboard layout switching, foreground focus)
 [target.'cfg(windows)'.dependencies]

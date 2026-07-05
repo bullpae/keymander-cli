@@ -9,6 +9,14 @@ impl App {
         }
     }
 
+    fn focused_typing_grace_ms(&self) -> u64 {
+        if cfg!(target_os = "macos") {
+            1500
+        } else {
+            700
+        }
+    }
+
     fn should_hold_unfocus_for_ime(&self) -> bool {
         if self.query.is_empty() {
             return false;
@@ -84,8 +92,8 @@ impl App {
                     self.log_ime_state("WindowEvent:Focused:skip_boot_settling");
                     return Task::none();
                 }
-                let typing_recently =
-                    self.last_query_changed_at.elapsed() < Duration::from_millis(700);
+                let typing_recently = self.last_query_changed_at.elapsed()
+                    < Duration::from_millis(self.focused_typing_grace_ms());
                 if !self.query.is_empty() && typing_recently {
                     self.log_ime_state("WindowEvent:Focused:skip_recent_typing");
                     return Task::none();

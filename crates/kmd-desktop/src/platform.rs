@@ -76,9 +76,62 @@ pub fn force_english_ime(raw_id: u64) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Switch macOS input source to English when the launcher opens.
+///
+/// We use Carbon Text Input Source APIs because Iced itself does not expose
+/// a cross-platform IME mode switch hook. Selecting an English source here
+/// keeps command-first typing predictable on open.
+#[cfg(target_os = "macos")]
 pub fn force_english_ime(_raw_id: u64) {
-    // No-op on non-Windows platforms.
+    use core_foundation_sys::base::{CFRelease, CFTypeRef};
+    use core_foundation_sys::string::{
+        kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringRef,
+    };
+    use std::ffi::c_void;
+    use std::ptr;
+
+    type TISInputSourceRef = *mut c_void;
+    type OSStatus = i32;
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn TISCopyInputSourceForLanguage(language: CFStringRef) -> TISInputSourceRef;
+        fn TISSelectInputSource(input_source: TISInputSourceRef) -> OSStatus;
+    }
+
+    unsafe {
+        let lang = CFStringCreateWithCString(
+            ptr::null(),
+            c"en".as_ptr().cast(),
+            kCFStringEncodingUTF8,
+        );
+        if lang.is_null() {
+            tracing::warn!("force_english_ime(macos): failed to allocate CFString(en)");
+            return;
+        }
+
+        let source = TISCopyInputSourceForLanguage(lang);
+        CFRelease(lang as CFTypeRef);
+
+        if source.is_null() {
+            tracing::warn!("force_english_ime(macos): no English input source found");
+            return;
+        }
+
+        let status = TISSelectInputSource(source);
+        CFRelease(source as CFTypeRef);
+
+        if status == 0 {
+            tracing::debug!("macOS input source switched to English");
+        } else {
+            tracing::warn!("force_english_ime(macos): TISSelectInputSource failed ({status})");
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn force_english_ime(_raw_id: u64) {
+    // No-op on unsupported platforms.
 }
 
 /// Bring the window to the foreground and give it keyboard focus.
