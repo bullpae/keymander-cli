@@ -1,7 +1,14 @@
 //! IPC 프로토콜 타입 및 소켓 경로 헬퍼
 //!
 //! 데몬 ↔ 클라이언트(kmd, kmd-desktop) 간 통신에 사용하는 메시지 정의.
-//! 전송 형식: 줄바꿈 구분 JSON (JSON Lines).
+//!
+//! 와이어 프로토콜 (요청):
+//!   line 1: <token-hex>
+//!   line 2: <json-request>
+//!
+//! 토큰은 데몬 시작 시 32바이트 OS RNG로 생성되어 `daemon.port` 파일
+//! 두 번째 줄에 저장된다. 동일 사용자만 읽을 수 있도록 Unix에서는
+//! 0600 권한으로 기록한다. 인증 실패 시 서버는 응답 없이 연결을 종료한다.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -72,7 +79,11 @@ pub struct SearchHit {
 
 // ── 경로 헬퍼 ────────────────────────────────────────────────────────────────
 
-/// 데몬 포트 파일 경로 (TCP localhost 포트 번호 저장)
+/// 데몬 런타임 파일 경로. 형식:
+/// ```text
+/// <port>
+/// <token-hex>
+/// ```
 pub fn port_file_path() -> PathBuf {
     crate::Config::default_data_dir().join("daemon.port")
 }
@@ -80,6 +91,49 @@ pub fn port_file_path() -> PathBuf {
 /// 데몬 PID 파일 경로
 pub fn pid_file_path() -> PathBuf {
     crate::Config::default_data_dir().join("daemon.pid")
+}
+
+// ── 인증 토큰 ────────────────────────────────────────────────────────────────
+
+/// 32바이트 OS RNG에서 hex 64자 토큰 생성
+pub fn generate_token() -> String {
+    use std::fmt::Write;
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf).expect("OS RNG unavailable");
+    let mut s = String::with_capacity(64);
+    for b in buf {
+        let _ = write!(&mut s, "{b:02x}");
+    }
+    s
+}
+
+/// 상수 시간 바이트 비교 — 타이밍 공격 방지
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// 데몬 런타임 파일을 (port, token)으로 파싱
+pub fn read_runtime() -> Result<(u16, String), IpcError> {
+    let content = std::fs::read_to_string(port_file_path()).map_err(|_| IpcError::NoDaemon)?;
+    let mut lines = content.lines();
+    let port: u16 = lines
+        .next()
+        .ok_or(IpcError::NoDaemon)?
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::NoDaemon)?;
+    let token = lines.next().ok_or(IpcError::NoDaemon)?.trim().to_string();
+    if token.is_empty() {
+        return Err(IpcError::NoDaemon);
+    }
+    Ok((port, token))
 }
 
 // ── 직렬화 헬퍼 ──────────────────────────────────────────────────────────────
@@ -135,8 +189,7 @@ impl std::error::Error for IpcError {}
 
 /// 포트 파일에서 데몬 포트 읽기 (실패 시 에러 반환)
 pub fn read_port() -> Result<u16, IpcError> {
-    let content = std::fs::read_to_string(port_file_path()).map_err(|_| IpcError::NoDaemon)?;
-    content.trim().parse().map_err(|_| IpcError::NoDaemon)
+    read_runtime().map(|(port, _)| port)
 }
 
 /// 데몬이 실행 중이면 포트를 반환
@@ -155,14 +208,20 @@ pub fn send_request_result(request: &Request) -> Result<Response, IpcError> {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
 
-    let port = read_port()?;
+    let (port, token) = read_runtime()?;
     let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).map_err(IpcError::Io)?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .map_err(IpcError::Io)?;
 
+    // line 1: token, line 2: JSON request
+    let mut payload = String::with_capacity(token.len() + 64);
+    payload.push_str(&token);
+    payload.push('\n');
     let encoded = encode_request(request).map_err(IpcError::Json)?;
-    stream.write_all(encoded.as_bytes()).map_err(IpcError::Io)?;
+    payload.push_str(&encoded);
+
+    stream.write_all(payload.as_bytes()).map_err(IpcError::Io)?;
     stream.flush().map_err(IpcError::Io)?;
 
     let mut reader = BufReader::new(&stream);

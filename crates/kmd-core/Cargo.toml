@@ -30,6 +30,9 @@ tracing = "0.1"
 # File walking
 walkdir = "2"
 
+# IPC auth token RNG
+getrandom = "0.2"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

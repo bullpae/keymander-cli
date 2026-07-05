@@ -44,8 +44,9 @@ pub fn run() -> color_eyre::Result<()> {
     let port = listener.local_addr()?.port();
     tracing::info!("IPC 서버 시작: 127.0.0.1:{port}");
 
-    // 포트/PID 파일 기록
-    write_runtime_files(port)?;
+    // 인증 토큰 생성 후 포트/PID 파일 기록 (daemon.port: line1=port, line2=token)
+    let token = Arc::new(ipc::generate_token());
+    write_runtime_files(port, &token)?;
 
     println!(
         "kmd-daemon 실행 중 (port={port}, pid={})",
@@ -55,6 +56,7 @@ pub fn run() -> color_eyre::Result<()> {
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
     let accept_shutdown = shutdown.clone();
+    let accept_token = token.clone();
     let accept_handle = std::thread::spawn(move || {
         for stream in listener.incoming() {
             if accept_shutdown.load(Ordering::Relaxed) {
@@ -64,8 +66,10 @@ pub fn run() -> color_eyre::Result<()> {
                 Ok(stream) => {
                     let engine = engine.clone();
                     let accept_shutdown = accept_shutdown.clone();
+                    let conn_token = accept_token.clone();
                     std::thread::spawn(move || {
-                        if let Err(e) = handle_client(stream, &engine, &accept_shutdown, started_at)
+                        if let Err(e) =
+                            handle_client(stream, &engine, &accept_shutdown, started_at, &conn_token)
                         {
                             tracing::warn!("클라이언트 처리 에러: {e}");
                         }
@@ -106,11 +110,21 @@ fn handle_client(
     engine: &Arc<Mutex<SearchEngine>>,
     shutdown: &Arc<AtomicBool>,
     started_at: Instant,
+    token: &str,
 ) -> color_eyre::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
     let mut reader = BufReader::new(&stream);
     let mut writer = &stream;
 
+    // line 1: 인증 토큰. 불일치 시 응답 없이 연결 종료.
+    let mut token_line = String::new();
+    reader.read_line(&mut token_line)?;
+    if !ipc::constant_time_eq(token_line.trim().as_bytes(), token.as_bytes()) {
+        tracing::warn!("IPC 인증 실패 — 연결 종료");
+        return Ok(());
+    }
+
+    // line 2: JSON 요청
     let mut line = String::new();
     reader.read_line(&mut line)?;
 
@@ -325,11 +339,19 @@ fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
     }
 }
 
-fn write_runtime_files(port: u16) -> color_eyre::Result<()> {
+fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
     let data_dir = Config::default_data_dir();
     std::fs::create_dir_all(&data_dir)?;
 
-    std::fs::write(ipc::port_file_path(), port.to_string())?;
+    // daemon.port: line1=port, line2=token (동일 사용자만 읽도록 Unix 0600)
+    let port_path = ipc::port_file_path();
+    std::fs::write(&port_path, format!("{port}\n{token}\n"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&port_path, std::fs::Permissions::from_mode(0o600));
+    }
+
     std::fs::write(ipc::pid_file_path(), std::process::id().to_string())?;
     Ok(())
 }
