@@ -286,7 +286,12 @@ fn merge_keybind_config(base: KeybindConfig, custom: KeybindConfig) -> KeybindCo
     base.merge(custom)
 }
 
-#[cfg(target_os = "windows")]
+/// 한/영 전환 기본 제스처를 보장한다.
+///
+/// - Shift+Space → 한/영: 전 플랫폼 공통. macOS는 execute_action에서 TIS API로
+///   입력 소스를 전환하므로, 물리적 한/영 키가 없는 60% 키보드에서도 Windows와
+///   동일한 제스처를 제공한다.
+/// - RShift 더블탭 → 한/영: Windows 전용 보조 제스처.
 fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
     let has_shift_space = kb.combos.iter().any(|(trigger, _)| {
         trigger.key == keybind::VKey::Space
@@ -304,21 +309,21 @@ fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
         ));
     }
 
-    let has_rshift_dt = kb
-        .double_taps
-        .iter()
-        .any(|dt| dt.key == keybind::VKey::RShift);
-    if !has_rshift_dt {
-        kb.double_taps.push(keybind::DoubleTapBinding {
-            key: keybind::VKey::RShift,
-            action: keybind::BindAction::SendKey(keybind::VKey::Hangul),
-            timeout_ms: 300,
-        });
+    #[cfg(target_os = "windows")]
+    {
+        let has_rshift_dt = kb
+            .double_taps
+            .iter()
+            .any(|dt| dt.key == keybind::VKey::RShift);
+        if !has_rshift_dt {
+            kb.double_taps.push(keybind::DoubleTapBinding {
+                key: keybind::VKey::RShift,
+                action: keybind::BindAction::SendKey(keybind::VKey::Hangul),
+                timeout_ms: 300,
+            });
+        }
     }
 }
-
-#[cfg(not(target_os = "windows"))]
-fn ensure_hangul_fallback(_kb: &mut KeybindConfig) {}
 
 fn write_runtime_files(port: u16) -> color_eyre::Result<()> {
     let data_dir = Config::default_data_dir();
@@ -358,7 +363,7 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn merge_keybind_empty_combos_on_non_windows() {
+    fn merge_keybind_keeps_base_combos_on_non_windows() {
         let base = KeybindConfig::minimal_preset();
         let custom = KeybindConfig {
             remaps: std::collections::HashMap::new(),
@@ -370,8 +375,8 @@ mod tests {
 
         let merged = merge_keybind_config(base, custom);
         assert!(
-            merged.combos.is_empty(),
-            "macOS/Linux: Hangul 콤보는 시스템 입력소스 전환에 위임"
+            !merged.combos.is_empty(),
+            "macOS/Linux: base의 Shift+Space 한/영 콤보는 유지되어야 함 (크로스플랫폼 통일)"
         );
     }
 

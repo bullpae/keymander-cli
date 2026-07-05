@@ -630,7 +630,11 @@ impl KeybindConfig {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// 한/영 전환 콤보 기본값 — 전 플랫폼 공통 Shift+Space.
+///
+/// Windows는 VKey::Hangul(0x15)을 직접 전송하고, macOS는 execute_action에서
+/// TIS API(toggle_input_source)로 입력 소스를 전환한다. 어느 쪽이든 물리적
+/// 한/영 키가 없는 60% 키보드에서 동일한 제스처(Shift+Space)를 제공한다.
 fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
     vec![(
         ComboTrigger {
@@ -639,11 +643,6 @@ fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
         },
         BindAction::SendKey(VKey::Hangul),
     )]
-}
-
-#[cfg(not(target_os = "windows"))]
-fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
-    Vec::new()
 }
 
 #[cfg(target_os = "windows")]
@@ -1009,11 +1008,15 @@ mod tests {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            assert!(
-                config.combos.is_empty(),
-                "콤보는 시스템 입력소스 전환에 위임"
+            assert_eq!(
+                config.combos.len(),
+                1,
+                "Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
             );
-            assert!(config.double_taps.is_empty());
+            assert!(
+                config.double_taps.is_empty(),
+                "RShift 더블탭은 Windows 전용"
+            );
         }
     }
 
@@ -1029,11 +1032,15 @@ mod tests {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            assert!(
-                config.combos.is_empty(),
-                "macOS/Linux: 콤보는 시스템 입력소스 전환에 위임"
+            assert_eq!(
+                config.combos.len(),
+                1,
+                "macOS/Linux: Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
             );
-            assert!(config.double_taps.is_empty());
+            assert!(
+                config.double_taps.is_empty(),
+                "RShift 더블탭은 Windows 전용"
+            );
         }
     }
 

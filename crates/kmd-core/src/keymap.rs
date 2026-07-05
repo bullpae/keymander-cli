@@ -645,6 +645,20 @@ fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapCo
             merged.layers.insert("nav".into(), base_layer);
         }
 
+        // 한/영: Shift+Space는 전 플랫폼 공통, RShift 더블탭은 Windows 기본
+        // (daemon의 ensure_hangul_fallback과 동일한 정책)
+        let has_shift_space = merged
+            .combos
+            .iter()
+            .any(|c| c.trigger.eq_ignore_ascii_case("shift+space"));
+        if !has_shift_space {
+            merged.combos.push(crate::config::ComboToml {
+                trigger: "Shift+Space".into(),
+                action: "Hangul".into(),
+            });
+        }
+
+        #[cfg(target_os = "windows")]
         if merged.double_taps.is_empty() {
             merged.double_taps.push(crate::config::DoubleTapToml {
                 key: "RShift".into(),
