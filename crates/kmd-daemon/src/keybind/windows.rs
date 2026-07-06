@@ -31,6 +31,10 @@ struct HookState {
     sending: bool,
     /// 현재 물리적으로 눌린 수정자 키 추적
     modifiers_held: HashSet<VKey>,
+    /// 홀드 중 다른 키와 조합되어 "수정자로 사용된" 키 집합.
+    /// 사용된 수정자의 keyup은 더블탭의 탭으로 기록하지 않는다.
+    /// (예: RShift+ㅅ=ㅆ 입력 직후 RShift+/=? 가 더블탭 오판정되는 것 방지)
+    mods_used_while_held: HashSet<VKey>,
     /// 더블탭: 마지막으로 탭 완료(keyup)된 키
     last_tap_key: Option<VKey>,
     /// 더블탭: 마지막 탭 시각 (tick count)
@@ -60,6 +64,7 @@ fn combo_trigger_matches(
 fn reset_keymap_runtime_state(guard: &mut HookState) {
     guard.active_layer = None;
     guard.layer_key_used = false;
+    guard.mods_used_while_held.clear();
     guard.last_tap_key = None;
     guard.combo_consumed_key = None;
     guard.dt_consumed_key = None;
@@ -432,10 +437,20 @@ unsafe extern "system" fn keyboard_hook_proc(
     // ── 1. 수정자 키 물리 상태 추적 ──
     if is_modifier_key(&vkey) {
         if is_down {
+            // 새 수정자가 합류하면 기존 홀드 중 수정자들은 "사용됨"으로 표시
+            let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
+            guard.mods_used_while_held.extend(held);
             guard.modifiers_held.insert(vkey);
+            // 새로 눌린 키 자신은 깨끗한 탭 후보로 시작
+            guard.mods_used_while_held.remove(&vkey);
         } else {
             guard.modifiers_held.remove(&vkey);
         }
+    } else if is_down {
+        // 일반 키 down과 함께 홀드 중인 수정자는 전부 "사용됨" — 이후 keyup이
+        // 더블탭의 탭으로 기록되지 않게 한다 (콤보로 소비되기 전에 마킹)
+        let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
+        guard.mods_used_while_held.extend(held);
     }
 
     if is_down && !is_modifier_key(&vkey) {
@@ -636,8 +651,10 @@ unsafe extern "system" fn keyboard_hook_proc(
 
     // ── 8. 더블탭 상태 기록 (keyup 시 탭 완료 기록) ──
     if is_up {
+        // 홀드 중 다른 키와 조합된 수정자는 탭으로 기록하지 않는다
+        let was_used = guard.mods_used_while_held.remove(&vkey);
         let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
-        if has_dt {
+        if has_dt && !was_used {
             guard.last_tap_key = Some(vkey);
             guard.last_tap_tick = kb.time;
         }
@@ -677,6 +694,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             layer_key_used: false,
             sending: false,
             modifiers_held: HashSet::new(),
+            mods_used_while_held: HashSet::new(),
             last_tap_key: None,
             last_tap_tick: 0,
             combo_consumed_key: None,

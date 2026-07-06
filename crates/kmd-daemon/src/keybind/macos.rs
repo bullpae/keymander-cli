@@ -550,6 +550,11 @@ struct HookState {
     layer_key_used: bool,
     pending_layer_launch: Option<BindAction>,
     modifiers_held: HashSet<VKey>,
+    /// 홀드 중 다른 키와 조합되어 "수정자로 사용된" 키 집합.
+    /// 사용된 수정자의 release는 더블탭의 탭으로 기록하지 않는다.
+    /// (예: RShift+ㅅ=ㅆ 입력 후 RShift+/=? — RShift release가 탭으로
+    /// 기록되면 ?의 RShift down이 더블탭으로 오판정되어 한/영이 토글됨)
+    mods_used_while_held: HashSet<VKey>,
     last_tap_key: Option<VKey>,
     last_tap_time: Instant,
     combo_consumed_key: Option<VKey>,
@@ -574,6 +579,7 @@ fn reset_keymap_runtime_state(guard: &mut HookState) {
     guard.active_layer = None;
     guard.layer_key_used = false;
     guard.pending_layer_launch = None;
+    guard.mods_used_while_held.clear();
     guard.last_tap_key = None;
     guard.combo_consumed_key = None;
     guard.dt_consumed_key = None;
@@ -655,7 +661,12 @@ unsafe extern "C" fn event_tap_callback(
             _ => !guard.modifiers_held.contains(&vkey),
         };
         if is_down {
+            // 새 수정자가 합류하면 기존 홀드 중 수정자들은 "사용됨"으로 표시
+            let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
+            guard.mods_used_while_held.extend(held);
             guard.modifiers_held.insert(vkey);
+            // 새로 눌린 키 자신은 깨끗한 탭 후보로 시작
+            guard.mods_used_while_held.remove(&vkey);
         } else {
             guard.modifiers_held.remove(&vkey);
         }
@@ -739,8 +750,11 @@ unsafe extern "C" fn event_tap_callback(
             }
         }
         if !is_down {
+            // 홀드 중 다른 키와 조합된 수정자는 탭으로 기록하지 않는다.
+            // (RShift+ㅅ=ㅆ 직후 RShift+/=? 가 더블탭으로 오판정되는 것 방지)
+            let was_used = guard.mods_used_while_held.remove(&vkey);
             let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
-            if has_dt {
+            if has_dt && !was_used {
                 guard.last_tap_key = Some(vkey);
                 guard.last_tap_time = now;
             }
@@ -752,6 +766,13 @@ unsafe extern "C" fn event_tap_callback(
     // ── keyDown / keyUp 이벤트 ──
     let is_down = type_ == CG_EVENT_KEY_DOWN;
     let is_up = type_ == CG_EVENT_KEY_UP;
+
+    if is_down {
+        // 이 keyDown과 함께 홀드 중인 수정자는 전부 "사용됨" — 이후 release가
+        // 더블탭의 탭으로 기록되지 않게 한다 (콤보/더블탭으로 소비되기 전에 마킹)
+        let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
+        guard.mods_used_while_held.extend(held);
+    }
 
     if is_down && !is_modifier_key(&vkey) {
         if let Some(toggle) = guard.config.toggle_keymap.clone() {
@@ -1018,6 +1039,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             layer_key_used: false,
             pending_layer_launch: None,
             modifiers_held: HashSet::new(),
+            mods_used_while_held: HashSet::new(),
             last_tap_key: None,
             last_tap_time: now,
             combo_consumed_key: None,
