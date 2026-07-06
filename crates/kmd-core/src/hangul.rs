@@ -530,6 +530,89 @@ impl Default for HangulComposer {
 // Utility
 // ============================================================================
 
+/// 낱자로 커밋된 호환 자모를 2벌식 오토마타로 재조합해 정규화한다.
+///
+/// macOS에서 런처가 새 프로세스로 뜬 직후 TSM이 한글 입력기를 연결하기 전에
+/// 입력된 키는 조합 없이 낱자 자모(예: `ㅎㅏㄴ`)로 커밋된다. 이 함수는
+/// 문자열 전체를 자모 스트림으로 분해한 뒤 오토마타로 다시 조합해 IME가
+/// 조합했을 결과(`한`)를 복원한다.
+///
+/// - 정상 한글 텍스트는 분해→재조합이 항등이므로 변화 없음 → `None`
+/// - 자음만 나열된 검색어(`ㅅㅅ` 등)도 조합 불가라 그대로 유지 → `None`
+/// - 변경이 있을 때만 `Some(정규화된 문자열)` 반환
+pub fn recompose_jamo(text: &str) -> Option<String> {
+    if !text.chars().any(|c| compat_char_to_jamo(c).is_some()) {
+        return None;
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut composer = HangulComposer::new();
+
+    let feed = |composer: &mut HangulComposer, out: &mut String, jamo: Jamo| {
+        let res = composer.process(jamo);
+        if let Some(c) = res.committed {
+            out.push(c);
+        }
+    };
+
+    for ch in text.chars() {
+        if let Some(jamo) = compat_char_to_jamo(ch) {
+            feed(&mut composer, &mut out, jamo);
+        } else if let Some((cho, jung, jong)) = decompose_syllable(ch) {
+            // 완성 음절도 자모로 분해해 스트림에 합류시킨다. 그래야
+            // "하" + 낱자 "ㄴ"처럼 앞서 재조합된 결과에 뒤따르는 자모가
+            // 받침으로 올바르게 붙는다 (하ㄴ → 한).
+            feed(&mut composer, &mut out, Jamo::Consonant(cho));
+            feed(&mut composer, &mut out, Jamo::Vowel(jung));
+            if jong != 0 {
+                if let Some((first, second)) = decompose_jong(jong) {
+                    if let (Some(c1), Some(c2)) = (jong_to_cho(first), jong_to_cho(second)) {
+                        feed(&mut composer, &mut out, Jamo::Consonant(c1));
+                        feed(&mut composer, &mut out, Jamo::Consonant(c2));
+                    }
+                } else if let Some(c) = jong_to_cho(jong) {
+                    feed(&mut composer, &mut out, Jamo::Consonant(c));
+                }
+            }
+        } else {
+            if let Some(c) = composer.flush() {
+                out.push(c);
+            }
+            out.push(ch);
+        }
+    }
+    if let Some(c) = composer.flush() {
+        out.push(c);
+    }
+
+    if out == text {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 호환 자모 문자 → Jamo (초성 테이블/중성 테이블 역조회)
+fn compat_char_to_jamo(ch: char) -> Option<Jamo> {
+    if let Some(i) = CHO_CHARS.iter().position(|&c| c == ch) {
+        return Some(Jamo::Consonant(i as u32));
+    }
+    if let Some(i) = JUNG_CHARS.iter().position(|&c| c == ch) {
+        return Some(Jamo::Vowel(i as u32));
+    }
+    None
+}
+
+/// 완성 음절(U+AC00..U+D7A3)을 (초성, 중성, 종성) 인덱스로 분해
+fn decompose_syllable(ch: char) -> Option<(u32, u32, u32)> {
+    let code = ch as u32;
+    if !(0xAC00..=0xD7A3).contains(&code) {
+        return None;
+    }
+    let idx = code - 0xAC00;
+    Some((idx / (21 * 28), (idx % (21 * 28)) / 28, idx % 28))
+}
+
 /// Check if a character is already a Korean character (syllable or jamo).
 /// Used to detect when the system IME is active and we should pass through.
 pub fn is_korean_char(c: char) -> bool {
@@ -748,5 +831,41 @@ mod tests {
         assert_eq!(compose_syllable(0, 0, 0), '가');
         // 힣 = cho:ㅎ(18) + jung:ㅣ(20) + jong:ㅎ(27)
         assert_eq!(compose_syllable(18, 20, 27), '힣');
+    }
+
+    // ── recompose_jamo (TSM 미연결 낱자 커밋 복원) ──
+
+    #[test]
+    fn test_recompose_jamo_basic() {
+        assert_eq!(recompose_jamo("ㅎㅏㄴ"), Some("한".to_string()));
+        assert_eq!(recompose_jamo("ㅎㅏㄴㄱㅡㄹ"), Some("한글".to_string()));
+        assert_eq!(recompose_jamo("ㅗㅏ"), Some("ㅘ".to_string()));
+    }
+
+    #[test]
+    fn test_recompose_jamo_incremental() {
+        // 앞서 재조합된 음절 뒤에 낱자가 이어지는 경우 (키 하나씩 도착)
+        assert_eq!(recompose_jamo("하ㄴ"), Some("한".to_string()));
+        assert_eq!(recompose_jamo("하ㄴㄱㅡ"), Some("한그".to_string()));
+        assert_eq!(recompose_jamo("한ㄱㅡㄹ"), Some("한글".to_string()));
+    }
+
+    #[test]
+    fn test_recompose_jamo_identity_returns_none() {
+        // 정상 텍스트는 분해→재조합이 항등 → None
+        assert_eq!(recompose_jamo("한글"), None);
+        assert_eq!(recompose_jamo("값"), None, "겹받침 왕복 항등");
+        assert_eq!(recompose_jamo("safari"), None);
+        assert_eq!(recompose_jamo(""), None);
+        // 조합 불가능한 자음 나열(의도적 자모 검색)도 유지
+        assert_eq!(recompose_jamo("ㅅㅅ"), None);
+        assert_eq!(recompose_jamo("ㄱ"), None);
+    }
+
+    #[test]
+    fn test_recompose_jamo_mixed() {
+        assert_eq!(recompose_jamo("aㅎㅏn"), Some("a하n".to_string()));
+        assert_eq!(recompose_jamo("ㅎㅏ ㄴ"), Some("하 ㄴ".to_string()));
+        assert_eq!(recompose_jamo("김 부장"), None, "공백 포함 정상 텍스트");
     }
 }

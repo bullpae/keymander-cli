@@ -715,13 +715,23 @@ impl App {
         match message {
             Message::QueryChanged(query) => {
                 self.query = query;
+                // macOS: 런처 프로세스 기동 직후 TSM이 한글 입력기를 연결하기 전에
+                // 입력된 키는 조합 없이 낱자 자모로 커밋된다(ㅎㅏㄴ). IME가 조합했을
+                // 결과(한)로 재조합해 표시/검색을 복원한다. 정상 텍스트는 항등(None).
+                if let Some(recomposed) = kmd_core::hangul::recompose_jamo(&self.query) {
+                    self.log_ime_state("QueryChanged:recompose_jamo");
+                    self.query = recomposed;
+                }
                 self.selected = 0;
                 self.last_query_changed_at = std::time::Instant::now();
                 self.log_ime_state("QueryChanged:assigned");
                 // 한글 IME 조합 중에는 검색/리렌더를 지연해 자모 분리 가능성을 줄인다.
                 if self.should_limit_reorder_for_ime() {
                     self.log_ime_state("QueryChanged:skip_search_due_to_jamo");
-                    return Task::none();
+                    // 조합 중에도 warmup 유휴 타이머를 리셋한다. 그렇지 않으면 부팅 시
+                    // 예약된 WarmupTick이 첫 조합 도중 발화해 loading 토글 재렌더로
+                    // marked text가 깨지고 자모가 분리된다. (macOS)
+                    return self.with_activity_warmup(Task::none());
                 }
                 let search_task = self.perform_search();
                 self.log_ime_state("QueryChanged:perform_search");
@@ -799,6 +809,14 @@ impl App {
                     return Task::none();
                 }
 
+                // IME 조합/최근 입력 중이면 warmup을 미룬다. loading 토글로 인한 뷰
+                // 재렌더가 첫 한글 조합(marked text)을 깨뜨리는 것을 방지. (macOS 자모 분리)
+                if self.is_typing_in_progress() {
+                    self.log_ime_state("WarmupTick:defer_for_ime");
+                    self.warmup_token = self.warmup_token.wrapping_add(1);
+                    return Self::schedule_warmup_tick(self.warmup_token);
+                }
+
                 self.full_warmup_started = true;
                 self.loading = true;
                 tracing::info!(
@@ -809,6 +827,16 @@ impl App {
             }
             Message::EnsureFocus(attempt) => self.handle_ensure_focus(attempt),
             Message::EngineReady => {
+                // warmup이 입력 전에 시작된 경우, 엔진 스왑/loading 토글이 조합 도중
+                // 재렌더를 일으켜 자모가 분리될 수 있다. 조합 중이면 스왑 전체를 미룬다.
+                // (engine_slot이 결과를 계속 보관하므로 이후 재발화 시 그대로 적용)
+                if self.is_typing_in_progress() {
+                    self.log_ime_state("EngineReady:defer_for_ime");
+                    return Task::future(async {
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        Message::EngineReady
+                    });
+                }
                 let loaded = self
                     .engine_slot
                     .lock()
