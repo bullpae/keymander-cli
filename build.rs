@@ -11,6 +11,12 @@ fn main() {
             println!("cargo:warning=assets/icon.ico not found — run `cargo run --manifest-path tools/gen-icon/Cargo.toml` to generate it");
         }
 
-        res.compile().expect("Failed to compile Windows resources");
+        if let Err(e) = res.compile() {
+            eprintln!("winresource: {e}");
+            eprintln!(
+                "hint: Visual Studio Build Tools(C++ workload)가 필요합니다. \
+                 https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+            );
+        }
     }
 }
