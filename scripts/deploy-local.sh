@@ -44,7 +44,8 @@ restart_daemon() {
     sleep 1
 
     info "데몬 시작 중..."
-    nohup "$DEPLOY_DIR/kmd-daemon" > /dev/null 2>&1 &
+    mkdir -p "$DEPLOY_DIR/kmd-data"
+    nohup "$DEPLOY_DIR/kmd-daemon" > "$DEPLOY_DIR/kmd-data/daemon.log" 2>&1 &
     sleep 1
 
     if pgrep -f kmd-daemon > /dev/null; then

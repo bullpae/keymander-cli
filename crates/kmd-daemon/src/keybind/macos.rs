@@ -77,6 +77,8 @@ extern "C" {
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
     fn CGEventSetType(event: CGEventRef, type_: u32);
+    /// 실제 HID 수정자 플래그 조회 (state_id=1: kCGEventSourceStateHIDSystemState)
+    fn CGEventSourceFlagsState(state_id: i32) -> u64;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -127,6 +129,8 @@ extern "C" {
     fn TISCreateInputSourceList(properties: *const c_void, all_installed: bool) -> *mut c_void;
     fn TISSelectInputSource(source: *mut c_void) -> i32;
     static kTISPropertyInputSourceLanguages: *const c_void;
+    static kTISPropertyInputSourceType: *const c_void;
+    static kTISTypeKeyboardInputMode: *const c_void;
 }
 
 // ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
@@ -370,10 +374,21 @@ fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
 
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
-/// macOS TIS API로 한/영 입력 소스를 토글한다.
-/// kVK_JIS_Kana(0x68) 키코드 전송 대신 직접 API 호출 — 비-JIS 키보드에서도 동작.
+/// macOS 한/영 입력 소스 토글.
+///
+/// TIS API(TISSelectInputSource)로 CJK 입력기를 선택하면 선택(메뉴바)만 바뀌고
+/// 포커스된 앱의 입력 컨텍스트가 따라오지 않는 경우가 있다. 로그상 선택은
+/// 매번 attempt=0에 확인되지만 실제 입력은 영문으로 남았다 — 선택 상태
+/// 검증으로는 이 반쪽 전환을 감지할 수 없다.
+///
+/// CapsLock 같은 OS 네이티브 전환은 항상 완전 동기화되므로, 시스템 단축키
+/// "이전 입력 소스 선택"(Ctrl+Space, symbolic hotkey 60)을 합성 이벤트로
+/// 주입해 동일한 네이티브 경로(HIToolbox)를 태운다. 입력 소스가 2개(영문/한글)
+/// 구성에서 "이전 소스" = 토글. IME의 미확정 조합 커밋도 정상 입력 경로로
+/// 흘러 글자 순서 뒤섞임을 방지한다. 주입이 반영되지 않으면(단축키 비활성 등)
+/// TIS API로 폴백한다.
 fn toggle_input_source() {
-    unsafe {
+    let to_korean = unsafe {
         let current = TISCopyCurrentKeyboardInputSource();
         if current.is_null() {
             tracing::warn!("TISCopyCurrentKeyboardInputSource 실패");
@@ -381,15 +396,55 @@ fn toggle_input_source() {
         }
         let is_korean = tis_first_language_matches(current, b"ko\0");
         CFRelease(current);
+        !is_korean
+    };
+    let target: &'static [u8] = if to_korean { b"ko\0" } else { b"en\0" };
+    let target_name = if to_korean { "ko" } else { "en" };
+    let seq_at_start = INPUT_SEQ.load(Ordering::Relaxed);
 
-        let target = if is_korean { b"en\0" } else { b"ko\0" };
-        if !tis_select_source_by_language(target) {
-            tracing::warn!(
-                "입력 소스 전환 실패: {} 소스를 찾을 수 없음",
-                if is_korean { "en" } else { "ko" }
-            );
+    std::thread::spawn(move || unsafe {
+        // 물리 수정자(Shift 등)가 해제될 때까지 대기 — Shift가 남은 채 주입하면
+        // Ctrl+Shift+Space가 되어 다른 단축키(hotkey 61)로 해석된다. (최대 500ms)
+        const MOD_MASK: u64 = CG_EVENT_FLAG_MASK_SHIFT
+            | CG_EVENT_FLAG_MASK_CONTROL
+            | CG_EVENT_FLAG_MASK_ALTERNATE
+            | CG_EVENT_FLAG_MASK_COMMAND;
+        for _ in 0..50 {
+            if CGEventSourceFlagsState(1) & MOD_MASK == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-    }
+
+        tracing::info!("입력 소스 전환: Ctrl+Space 주입 → {target_name}");
+        send_combo(&[VKey::LCtrl], VKey::Space);
+
+        // 주입 반영 확인 (네이티브 경로라 선택==실제 적용)
+        for attempt in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let cur = TISCopyCurrentKeyboardInputSource();
+            if cur.is_null() {
+                continue;
+            }
+            let applied = tis_first_language_matches(cur, target);
+            CFRelease(cur);
+            if applied {
+                tracing::info!("입력 소스 전환 확인: {target_name} (attempt={attempt})");
+                return;
+            }
+        }
+
+        // 주입 미반영 → TIS 폴백. 단 사용자가 이미 타이핑 중이면 조합 보호를
+        // 위해 개입하지 않는다 (소스 재선택은 진행 중인 조합을 취소시킨다).
+        if INPUT_SEQ.load(Ordering::Relaxed) != seq_at_start {
+            tracing::info!("입력 소스 전환: 타이핑 감지 — TIS 폴백 생략 ({target_name})");
+            return;
+        }
+        tracing::warn!("Ctrl+Space 주입 미반영 — TIS 폴백: {target_name}");
+        if !tis_select_source_by_language(target) {
+            tracing::warn!("입력 소스 전환 실패: {target_name} 소스를 찾을 수 없음");
+        }
+    });
 }
 
 unsafe fn tis_first_language_matches(source: *mut c_void, lang: &[u8]) -> bool {
@@ -414,24 +469,41 @@ unsafe fn tis_select_source_by_language(lang: &[u8]) -> bool {
         return false;
     }
     let count = CFArrayGetCount(all);
-    let target =
-        CFStringCreateWithCString(std::ptr::null(), lang.as_ptr(), K_CF_STRING_ENCODING_UTF8);
-    let mut found = false;
 
+    // 언어가 일치하는 후보 중 "입력 모드"(예: 2SetKorean)를 부모 입력기
+    // (Keyboard Input Method)보다 우선 선택한다. 한국어 IM은 부모와 모드가
+    // 각각 리스트에 오르는데, 부모만 선택하면 모드가 지정되지 않은 반선택
+    // 상태가 되어 전환이 겉돌 수 있다.
+    let mut chosen: *mut c_void = std::ptr::null_mut();
+    let mut fallback: *mut c_void = std::ptr::null_mut();
     for i in 0..count {
         let source = CFArrayGetValueAtIndex(all, i) as *mut c_void;
-        if tis_first_language_matches(source, lang) {
-            let status = TISSelectInputSource(source);
-            if status == 0 {
-                found = true;
-            } else {
-                tracing::warn!("TISSelectInputSource 실패: status={status}");
-            }
+        if !tis_first_language_matches(source, lang) {
+            continue;
+        }
+        let ty = TISGetInputSourceProperty(source, kTISPropertyInputSourceType);
+        if !ty.is_null() && CFStringCompare(ty, kTISTypeKeyboardInputMode, 0) == 0 {
+            chosen = source;
             break;
+        }
+        if fallback.is_null() {
+            fallback = source;
+        }
+    }
+    if chosen.is_null() {
+        chosen = fallback;
+    }
+
+    let mut found = false;
+    if !chosen.is_null() {
+        let status = TISSelectInputSource(chosen);
+        if status == 0 {
+            found = true;
+        } else {
+            tracing::warn!("TISSelectInputSource 실패: status={status}");
         }
     }
 
-    CFRelease(target as *mut c_void);
     CFRelease(all);
     found
 }
@@ -541,6 +613,10 @@ static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
 /// CGEventTap 포인터 — 타임아웃 후 재활성화에 사용
 static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// 물리 keyDown마다 증가하는 시퀀스. 입력 소스 전환 워커가 "사용자가
+/// 타이핑을 시작했는지"를 감지해 재선택(조합 취소 유발)을 중단하는 데 쓴다.
+static INPUT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct HookState {
     config: KeybindConfig,
@@ -743,6 +819,7 @@ unsafe extern "C" fn event_tap_callback(
                         guard.modifiers_held.remove(&vkey);
                         let action = dt.action.clone();
                         drop(guard);
+                        tracing::info!("더블탭 발동: {vkey:?} (elapsed={elapsed}ms)");
                         execute_action(&action);
                         return std::ptr::null_mut();
                     }
@@ -768,6 +845,8 @@ unsafe extern "C" fn event_tap_callback(
     let is_up = type_ == CG_EVENT_KEY_UP;
 
     if is_down {
+        // 타이핑 활동 시퀀스 (입력 소스 전환 워커의 재선택 중단 신호)
+        INPUT_SEQ.fetch_add(1, Ordering::Relaxed);
         // 이 keyDown과 함께 홀드 중인 수정자는 전부 "사용됨" — 이후 release가
         // 더블탭의 탭으로 기록되지 않게 한다 (콤보/더블탭으로 소비되기 전에 마킹)
         let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
@@ -906,6 +985,7 @@ unsafe extern "C" fn event_tap_callback(
         if let Some(action) = combo_action {
             guard.combo_consumed_key = Some(vkey);
             drop(guard);
+            tracing::info!("콤보 발동: {vkey:?}");
             execute_action(&action);
             return std::ptr::null_mut();
         }
@@ -928,6 +1008,7 @@ unsafe extern "C" fn event_tap_callback(
                     guard.dt_consumed_key = Some(vkey);
                     let action = dt.action.clone();
                     drop(guard);
+                    tracing::info!("더블탭 발동(keyDown): {vkey:?} (elapsed={elapsed}ms)");
                     execute_action(&action);
                     return std::ptr::null_mut();
                 }
