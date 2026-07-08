@@ -83,6 +83,14 @@ pub fn force_english_ime(raw_id: u64) {
 /// keeps command-first typing predictable on open.
 #[cfg(target_os = "macos")]
 pub fn force_english_ime(_raw_id: u64) {
+    // TIS(Text Input Source) API는 메인 스레드 + 윈도우 서버 세션을 요구한다.
+    // 단위 테스트는 워커 스레드(헤드리스 CI)에서 실행되어 HIToolbox가
+    // abort()를 호출하므로(SIGABRT), 테스트 빌드에서는 건너뛴다.
+    // (Windows 구현은 잘못된 HWND에서 에러 코드만 반환하므로 가드 불필요)
+    if cfg!(test) {
+        return;
+    }
+
     use core_foundation_sys::base::{CFRelease, CFTypeRef};
     use core_foundation_sys::string::{
         kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringRef,
