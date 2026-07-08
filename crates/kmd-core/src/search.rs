@@ -138,7 +138,11 @@ impl SearchEngine {
     }
 
     /// Load items into the search engine (consumes the item list)
+    ///
+    /// 재로드(인덱스 리빌드) 시 이전 아이템을 반드시 비운다 — restart 없이
+    /// push만 하면 리빌드마다 삭제된 항목이 fuzzy 결과에 남고 중복이 쌓인다.
     pub fn load(&mut self, items: Vec<IndexItem>) {
+        self.nucleo.restart(true);
         let injector = self.nucleo.injector();
         for item in &items {
             injector.push(item.clone(), |item, cols| {
@@ -548,6 +552,38 @@ mod tests {
         assert_eq!(mode, SearchMode::Fuzzy);
         assert!(!results.is_empty());
         assert_eq!(results[0].item.name, "Firefox");
+    }
+
+    #[test]
+    fn test_reload_replaces_previous_items() {
+        use crate::index::{ItemKind, Source};
+
+        let firefox = IndexItem {
+            name: "Firefox".to_string(),
+            path: "/usr/bin/firefox".to_string(),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: "\u{1F4E6}".to_string(),
+            keywords: "firefox browser web".to_string(),
+            icon_path: None,
+        };
+
+        let mut engine = SearchEngine::new();
+        engine.load(vec![firefox.clone()]);
+        // 인덱스 리빌드 시나리오: 같은 아이템으로 재로드
+        engine.load(vec![firefox]);
+
+        let (_, results) = engine.search("firefox", 10);
+        assert_eq!(
+            results.len(),
+            1,
+            "재로드 후 fuzzy 결과에 중복 아이템이 남으면 안 됨"
+        );
+
+        // 아이템이 제거된 리빌드 반영 확인
+        engine.load(vec![]);
+        let (_, results) = engine.search("firefox", 10);
+        assert!(results.is_empty(), "재로드로 제거된 아이템은 검색되지 않아야 함");
     }
 
     #[test]
