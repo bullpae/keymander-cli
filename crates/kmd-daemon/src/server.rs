@@ -7,13 +7,15 @@ use kmd_core::{Config, Index, SearchEngine};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 /// 데몬 메인 루프
 pub fn run() -> color_eyre::Result<()> {
     let started_at = Instant::now();
     let shutdown = Arc::new(AtomicBool::new(false));
+    // Shutdown 요청 → 채널로 메인 스레드를 즉시 깨운다 (200ms 폴링 제거)
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
     // 설정 로드
     let config = load_config();
@@ -57,6 +59,7 @@ pub fn run() -> color_eyre::Result<()> {
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
     let accept_shutdown = shutdown.clone();
     let accept_token = token.clone();
+    let accept_tx = shutdown_tx.clone();
     let accept_handle = std::thread::spawn(move || {
         for stream in listener.incoming() {
             if accept_shutdown.load(Ordering::Relaxed) {
@@ -65,11 +68,11 @@ pub fn run() -> color_eyre::Result<()> {
             match stream {
                 Ok(stream) => {
                     let engine = engine.clone();
-                    let accept_shutdown = accept_shutdown.clone();
+                    let conn_tx = accept_tx.clone();
                     let conn_token = accept_token.clone();
                     std::thread::spawn(move || {
                         if let Err(e) =
-                            handle_client(stream, &engine, &accept_shutdown, started_at, &conn_token)
+                            handle_client(stream, &engine, &conn_tx, started_at, &conn_token)
                         {
                             tracing::warn!("클라이언트 처리 에러: {e}");
                         }
@@ -85,13 +88,14 @@ pub fn run() -> color_eyre::Result<()> {
         }
     });
 
-    // 종료 신호가 올 때까지 대기 — shutdown 플래그를 주기적으로 확인
-    loop {
-        if shutdown.load(Ordering::Relaxed) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
+    // 종료 신호가 올 때까지 블로킹 대기 (Shutdown 요청 시 send로 깨어남)
+    let _ = shutdown_rx.recv();
+    shutdown.store(true, Ordering::Relaxed);
+
+    // accept 스레드는 accept()에서 블로킹 중이므로 self-connect로 깨운다.
+    // 기존에는 클라이언트(kmd daemon stop)의 폴링 connect가 우연히 깨워줄
+    // 때만 종료가 완료됐다 — 다른 경로의 Shutdown 요청 시 영구 대기했음.
+    let _ = TcpStream::connect(("127.0.0.1", port));
 
     let _ = accept_handle.join();
 
@@ -108,7 +112,7 @@ pub fn run() -> color_eyre::Result<()> {
 fn handle_client(
     stream: TcpStream,
     engine: &Arc<Mutex<SearchEngine>>,
-    shutdown: &Arc<AtomicBool>,
+    shutdown_tx: &mpsc::Sender<()>,
     started_at: Instant,
     token: &str,
 ) -> color_eyre::Result<()> {
@@ -129,7 +133,7 @@ fn handle_client(
     reader.read_line(&mut line)?;
 
     let request = ipc::decode_request(&line)?;
-    let response = process_request(request, engine, shutdown, started_at);
+    let response = process_request(request, engine, shutdown_tx, started_at);
 
     let encoded = ipc::encode_response(&response)?;
     writer.write_all(encoded.as_bytes())?;
@@ -141,7 +145,7 @@ fn handle_client(
 fn process_request(
     request: Request,
     engine: &Arc<Mutex<SearchEngine>>,
-    shutdown: &Arc<AtomicBool>,
+    shutdown_tx: &mpsc::Sender<()>,
     started_at: Instant,
 ) -> Response {
     match request {
@@ -229,7 +233,7 @@ fn process_request(
         }
 
         Request::Shutdown => {
-            shutdown.store(true, Ordering::Relaxed);
+            let _ = shutdown_tx.send(());
             Response::Ok {
                 message: "데몬을 종료합니다.".into(),
             }
