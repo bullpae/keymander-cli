@@ -6,7 +6,7 @@
 use super::engine::{EngineState, KeyDecision};
 use super::{resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
@@ -15,17 +15,33 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 // ── 글로벌 상태 (콜백에서 접근) ──────────────────────────────────────────────
 //
 // 바인딩 판정 로직은 전부 keybind::engine(플랫폼 독립, 단위 테스트 가능)에
-// 있다. 이 파일은 OS 훅 설치/이벤트 변환/SendInput 실행만 담당한다.
+// 있다. 이 파일은 OS 훅 설치/이벤트 변환/액션 큐잉만 담당한다.
+//
+// 액션(SendInput/매크로/Launch)은 전용 워커 스레드에서 실행한다.
+// LL 훅 콜백이 LowLevelHooksTimeout(기본 수백 ms)을 초과하면 OS가 훅을
+// 조용히 제거하므로, 콜백에서는 채널로 큐잉만 하고 즉시 반환한다.
+// SendInput으로 주입된 이벤트는 LLKHF_INJECTED 플래그로 걸러지므로
+// 재진입 문제가 없다.
 
-static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
+static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
 /// 메시지 루프 스레드 ID — stop() 시 WM_QUIT를 보내 GetMessageW를 깨운다
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
-struct HookState {
-    engine: EngineState,
-    /// 훅에서 SendInput 호출 시 재진입 방지
-    sending: bool,
+/// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
+static ACTION_TX: Mutex<Option<mpsc::Sender<BindAction>>> = Mutex::new(None);
+
+/// 액션을 워커 스레드 큐에 넣는다 (훅 콜백에서 호출 — 블로킹 없음)
+fn queue_action(action: BindAction) {
+    let sender = ACTION_TX.lock().ok().and_then(|g| g.clone());
+    match sender {
+        Some(tx) => {
+            if tx.send(action).is_err() {
+                tracing::warn!("액션 워커가 종료되어 액션을 실행하지 못했습니다");
+            }
+        }
+        None => tracing::warn!("액션 워커 미시작 — 액션 무시"),
+    }
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -293,22 +309,7 @@ fn send_combo(modifier_vks: &[u16], key_vk: u16) {
 
 // ── 수정자 키 판별 / 콤보 매칭 헬퍼 ─────────────────────────────────────────
 
-// ── 바인딩 액션 실행 ────────────────────────────────────────────────────────
-
-/// 가드를 해제하고 액션을 실행한 뒤 다시 sending 플래그를 해제.
-/// 훅 콜백 내에서 반복되는 "sending=true → drop → execute → re-lock" 패턴을 통합.
-fn dispatch_action(
-    mut guard: std::sync::MutexGuard<'_, HookState>,
-    state: &Arc<Mutex<HookState>>,
-    action: &BindAction,
-) {
-    guard.sending = true;
-    drop(guard);
-    execute_action(action);
-    if let Ok(mut g) = state.lock() {
-        g.sending = false;
-    }
-}
+// ── 바인딩 액션 실행 (워커 스레드에서 호출) ─────────────────────────────────
 
 fn execute_action(action: &BindAction) {
     match action {
@@ -387,19 +388,16 @@ unsafe extern "system" fn keyboard_hook_proc(
         Err(_) => return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param),
     };
 
-    if guard.sending {
-        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
-    }
-
-    // 바인딩 판정은 순수 엔진에 위임 — 이 콜백은 결정 실행만 담당
-    match guard.engine.process_key(vkey, is_down, kb.time) {
+    // 바인딩 판정은 순수 엔진에 위임 — 이 콜백은 큐잉만 하고 즉시 반환
+    match guard.process_key(vkey, is_down, kb.time) {
         KeyDecision::PassThrough => {
             drop(guard);
             CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
         }
         KeyDecision::Suppress => 1,
         KeyDecision::Execute(action) => {
-            dispatch_action(guard, state, &action);
+            drop(guard);
+            queue_action(action);
             1
         }
     }
@@ -410,6 +408,7 @@ unsafe extern "system" fn keyboard_hook_proc(
 pub struct WindowsKeyboardBackend {
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    action_worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl WindowsKeyboardBackend {
@@ -417,6 +416,7 @@ impl WindowsKeyboardBackend {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             thread: None,
+            action_worker: None,
         }
     }
 }
@@ -431,10 +431,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         // OnceLock은 최초 1회만 set 가능하므로, 재시작 시에는 기존 Arc 내부의
         // 상태를 새 config로 교체한다 — 그렇지 않으면 stop/start 후에도
         // 이전 설정이 계속 적용된다.
-        let new_state = HookState {
-            engine: EngineState::new(config),
-            sending: false,
-        };
+        let new_state = EngineState::new(config);
         if let Some(existing) = HOOK_STATE.get() {
             match existing.lock() {
                 Ok(mut guard) => *guard = new_state,
@@ -443,6 +440,19 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         } else {
             let _ = HOOK_STATE.set(Arc::new(Mutex::new(new_state)));
         }
+
+        // 액션 워커 시작 — 훅 콜백은 큐잉만 하고 실행은 이 스레드가 담당
+        let (action_tx, action_rx) = mpsc::channel::<BindAction>();
+        match ACTION_TX.lock() {
+            Ok(mut g) => *g = Some(action_tx),
+            Err(_) => return Err("액션 큐 잠금 실패".into()),
+        }
+        self.action_worker = Some(std::thread::spawn(move || {
+            for action in action_rx {
+                execute_action(&action);
+            }
+            tracing::debug!("액션 워커 종료");
+        }));
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
@@ -503,6 +513,13 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        // 센더를 드롭하면 워커의 recv 루프가 끝난다
+        if let Ok(mut g) = ACTION_TX.lock() {
+            *g = None;
+        }
+        if let Some(worker) = self.action_worker.take() {
+            let _ = worker.join();
         }
         Ok(())
     }
