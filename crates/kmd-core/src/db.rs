@@ -37,7 +37,7 @@ impl Database {
 
     /// Record a launch in history (upsert: increment frequency)
     ///
-    /// 확률적으로 history pruning을 수행하여 DB 무한 증식을 방지.
+    /// 주기적으로 history pruning을 수행하여 DB 무한 증식을 방지.
     pub fn record_launch(
         &self,
         item_type: &str,
@@ -56,13 +56,13 @@ impl Database {
             )
             .map_err(DbError::Sqlite)?;
 
-        // 확률적 pruning: 약 5% 확률 (매 ~20회 호출당 1회)
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let tick = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        if tick.is_multiple_of(20) {
+        // 매 20회 호출당 1회 pruning.
+        // 기존의 subsec_nanos() % 20 방식은 Windows 시계 해상도가 100ns
+        // 단위라 나노초가 항상 100의 배수 = 항상 20의 배수여서
+        // "5% 확률" 의도와 달리 매 호출마다 pruning이 실행됐다.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static LAUNCH_COUNTER: AtomicU32 = AtomicU32::new(0);
+        if LAUNCH_COUNTER.fetch_add(1, Ordering::Relaxed) % 20 == 19 {
             self.prune_history();
         }
 
