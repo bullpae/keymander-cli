@@ -113,7 +113,10 @@ impl Database {
              LIMIT ?1",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::warn!("history 조회 실패: {e}");
+                return Vec::new();
+            }
         };
 
         let rows = stmt
@@ -136,16 +139,24 @@ impl Database {
 
     /// Search history entries matching a query
     pub fn search_history(&self, query: &str, limit: usize) -> Vec<HistoryEntry> {
-        let pattern = format!("%{}%", query);
+        // LIKE 와일드카드(%/_)가 사용자 입력으로 동작하지 않도록 이스케이프
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{}%", escaped);
         let mut stmt = match self.conn.prepare(
             "SELECT COALESCE(display, value), value, item_type, frequency, executed_at
              FROM history
-             WHERE value LIKE ?1 OR display LIKE ?1
+             WHERE value LIKE ?1 ESCAPE '\\' OR display LIKE ?1 ESCAPE '\\'
              ORDER BY frequency DESC, executed_at DESC
              LIMIT ?2",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::warn!("history 검색 실패: {e}");
+                return Vec::new();
+            }
         };
 
         let rows = stmt
@@ -191,7 +202,10 @@ impl Database {
             "SELECT name, value, item_type, created_at FROM bookmarks ORDER BY created_at DESC",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::warn!("bookmarks 조회 실패: {e}");
+                return Vec::new();
+            }
         };
 
         let rows = stmt
@@ -319,7 +333,7 @@ pub enum DbError {
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("I/O error: {0}")]
-    Io(std::io::Error),
+    Io(#[from] std::io::Error),
 }
 
 #[cfg(test)]
@@ -348,6 +362,18 @@ mod tests {
         let results = db.search_history("fire", 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "firefox");
+    }
+
+    #[test]
+    fn test_search_history_escapes_like_wildcards() {
+        let db = Database::open_in_memory().unwrap();
+        db.record_launch("app", "abc%def", None).unwrap();
+        db.record_launch("app", "abcXdef", None).unwrap();
+
+        // '%'는 리터럴로 취급되어야 함 — 와일드카드였다면 둘 다 매칭
+        let results = db.search_history("c%d", 10);
+        assert_eq!(results.len(), 1, "%는 리터럴 문자로 검색되어야 함");
+        assert_eq!(results[0].value, "abc%def");
     }
 
     #[test]

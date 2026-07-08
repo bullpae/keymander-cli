@@ -165,25 +165,16 @@ pub fn decode_response(line: &str) -> Result<Response, serde_json::Error> {
 // ── 에러 타입 ────────────────────────────────────────────────────────────────
 
 /// IPC 통신 오류
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum IpcError {
     /// 데몬이 실행 중이지 않음 (포트 파일 없음 / 파싱 실패)
+    #[error("데몬이 실행 중이지 않습니다")]
     NoDaemon,
-    Io(std::io::Error),
-    Json(serde_json::Error),
+    #[error("IO 오류: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON 오류: {0}")]
+    Json(#[from] serde_json::Error),
 }
-
-impl std::fmt::Display for IpcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoDaemon => write!(f, "데몬이 실행 중이지 않습니다"),
-            Self::Io(e) => write!(f, "IO 오류: {e}"),
-            Self::Json(e) => write!(f, "JSON 오류: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for IpcError {}
 
 // ── 클라이언트 헬퍼 ─────────────────────────────────────────────────────────
 

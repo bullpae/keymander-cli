@@ -55,6 +55,7 @@ impl std::fmt::Display for ProviderKind {
 }
 
 /// Provider configuration
+#[derive(Clone)]
 pub struct ProviderConfig {
     pub max_results: usize,
     pub search_depth: usize,
@@ -259,16 +260,8 @@ pub fn collect_files(
         return Vec::new();
     }
 
-    let limited_config = ProviderConfig {
-        max_results: remaining,
-        search_depth: config.search_depth,
-        search_paths: config.search_paths.clone(),
-        ignore_patterns: config.ignore_patterns.clone(),
-        everything_path: config.everything_path.clone(),
-        scan_drives: config.scan_drives,
-        drive_scan_depth: config.drive_scan_depth,
-        use_emoji: config.use_emoji,
-    };
+    let mut limited_config = config.clone();
+    limited_config.max_results = remaining;
 
     tracing::info!("File provider: {} (quota: {} files)", kind, remaining);
 
