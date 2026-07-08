@@ -5,6 +5,8 @@
 //! macOS: CGEventTap (향후)
 //! Linux: evdev + uinput (향후)
 
+pub mod engine;
+
 #[cfg(windows)]
 pub mod windows;
 
