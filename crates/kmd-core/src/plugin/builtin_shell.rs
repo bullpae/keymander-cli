@@ -3,10 +3,103 @@
 //! Activated with `!` prefix — executes shell commands and shows output.
 //! Also provides quick system-info actions.
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use super::{Extension, ExtensionAction};
 use crate::index::{IndexItem, ItemKind, Source};
+
+/// 셸 명령 최대 실행 시간 — `!ping -t` 같은 무한 명령이 런처를 멈추지 않도록.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// 캡처할 최대 출력 크기 (초과분은 버림)
+const MAX_CAPTURE_BYTES: usize = 256 * 1024;
+
+/// 파이프를 끝까지 읽되 MAX_CAPTURE_BYTES까지만 보관하는 리더 스레드.
+/// cap 초과분도 계속 읽어 버린다 — 읽기를 멈추면 자식이 파이프 블로킹으로
+/// 종료하지 못한다.
+fn spawn_capped_reader<R: Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let mut buf = [0u8; 8192];
+            loop {
+                match pipe.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if captured.len() < MAX_CAPTURE_BYTES {
+                            let take = n.min(MAX_CAPTURE_BYTES - captured.len());
+                            captured.extend_from_slice(&buf[..take]);
+                        }
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&captured).trim().to_string()
+    })
+}
+
+/// 타임아웃 시 프로세스 트리 전체를 종료.
+/// Windows에서 child.kill()은 cmd.exe만 죽이고 손자 프로세스(ping 등)는
+/// 남아 파이프를 계속 쥐고 있으므로 taskkill /T 로 트리를 정리한다.
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 명령을 타임아웃/출력 상한과 함께 실행하고 (성공 여부, stdout, stderr) 반환
+fn run_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<(bool, String, String, Option<i32>), String> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to execute: {}", e))?;
+    let stdout_reader = spawn_capped_reader(child.stdout.take());
+    let stderr_reader = spawn_capped_reader(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_tree(&mut child);
+                    // 트리 종료 후 리더 스레드는 EOF로 곧 끝난다
+                    let partial = stdout_reader.join().unwrap_or_default();
+                    let _ = stderr_reader.join();
+                    let mut msg = format!("Timed out after {:.1}s", timeout.as_secs_f32());
+                    if !partial.is_empty() {
+                        msg.push_str(" — partial output:\n");
+                        msg.push_str(&partial);
+                    }
+                    return Err(msg);
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            Err(e) => {
+                kill_process_tree(&mut child);
+                return Err(format!("Failed to wait: {}", e));
+            }
+        }
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    Ok((status.success(), stdout, stderr, status.code()))
+}
 
 /// Quick action: a pre-defined system info command
 struct QuickAction {
@@ -161,35 +254,33 @@ impl ShellExtension {
             return Err("Empty command".to_string());
         }
 
-        let output = if cfg!(target_os = "windows") {
-            hidden_cmd().args(["/c", cmd_line]).output()
+        let cmd = if cfg!(target_os = "windows") {
+            let mut c = hidden_cmd();
+            c.args(["/c", cmd_line]);
+            c
         } else {
-            Command::new("sh").args(["-c", cmd_line]).output()
+            let mut c = Command::new("sh");
+            c.args(["-c", cmd_line]);
+            c
         };
 
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let (success, stdout, stderr, code) = run_with_timeout(cmd, COMMAND_TIMEOUT)?;
 
-                if out.status.success() {
-                    if stdout.is_empty() {
-                        Ok("(no output)".to_string())
-                    } else {
-                        Ok(stdout)
-                    }
-                } else {
-                    let msg = if !stderr.is_empty() {
-                        stderr
-                    } else if !stdout.is_empty() {
-                        stdout
-                    } else {
-                        format!("Exit code: {}", out.status.code().unwrap_or(-1))
-                    };
-                    Err(msg)
-                }
+        if success {
+            if stdout.is_empty() {
+                Ok("(no output)".to_string())
+            } else {
+                Ok(stdout)
             }
-            Err(e) => Err(format!("Failed to execute: {}", e)),
+        } else {
+            let msg = if !stderr.is_empty() {
+                stderr
+            } else if !stdout.is_empty() {
+                stdout
+            } else {
+                format!("Exit code: {}", code.unwrap_or(-1))
+            };
+            Err(msg)
         }
     }
 
@@ -214,11 +305,8 @@ impl ShellExtension {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000);
         }
-        let output = cmd
-            .output()
-            .map_err(|e| format!("Failed to execute: {}", e))?;
+        let (_success, stdout, _stderr, _code) = run_with_timeout(cmd, COMMAND_TIMEOUT)?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if stdout.is_empty() {
             Ok("(no output)".to_string())
         } else {
@@ -352,5 +440,52 @@ mod tests {
         let result = ShellExtension::execute_quick_action("Hostname");
         assert!(result.is_ok());
         assert!(!result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_run_with_timeout_kills_hanging_command() {
+        // 종료되지 않는 명령이 타임아웃으로 중단되는지 확인
+        let cmd = if cfg!(target_os = "windows") {
+            let mut c = hidden_cmd();
+            c.args(["/c", "ping -n 60 127.0.0.1"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "sleep 60"]);
+            c
+        };
+
+        let start = Instant::now();
+        let result = run_with_timeout(cmd, Duration::from_millis(500));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "타임아웃 시 Err 반환");
+        assert!(
+            result.unwrap_err().contains("Timed out"),
+            "타임아웃 메시지 포함"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "타임아웃(0.5s) 부근에서 반환되어야 함: {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_run_with_timeout_normal_completion() {
+        let cmd = if cfg!(target_os = "windows") {
+            let mut c = hidden_cmd();
+            c.args(["/c", "echo done123"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "echo done123"]);
+            c
+        };
+
+        let (success, stdout, _stderr, _code) =
+            run_with_timeout(cmd, Duration::from_secs(10)).unwrap();
+        assert!(success);
+        assert!(stdout.contains("done123"));
     }
 }
