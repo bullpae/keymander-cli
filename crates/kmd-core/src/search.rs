@@ -376,6 +376,18 @@ fn is_url(s: &str) -> bool {
             && matches_domain_pattern(s))
 }
 
+/// 통용 TLD 화이트리스트 — "알파벳 2~6자"만으로 판정하면 report.pdf,
+/// readme.md, config.toml 같은 파일명이 전부 URL로 오판정되어 파일 검색이
+/// 막힌다. md/rs/sh/ts/zip/mov 처럼 파일 확장자와 충돌하는 TLD는 의도적으로
+/// 제외한다 (명시적으로 열려면 https:// 또는 www. 접두사 사용).
+const KNOWN_TLDS: &[&str] = &[
+    "com", "net", "org", "io", "dev", "app", "ai", "co", "kr", "jp", "cn", "us", "uk", "de", "fr",
+    "it", "nl", "es", "se", "no", "fi", "pl", "ch", "at", "be", "dk", "cz", "pt", "gr", "ru", "br",
+    "in", "au", "ca", "mx", "tw", "hk", "sg", "id", "th", "vn", "ph", "my", "nz", "tr", "il", "za",
+    "eu", "tv", "me", "cc", "gg", "fm", "to", "ly", "info", "biz", "xyz", "site", "online",
+    "store", "tech", "blog", "news", "wiki", "cloud", "edu", "gov", "mil", "int",
+];
+
 fn matches_domain_pattern(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     if parts.len() < 2 {
@@ -383,7 +395,7 @@ fn matches_domain_pattern(s: &str) -> bool {
     }
     let tld = parts.last().unwrap_or(&"");
     let tld_part = tld.split('/').next().unwrap_or(tld);
-    tld_part.len() >= 2 && tld_part.len() <= 6 && tld_part.chars().all(|c| c.is_ascii_alphabetic())
+    KNOWN_TLDS.contains(&tld_part.to_ascii_lowercase().as_str())
 }
 
 fn normalize_url(s: &str) -> String {
@@ -506,6 +518,28 @@ mod tests {
     fn test_search_mode_url() {
         assert_eq!(SearchMode::detect("google.com").0, SearchMode::Url);
         assert_eq!(SearchMode::detect("https://example.com").0, SearchMode::Url);
+        assert_eq!(SearchMode::detect("www.example.abcxyz").0, SearchMode::Url);
+    }
+
+    #[test]
+    fn test_filenames_are_not_urls() {
+        // 파일 확장자가 URL(TLD)로 오판정되면 파일 검색이 불가능해진다
+        for name in [
+            "report.pdf",
+            "readme.md",
+            "config.toml",
+            "main.rs",
+            "run.sh",
+            "notes.txt",
+            "photo.jpeg",
+            "archive.zip",
+        ] {
+            assert_ne!(
+                SearchMode::detect(name).0,
+                SearchMode::Url,
+                "{name}은 URL이 아니라 파일명으로 취급되어야 함"
+            );
+        }
     }
 
     #[test]

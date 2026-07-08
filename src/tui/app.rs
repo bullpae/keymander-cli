@@ -755,13 +755,6 @@ fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
         }
     }
 
-    // URL mode
-    let (mode, normalized) = SearchMode::detect(&state.query);
-    if mode == SearchMode::Url {
-        open_urls_and_quit(state, &[normalized]);
-        return;
-    }
-
     // Normal execution
     match action::execute(result) {
         action::ActionResult::Launched => {
@@ -1095,6 +1088,34 @@ fn handle_main_search(
 ) {
     let (mode, mut results) = engine.search(query, SEARCH_RESULT_LIMIT);
     state.search_mode = mode;
+
+    // URL로 판정된 쿼리: 원본 쿼리로 일반(contains) 검색을 수행해 파일도
+    // 계속 찾을 수 있게 하고, "URL 열기" 가상 항목을 맨 위에 추가한다.
+    // (Enter는 항상 선택된 항목을 실행 — URL은 이 가상 항목으로 연다)
+    if mode == SearchMode::Url {
+        let (_, normalized_url) = SearchMode::detect(query);
+        results = engine.search_with_mode(SearchMode::Contains, query.trim(), SEARCH_RESULT_LIMIT);
+        let url_item = kmd_core::IndexItem {
+            name: format!("Open {}", normalized_url),
+            path: normalized_url.clone(),
+            kind: ItemKind::WebSearch,
+            source: Source::Plugin,
+            icon: if state.use_emoji {
+                "\u{1F310}".to_string() // 🌐
+            } else {
+                "Ww".to_string()
+            },
+            keywords: normalized_url,
+            icon_path: None,
+        };
+        results.insert(
+            0,
+            SearchResult {
+                item: url_item,
+                score: SCORE_WEB_SEARCH,
+            },
+        );
+    }
 
     // Inline calculator: prepend result if query looks like math
     if builtin_calc::looks_like_math(query) {
