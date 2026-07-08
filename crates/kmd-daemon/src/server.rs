@@ -117,7 +117,10 @@ fn handle_client(
     token: &str,
 ) -> color_eyre::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
-    let mut reader = BufReader::new(&stream);
+
+    // 요청 크기 상한 — 개행 없는 대용량 스트림으로 인한 메모리 소진 방지
+    const MAX_REQUEST_BYTES: u64 = 64 * 1024;
+    let mut reader = BufReader::new(std::io::Read::take(&stream, MAX_REQUEST_BYTES));
     let mut writer = &stream;
 
     // line 1: 인증 토큰. 불일치 시 응답 없이 연결 종료.
@@ -347,13 +350,22 @@ fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
     let data_dir = Config::default_data_dir();
     std::fs::create_dir_all(&data_dir)?;
 
-    // daemon.port: line1=port, line2=token (동일 사용자만 읽도록 Unix 0600)
+    // daemon.port: line1=port, line2=token (동일 사용자만 읽도록 Unix 0600).
+    // 쓰기 후 chmod 하면 그 사이에 다른 사용자가 읽을 수 있으므로
+    // 처음부터 0600으로 생성한다. 기존 파일은 권한이 남을 수 있어 먼저 제거.
     let port_path = ipc::port_file_path();
-    std::fs::write(&port_path, format!("{port}\n{token}\n"))?;
-    #[cfg(unix)]
+    let _ = std::fs::remove_file(&port_path);
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&port_path, std::fs::Permissions::from_mode(0o600));
+        use std::io::Write as _;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&port_path)?;
+        write!(f, "{port}\n{token}\n")?;
     }
 
     std::fs::write(ipc::pid_file_path(), std::process::id().to_string())?;
