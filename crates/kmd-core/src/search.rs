@@ -617,7 +617,10 @@ mod tests {
         // 아이템이 제거된 리빌드 반영 확인
         engine.load(vec![]);
         let (_, results) = engine.search("firefox", 10);
-        assert!(results.is_empty(), "재로드로 제거된 아이템은 검색되지 않아야 함");
+        assert!(
+            results.is_empty(),
+            "재로드로 제거된 아이템은 검색되지 않아야 함"
+        );
     }
 
     #[test]

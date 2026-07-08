@@ -7,9 +7,7 @@
 
 use std::collections::HashSet;
 
-use super::{
-    is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, VKey,
-};
+use super::{is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, VKey};
 
 /// 키 이벤트 처리 결정
 #[derive(Debug, Clone)]
@@ -593,7 +591,7 @@ mod tests {
         let mut e = EngineState::new(double_tap_config());
         e.process_key(VKey::RShift, true, 1000);
         e.process_key(VKey::RShift, false, 1050); // 탭 기록
-        // 다른 (비수정자) 키 입력 → 탭 시퀀스 리셋
+                                                  // 다른 (비수정자) 키 입력 → 탭 시퀀스 리셋
         e.process_key(VKey::A, true, 1100);
         e.process_key(VKey::A, false, 1130);
         assert!(matches!(

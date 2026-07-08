@@ -108,11 +108,8 @@ pub fn force_english_ime(_raw_id: u64) {
     }
 
     unsafe {
-        let lang = CFStringCreateWithCString(
-            ptr::null(),
-            c"en".as_ptr().cast(),
-            kCFStringEncodingUTF8,
-        );
+        let lang =
+            CFStringCreateWithCString(ptr::null(), c"en".as_ptr().cast(), kCFStringEncodingUTF8);
         if lang.is_null() {
             tracing::warn!("force_english_ime(macos): failed to allocate CFString(en)");
             return;
