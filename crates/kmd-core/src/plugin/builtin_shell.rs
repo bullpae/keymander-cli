@@ -5,6 +5,7 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::{Extension, ExtensionAction};
@@ -17,10 +18,10 @@ const MAX_CAPTURE_BYTES: usize = 256 * 1024;
 
 /// 파이프를 끝까지 읽되 MAX_CAPTURE_BYTES까지만 보관하는 리더 스레드.
 /// cap 초과분도 계속 읽어 버린다 — 읽기를 멈추면 자식이 파이프 블로킹으로
-/// 종료하지 못한다.
-fn spawn_capped_reader<R: Read + Send + 'static>(
-    pipe: Option<R>,
-) -> std::thread::JoinHandle<String> {
+/// 종료하지 못한다. 결과는 채널로 전달 — join과 달리 recv_timeout이
+/// 가능해, 파이프를 물려받은 좀비 손자가 있어도 무한 대기하지 않는다.
+fn spawn_capped_reader<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut captured = Vec::new();
         if let Some(mut pipe) = pipe {
@@ -37,13 +38,31 @@ fn spawn_capped_reader<R: Read + Send + 'static>(
                 }
             }
         }
-        String::from_utf8_lossy(&captured).trim().to_string()
-    })
+        let _ = tx.send(String::from_utf8_lossy(&captured).trim().to_string());
+    });
+    rx
 }
 
+/// 자식이 자기 프로세스 그룹의 리더가 되도록 설정 (Unix).
+/// 타임아웃 시 그룹 전체를 kill 하기 위함 — child.kill()은 sh만 죽이고
+/// 손자(sleep 등)는 살아남아 파이프를 계속 쥔다.
+#[cfg(unix)]
+fn setup_process_group(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn setup_process_group(_cmd: &mut Command) {}
+
 /// 타임아웃 시 프로세스 트리 전체를 종료.
-/// Windows에서 child.kill()은 cmd.exe만 죽이고 손자 프로세스(ping 등)는
-/// 남아 파이프를 계속 쥐고 있으므로 taskkill /T 로 트리를 정리한다.
+/// - Windows: taskkill /T /F — cmd.exe만 죽이면 손자가 파이프를 쥐고 남는다
+/// - Unix: 프로세스 그룹(-pid) 전체에 SIGKILL
 fn kill_process_tree(child: &mut std::process::Child) {
     #[cfg(target_os = "windows")]
     {
@@ -52,6 +71,10 @@ fn kill_process_tree(child: &mut std::process::Child) {
             .args(["/T", "/F", "/PID", &child.id().to_string()])
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .output();
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -65,10 +88,17 @@ fn run_with_timeout(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    setup_process_group(&mut cmd);
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to execute: {}", e))?;
-    let stdout_reader = spawn_capped_reader(child.stdout.take());
-    let stderr_reader = spawn_capped_reader(child.stderr.take());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to execute: {}", e))?;
+    let stdout_rx = spawn_capped_reader(child.stdout.take());
+    let stderr_rx = spawn_capped_reader(child.stderr.take());
+
+    // 프로세스 종료 후 리더 결과 수거 대기 상한 — 트리 킬을 벗어난
+    // (새 세션으로 분리된) 프로세스가 파이프를 쥐고 있어도 여기서 끊는다
+    const READER_GRACE: Duration = Duration::from_secs(2);
 
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -77,9 +107,7 @@ fn run_with_timeout(
             Ok(None) => {
                 if Instant::now() >= deadline {
                     kill_process_tree(&mut child);
-                    // 트리 종료 후 리더 스레드는 EOF로 곧 끝난다
-                    let partial = stdout_reader.join().unwrap_or_default();
-                    let _ = stderr_reader.join();
+                    let partial = stdout_rx.recv_timeout(READER_GRACE).unwrap_or_default();
                     let mut msg = format!("Timed out after {:.1}s", timeout.as_secs_f32());
                     if !partial.is_empty() {
                         msg.push_str(" — partial output:\n");
@@ -96,8 +124,8 @@ fn run_with_timeout(
         }
     };
 
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let stdout = stdout_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    let stderr = stderr_rx.recv_timeout(READER_GRACE).unwrap_or_default();
     Ok((status.success(), stdout, stderr, status.code()))
 }
 
@@ -451,7 +479,10 @@ mod tests {
             c
         } else {
             let mut c = Command::new("sh");
-            c.args(["-c", "sleep 60"]);
+            // "; true"로 sh의 exec 최적화를 막아 sleep이 손자 프로세스가
+            // 되게 한다 — 그룹 킬 없이는 sleep이 파이프를 쥐고 살아남는
+            // 시나리오(CI 회귀)를 확실히 재현
+            c.args(["-c", "sleep 60; true"]);
             c
         };
 
