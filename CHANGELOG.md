@@ -2,6 +2,28 @@
 
 All notable changes to keymander are documented here.
 
+## [0.7.0] — 2026-07-08
+
+Follow-up hardening release — 0.6.0 감사에서 예고된 후속 과제 반영.
+
+### Refactoring
+- **Key-binding decision engine extracted** — all binding logic (modifier tracking, toggle, layer tap/hold, layer double-tap, combos, global double-tap, remaps) moved from the unsafe Windows hook callback into a pure, platform-independent `keybind::engine::EngineState`. `process_key(vkey, is_down, tick) → KeyDecision` takes time as a parameter, so timing behavior is now covered by **16 new unit tests** (tap-vs-hold, double-tap timeout, modifier-used-in-combo false-positive guard, toggle keeps Launch combos, u32 tick wraparound). The hook file now only installs the hook, translates events, and queues actions.
+
+### Performance / Reliability
+- **Hook actions run on a dedicated worker thread** — the low-level hook callback now queues actions over an mpsc channel (FIFO, key order preserved) and returns immediately. Long macros previously executed inside the callback and risked exceeding Windows' `LowLevelHooksTimeout`, which silently uninstalls the hook.
+
+### Security
+- **Windows single instance via named mutex** — replaces the PID-file check (TOCTOU race, PID-recycling false positives). The mutex name is derived from the data directory, so multiple portable installs don't interfere; the OS releases ownership on any kind of process death.
+
+### Dependencies
+- **bincode 1 → 2** — bincode 1.x is unmaintained (RUSTSEC advisory). Old-format index caches fail decoding gracefully and fall back to the JSON cache / full rebuild.
+- **getrandom 0.2 → 0.3**.
+
+### CI
+- **macOS test SIGABRT fixed** — desktop unit tests sending `GotRawWindowId` reached the Carbon TIS API, which requires the main thread + a window-server session and aborts on headless CI runners. TIS calls are now skipped in test builds. (macOS CI has been red since 0.5.0.)
+
+---
+
 ## [0.6.0] — 2026-07-08
 
 Stability & security release — 코드 전반 감사에서 발견된 실버그와 보안 보완점 수정.
