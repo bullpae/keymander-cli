@@ -2,6 +2,16 @@
 
 All notable changes to keymander are documented here.
 
+## [0.7.1] — 2026-07-08
+
+### Bug Fixes
+- **Linux shell timeout was ineffective** (found by CI) — on timeout, `child.kill()` only killed `sh`; grandchildren (e.g. `sleep`) kept the stdout pipe open, so the reader join blocked until the command finished on its own. The child is now spawned as a process-group leader (`setpgid`) and the whole group receives `SIGKILL` on timeout (the Unix counterpart of Windows `taskkill /T`). Reader results are collected via a channel with a 2 s grace `recv_timeout`, so even a process that escaped into a new session can't block the launcher.
+
+### CI
+- `cargo fmt` applied to 0.7.0 code (Format check green again).
+
+---
+
 ## [0.7.0] — 2026-07-08
 
 Follow-up hardening release — 0.6.0 감사에서 예고된 후속 과제 반영.
