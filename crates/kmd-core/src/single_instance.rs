@@ -37,10 +37,15 @@ pub enum InstanceAction {
 /// RAII guard — removes the lock file when dropped.
 /// On Unix, holds an open file descriptor with `flock` to guarantee
 /// the OS releases the lock even on crash/SIGKILL.
+/// On Windows, holds a named mutex handle for the same guarantee.
 pub struct Guard {
     lock_path: PathBuf,
     quit_signal_path: PathBuf,
     _lock_file: Option<fs::File>,
+    /// Windows named mutex handle (HANDLE as isize; 0 = none).
+    /// OS가 프로세스 종료 시 자동 해제하므로 크래시에도 안전하다.
+    #[cfg(windows)]
+    win_mutex: isize,
 }
 
 impl Guard {
@@ -61,6 +66,14 @@ impl Drop for Guard {
         // lock file 삭제 (flock은 _lock_file Drop 시 자동 해제)
         let _ = fs::remove_file(&self.lock_path);
         let _ = fs::remove_file(&self.quit_signal_path);
+        #[cfg(windows)]
+        if self.win_mutex != 0 {
+            unsafe {
+                let handle = self.win_mutex as *mut std::ffi::c_void;
+                ReleaseMutex(handle);
+                CloseHandle(handle);
+            }
+        }
     }
 }
 
@@ -88,7 +101,88 @@ pub fn acquire_or_toggle(data_dir: &Path) -> InstanceAction {
         // flock 실패 시 PID 기반 폴백
     }
 
+    #[cfg(windows)]
+    {
+        if let Some(action) = acquire_or_toggle_mutex(data_dir, &lock_path, &quit_signal_path) {
+            return action;
+        }
+        // 뮤텍스 생성 실패 시 PID 기반 폴백
+    }
+
     acquire_or_toggle_pid(&lock_path, &quit_signal_path)
+}
+
+// ── Windows: named mutex 기반 (PID 재활용/TOCTOU에 안전) ─────────────────────
+//
+// PID 파일 방식은 read→check→write 사이 레이스와 PID 재활용 오탐이 있다.
+// named mutex는 flock의 정확한 대응물로, 프로세스가 어떤 방식으로 죽어도
+// OS가 소유권을 해제(abandoned)하므로 stale lock이 생기지 않는다.
+
+/// data_dir 별로 고유한 뮤텍스 이름 생성 — portable 설치본 여러 개가
+/// 서로의 인스턴스를 간섭하지 않도록 하고, 테스트 격리도 보장한다.
+#[cfg(windows)]
+fn mutex_name(data_dir: &Path) -> Vec<u16> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data_dir.hash(&mut hasher);
+    let name = format!("Local\\kmd-instance-{:016x}", hasher.finish());
+    name.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn acquire_or_toggle_mutex(
+    data_dir: &Path,
+    lock_path: &Path,
+    quit_signal_path: &Path,
+) -> Option<InstanceAction> {
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_ABANDONED: u32 = 0x80;
+    const WAIT_TIMEOUT: u32 = 0x102;
+
+    let name = mutex_name(data_dir);
+    let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return None; // PID 폴백
+    }
+
+    // 대기 없이 소유 시도. 이전 소유자가 크래시했으면 WAIT_ABANDONED로
+    // 즉시 소유권을 얻는다 (stale PID 파일과 달리 오탐 없음).
+    let wait = unsafe { WaitForSingleObject(handle, 0) };
+    if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+        // 소유 성공 → 우리가 단일 인스턴스. PID는 진단/디바운스용으로 기록.
+        let _ = fs::write(lock_path, std::process::id().to_string());
+        return Some(InstanceAction::Acquired(Guard {
+            lock_path: lock_path.to_path_buf(),
+            quit_signal_path: quit_signal_path.to_path_buf(),
+            _lock_file: None,
+            win_mutex: handle as isize,
+        }));
+    }
+    if wait != WAIT_TIMEOUT {
+        // 예기치 않은 결과 → 폴백
+        unsafe { CloseHandle(handle) };
+        return None;
+    }
+
+    // 다른 인스턴스가 확실히 살아있음 (toggle 동작)
+    if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
+        unsafe { CloseHandle(handle) };
+        return Some(InstanceAction::SignalledExisting);
+    }
+
+    let _ = fs::write(quit_signal_path, "quit");
+
+    // 상대방이 종료(뮤텍스 해제)될 때까지 대기
+    let total_wait_ms = TOGGLE_WAIT_ITERATIONS * TOGGLE_WAIT_MS as u32;
+    let wait = unsafe { WaitForSingleObject(handle, total_wait_ms) };
+    if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+        // 상대방 종료 확인 → 소유권 반납 후 정리
+        unsafe { ReleaseMutex(handle) };
+        let _ = fs::remove_file(lock_path);
+    }
+    unsafe { CloseHandle(handle) };
+
+    Some(InstanceAction::SignalledExisting)
 }
 
 // ── Unix: flock 기반 (좀비/PID 재활용에 안전) ────────────────────────────────
@@ -184,6 +278,8 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
         lock_path: lock_path.clone(),
         quit_signal_path: quit_signal_path.clone(),
         _lock_file: None,
+        #[cfg(windows)]
+        win_mutex: 0,
     })
 }
 
@@ -228,6 +324,13 @@ unsafe extern "system" {
     ) -> *mut std::ffi::c_void;
     fn GetExitCodeProcess(process: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
     fn CloseHandle(object: *mut std::ffi::c_void) -> i32;
+    fn CreateMutexW(
+        security_attributes: *mut std::ffi::c_void,
+        initial_owner: i32,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn WaitForSingleObject(handle: *mut std::ffi::c_void, timeout_ms: u32) -> u32;
+    fn ReleaseMutex(handle: *mut std::ffi::c_void) -> i32;
 }
 
 #[cfg(unix)]
@@ -341,6 +444,54 @@ mod tests {
             !is_recent_lock(&lock, RECENT_LOCK_DEBOUNCE_MS),
             "2초 전 파일은 700ms debounce를 초과하여 recent가 아님"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_mutex_second_instance_is_signalled() {
+        let dir = std::env::temp_dir().join("kmd_test_mutex_second");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::remove_file(dir.join(LOCK_FILE));
+        let _ = fs::remove_file(dir.join(QUIT_SIGNAL));
+
+        match acquire_or_toggle(&dir) {
+            InstanceAction::Acquired(guard) => {
+                // 다른 스레드(= 뮤텍스 미소유)에서 두 번째 인스턴스 시도
+                let dir2 = dir.clone();
+                let second = std::thread::spawn(move || acquire_or_toggle(&dir2))
+                    .join()
+                    .unwrap();
+                assert!(
+                    matches!(second, InstanceAction::SignalledExisting),
+                    "뮤텍스를 쥔 인스턴스가 있으면 두 번째는 SignalledExisting"
+                );
+                drop(guard);
+            }
+            InstanceAction::SignalledExisting => panic!("첫 인스턴스는 acquire 되어야 함"),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_mutex_stale_pid_file_is_ignored() {
+        // PID 파일이 살아있는 PID(1은 아님)를 가리켜도, 뮤텍스 소유자가
+        // 없으면 acquire 되어야 한다 — PID 재활용 오탐 방지 확인
+        let dir = std::env::temp_dir().join("kmd_test_mutex_stale_pid");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::remove_file(dir.join(QUIT_SIGNAL));
+        // 이 프로세스 PID를 적어두지만 뮤텍스는 잡지 않은 상태
+        fs::write(dir.join(LOCK_FILE), "4").unwrap(); // PID 4 = System, 항상 존재
+
+        match acquire_or_toggle(&dir) {
+            InstanceAction::Acquired(guard) => drop(guard),
+            InstanceAction::SignalledExisting => {
+                panic!("뮤텍스 미소유 상태의 PID 파일은 무시되어야 함")
+            }
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
