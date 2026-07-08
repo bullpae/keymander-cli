@@ -30,15 +30,21 @@ pub fn save_index_bin(index: &Index, path: &Path) -> Result<(), StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(StoreError::Io)?;
     }
-    let bytes = bincode::serialize(index).map_err(StoreError::Bincode)?;
+    let bytes = bincode::serde::encode_to_vec(index, bincode::config::standard())
+        .map_err(StoreError::BincodeEncode)?;
     std::fs::write(path, bytes).map_err(StoreError::Io)?;
     Ok(())
 }
 
 /// bincode 형식에서 인덱스 로드
+///
+/// bincode 1.x 시절 캐시는 디코딩에 실패하며, 호출부(try_load_cached)가
+/// JSON 캐시 → 전체 리빌드로 폴백하므로 업그레이드 시 자동 재생성된다.
 pub fn load_index_bin(path: &Path) -> Result<Index, StoreError> {
     let bytes = std::fs::read(path).map_err(StoreError::Io)?;
-    let index: Index = bincode::deserialize(&bytes).map_err(StoreError::Bincode)?;
+    let (index, _len): (Index, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+            .map_err(StoreError::BincodeDecode)?;
     Ok(index)
 }
 
@@ -112,8 +118,10 @@ pub enum StoreError {
     Io(std::io::Error),
     #[error("JSON error: {0}")]
     Json(serde_json::Error),
-    #[error("Bincode error: {0}")]
-    Bincode(bincode::Error),
+    #[error("Bincode encode error: {0}")]
+    BincodeEncode(bincode::error::EncodeError),
+    #[error("Bincode decode error: {0}")]
+    BincodeDecode(bincode::error::DecodeError),
 }
 
 #[cfg(test)]

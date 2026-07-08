@@ -99,7 +99,7 @@ pub fn pid_file_path() -> PathBuf {
 pub fn generate_token() -> String {
     use std::fmt::Write;
     let mut buf = [0u8; 32];
-    getrandom::getrandom(&mut buf).expect("OS RNG unavailable");
+    getrandom::fill(&mut buf).expect("OS RNG unavailable");
     let mut s = String::with_capacity(64);
     for b in buf {
         let _ = write!(&mut s, "{b:02x}");
