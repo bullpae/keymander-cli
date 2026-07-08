@@ -16,8 +16,31 @@ pub enum KeyDecision {
     PassThrough,
     /// 이벤트 억제 (실행할 액션 없음)
     Suppress,
-    /// 이벤트 억제 + 액션 실행
-    Execute(BindAction),
+    /// 이벤트 억제 + 액션 실행.
+    ///
+    /// `layer_trigger`는 활성 레이어 매핑에서 발동된 경우 그 레이어의
+    /// 트리거 키다. macOS는 물리적으로 눌린 트리거 수정자(Alt 등)의 잔여
+    /// 플래그가 합성 이벤트에 간섭하므로, 실행 전에 해제해야 한다.
+    Execute {
+        action: BindAction,
+        layer_trigger: Option<VKey>,
+    },
+}
+
+impl KeyDecision {
+    fn execute(action: BindAction) -> Self {
+        Self::Execute {
+            action,
+            layer_trigger: None,
+        }
+    }
+
+    fn execute_in_layer(action: BindAction, trigger: VKey) -> Self {
+        Self::Execute {
+            action,
+            layer_trigger: Some(trigger),
+        }
+    }
 }
 
 fn combo_trigger_matches(
@@ -42,6 +65,10 @@ pub struct EngineState {
     trigger_down_tick: u32,
     /// 레이어 활성 중 다른 키가 눌렸는지 (tap vs hold 판정)
     layer_key_used: bool,
+    /// 레이어 매핑의 Launch 액션은 트리거 키를 뗄 때까지 지연 실행한다.
+    /// 트리거 수정자(Alt 등)가 눌린 채 실행하면 새 프로세스의 초기
+    /// 포커스/IME 조합에 간섭한다 (0.5.0 "Layer Launch deferral").
+    pending_layer_launch: Option<BindAction>,
     /// 현재 물리적으로 눌린 수정자 키 추적
     modifiers_held: HashSet<VKey>,
     /// 홀드 중 다른 키와 조합되어 "수정자로 사용된" 키 집합.
@@ -70,6 +97,7 @@ impl EngineState {
             active_layer: None,
             trigger_down_tick: 0,
             layer_key_used: false,
+            pending_layer_launch: None,
             modifiers_held: HashSet::new(),
             mods_used_while_held: HashSet::new(),
             last_tap_key: None,
@@ -85,11 +113,57 @@ impl EngineState {
     fn reset_runtime_state(&mut self) {
         self.active_layer = None;
         self.layer_key_used = false;
+        self.pending_layer_launch = None;
         self.mods_used_while_held.clear();
         self.last_tap_key = None;
         self.combo_consumed_key = None;
         self.dt_consumed_key = None;
         self.layer_dt_last_key = None;
+    }
+
+    // ── macOS 어댑터용 헬퍼 ──────────────────────────────────────────────
+    // (Windows는 훅 이벤트만으로 상태가 완결되므로 사용하지 않는다)
+
+    /// 훅/탭이 타임아웃 등으로 이벤트를 놓쳤을 때 일시 상태 전체 초기화
+    #[allow(dead_code)]
+    pub fn reset_transient_state(&mut self) {
+        self.modifiers_held.clear();
+        self.reset_runtime_state();
+    }
+
+    /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백)
+    #[allow(dead_code)]
+    pub fn is_modifier_held(&self, vkey: VKey) -> bool {
+        self.modifiers_held.contains(&vkey)
+    }
+
+    /// 현재 눌린 것으로 추적 중인 수정자 목록 (stop 시 stuck-modifier 해제용)
+    #[allow(dead_code)]
+    pub fn held_modifiers(&self) -> Vec<VKey> {
+        self.modifiers_held.iter().copied().collect()
+    }
+
+    /// OS가 보고한 수정자 플래그와 내부 추적 상태를 동기화.
+    /// 플래그가 꺼진 수정자는 Left/Right 키를 모두 제거한다
+    /// (macOS flagsChanged — 놓친 keyup으로 인한 stuck modifier 방지).
+    #[allow(dead_code)]
+    pub fn sync_modifier_flags(&mut self, shift: bool, ctrl: bool, alt: bool, win: bool) {
+        if !shift {
+            self.modifiers_held.remove(&VKey::LShift);
+            self.modifiers_held.remove(&VKey::RShift);
+        }
+        if !ctrl {
+            self.modifiers_held.remove(&VKey::LCtrl);
+            self.modifiers_held.remove(&VKey::RCtrl);
+        }
+        if !alt {
+            self.modifiers_held.remove(&VKey::LAlt);
+            self.modifiers_held.remove(&VKey::RAlt);
+        }
+        if !win {
+            self.modifiers_held.remove(&VKey::LWin);
+            self.modifiers_held.remove(&VKey::RWin);
+        }
     }
 
     /// 키 이벤트 하나를 처리하고 억제/실행 여부를 결정한다.
@@ -166,7 +240,7 @@ impl EngineState {
 
                 if let Some(action) = combo_action {
                     self.combo_consumed_key = Some(vkey);
-                    return KeyDecision::Execute(action);
+                    return KeyDecision::execute(action);
                 }
             }
             return KeyDecision::PassThrough;
@@ -180,6 +254,7 @@ impl EngineState {
                     self.active_layer = Some(idx);
                     self.trigger_down_tick = tick;
                     self.layer_key_used = false;
+                    self.pending_layer_launch = None;
                 }
                 return KeyDecision::Suppress;
             }
@@ -196,14 +271,18 @@ impl EngineState {
                 let tap_hold_ms = layer.tap_hold_ms;
                 let tap_action = layer.tap_action;
                 let was_used = self.layer_key_used;
+                let pending_launch = self.pending_layer_launch.take();
 
                 self.active_layer = None;
                 self.layer_key_used = false;
 
                 if !was_used && elapsed < tap_hold_ms {
                     if let Some(tap_key) = tap_action {
-                        return KeyDecision::Execute(BindAction::SendKey(tap_key));
+                        return KeyDecision::execute(BindAction::SendKey(tap_key));
                     }
+                } else if let Some(action) = pending_launch {
+                    // 지연된 Launch — 트리거 키가 떨어진 지금 실행
+                    return KeyDecision::execute(action);
                 }
                 return KeyDecision::Suppress;
             }
@@ -211,6 +290,8 @@ impl EngineState {
 
         // ── 4. 활성 레이어 매핑 확인 ──
         if let Some(layer_idx) = self.active_layer {
+            let trigger = self.config.layers[layer_idx].trigger;
+
             // 4a. 레이어 내 더블탭 매핑 우선 확인
             let dt_opt = self.config.layers[layer_idx]
                 .double_tap_mappings
@@ -226,14 +307,14 @@ impl EngineState {
                         let elapsed = tick.wrapping_sub(self.layer_dt_last_tick);
                         if elapsed < dt.timeout_ms {
                             self.layer_dt_last_key = None;
-                            return KeyDecision::Execute(dt.double_action);
+                            return KeyDecision::execute_in_layer(dt.double_action, trigger);
                         }
                     }
 
                     // 첫 번째 탭 → 싱글 액션 즉시 실행, 더블탭 대기 기록
                     self.layer_dt_last_key = Some(vkey);
                     self.layer_dt_last_tick = tick;
-                    return KeyDecision::Execute(dt.single_action);
+                    return KeyDecision::execute_in_layer(dt.single_action, trigger);
                 }
                 return KeyDecision::Suppress;
             }
@@ -245,7 +326,13 @@ impl EngineState {
                 if is_down {
                     self.layer_key_used = true;
                     self.layer_dt_last_key = None;
-                    return KeyDecision::Execute(action);
+                    // Launch는 트리거 키를 뗄 때까지 지연 — 트리거 수정자가
+                    // 눌린 채 실행하면 새 프로세스 포커스/IME에 간섭한다
+                    if matches!(action, BindAction::Launch(_)) {
+                        self.pending_layer_launch = Some(action);
+                        return KeyDecision::Suppress;
+                    }
+                    return KeyDecision::execute_in_layer(action, trigger);
                 }
                 return KeyDecision::Suppress;
             }
@@ -262,7 +349,7 @@ impl EngineState {
 
             if let Some(action) = combo_action {
                 self.combo_consumed_key = Some(vkey);
-                return KeyDecision::Execute(action);
+                return KeyDecision::execute(action);
             }
         }
 
@@ -284,7 +371,7 @@ impl EngineState {
                         if is_modifier_key(&vkey) {
                             self.modifiers_held.remove(&vkey);
                         }
-                        return KeyDecision::Execute(dt.action);
+                        return KeyDecision::execute(dt.action);
                     }
                 }
             } else if !is_modifier_key(&vkey) {
@@ -295,7 +382,7 @@ impl EngineState {
         // ── 7. 단순 리매핑 확인 ──
         if let Some(action) = self.config.remaps.get(&vkey).cloned() {
             if is_down {
-                return KeyDecision::Execute(action);
+                return KeyDecision::execute(action);
             }
             return KeyDecision::Suppress;
         }
@@ -364,7 +451,10 @@ mod tests {
 
     fn assert_execute_sendkey(decision: KeyDecision, expected: VKey) {
         match decision {
-            KeyDecision::Execute(BindAction::SendKey(k)) => assert_eq!(k, expected),
+            KeyDecision::Execute {
+                action: BindAction::SendKey(k),
+                ..
+            } => assert_eq!(k, expected),
             other => panic!("Execute(SendKey({expected:?})) 기대, 실제: {other:?}"),
         }
     }
@@ -477,6 +567,113 @@ mod tests {
 
         // timeout 초과 → 다시 싱글 액션
         assert_execute_sendkey(e.process_key(VKey::I, true, 1500), VKey::Home);
+    }
+
+    // ── 레이어 Launch 지연 실행 ──
+
+    #[test]
+    fn layer_launch_deferred_until_trigger_release() {
+        let mut cfg = layer_config();
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::LAlt, true, 1000);
+
+        // Launch 매핑 키 down → 즉시 실행하지 않고 억제 (지연)
+        assert!(matches!(
+            e.process_key(VKey::Space, true, 1100),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::Space, false, 1150),
+            KeyDecision::Suppress
+        ));
+
+        // 트리거 키를 떼는 순간 Launch 실행 (tap 아님 — 키 사용됨)
+        assert!(matches!(
+            e.process_key(VKey::LAlt, false, 1300),
+            KeyDecision::Execute {
+                action: BindAction::Launch(_),
+                layer_trigger: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn layer_non_launch_action_carries_trigger_context() {
+        // 레이어 매핑 실행 결정에는 트리거 키가 포함되어야 한다
+        // (macOS가 잔여 modifier 플래그를 해제하는 데 사용)
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LAlt, true, 1000);
+        match e.process_key(VKey::H, true, 1050) {
+            KeyDecision::Execute {
+                action: BindAction::SendKey(VKey::Left),
+                layer_trigger: Some(VKey::LAlt),
+            } => {}
+            other => panic!("layer_trigger=Some(LAlt) 기대, 실제: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pending_launch_cleared_on_toggle() {
+        let mut cfg = layer_config();
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+        cfg.toggle_keymap = Some(ComboTrigger {
+            modifiers: vec![Modifier::Ctrl],
+            key: VKey::K,
+        });
+
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Space, true, 1100); // pending launch 저장
+
+        // 토글로 상태 리셋 (LAlt 홀드 중이지만 Ctrl+K)
+        e.process_key(VKey::LCtrl, true, 1200);
+        e.process_key(VKey::K, true, 1220);
+        e.process_key(VKey::K, false, 1240);
+        e.process_key(VKey::LCtrl, false, 1260);
+
+        // 트리거 keyup — 리셋됐으므로 pending launch가 실행되면 안 됨
+        // (keymap off 상태라 레이어 로직 자체가 비활성 → PassThrough)
+        assert!(matches!(
+            e.process_key(VKey::LAlt, false, 1300),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    // ── macOS 어댑터 헬퍼 ──
+
+    #[test]
+    fn sync_modifier_flags_removes_stale_modifiers() {
+        let mut e = EngineState::new(empty_config());
+        e.process_key(VKey::LShift, true, 0);
+        e.process_key(VKey::LCtrl, true, 10);
+        assert!(e.is_modifier_held(VKey::LShift));
+
+        // OS 플래그: shift 꺼짐 (keyup을 놓친 상황) → 동기화로 제거
+        e.sync_modifier_flags(false, true, false, false);
+        assert!(!e.is_modifier_held(VKey::LShift));
+        assert!(e.is_modifier_held(VKey::LCtrl), "플래그 켜진 수정자는 유지");
+    }
+
+    #[test]
+    fn reset_transient_state_clears_modifiers_and_layer() {
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LShift, true, 0);
+        e.process_key(VKey::LAlt, true, 10); // 레이어 활성
+
+        e.reset_transient_state();
+
+        assert!(e.held_modifiers().is_empty());
+        // 레이어가 리셋됐으므로 H는 일반 키
+        assert!(matches!(
+            e.process_key(VKey::H, true, 100),
+            KeyDecision::PassThrough
+        ));
     }
 
     // ── 콤보 ──
@@ -651,7 +848,10 @@ mod tests {
         e.process_key(VKey::LAlt, true, 400);
         assert!(matches!(
             e.process_key(VKey::Space, true, 420),
-            KeyDecision::Execute(BindAction::Launch(_))
+            KeyDecision::Execute {
+                action: BindAction::Launch(_),
+                ..
+            }
         ));
         e.process_key(VKey::Space, false, 440);
         e.process_key(VKey::LAlt, false, 460);
