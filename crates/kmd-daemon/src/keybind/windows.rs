@@ -8,15 +8,19 @@ use super::{
     KeyboardBackend, MacroStep, VKey,
 };
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 // ── 글로벌 상태 (콜백에서 접근) ──────────────────────────────────────────────
 
 static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
+
+/// 메시지 루프 스레드 ID — stop() 시 WM_QUIT를 보내 GetMessageW를 깨운다
+static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 struct HookState {
     config: KeybindConfig,
@@ -47,6 +51,27 @@ struct HookState {
     layer_dt_last_key: Option<VKey>,
     /// 레이어 내 더블탭: 마지막 실행 시각 (tick count)
     layer_dt_last_tick: u32,
+}
+
+impl HookState {
+    fn new(config: KeybindConfig) -> Self {
+        Self {
+            config,
+            keymap_enabled: true,
+            active_layer: None,
+            trigger_down_tick: 0,
+            layer_key_used: false,
+            sending: false,
+            modifiers_held: HashSet::new(),
+            mods_used_while_held: HashSet::new(),
+            last_tap_key: None,
+            last_tap_tick: 0,
+            combo_consumed_key: None,
+            dt_consumed_key: None,
+            layer_dt_last_key: None,
+            layer_dt_last_tick: 0,
+        }
+    }
 }
 
 fn combo_trigger_matches(
@@ -686,25 +711,18 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             return Err("키 바인딩이 이미 실행 중입니다.".into());
         }
 
-        let state = Arc::new(Mutex::new(HookState {
-            config,
-            keymap_enabled: true,
-            active_layer: None,
-            trigger_down_tick: 0,
-            layer_key_used: false,
-            sending: false,
-            modifiers_held: HashSet::new(),
-            mods_used_while_held: HashSet::new(),
-            last_tap_key: None,
-            last_tap_tick: 0,
-            combo_consumed_key: None,
-            dt_consumed_key: None,
-            layer_dt_last_key: None,
-            layer_dt_last_tick: 0,
-        }));
-
-        // 글로벌 상태 설정 (콜백에서 접근)
-        let _ = HOOK_STATE.set(state);
+        // 글로벌 상태 설정 (콜백에서 접근).
+        // OnceLock은 최초 1회만 set 가능하므로, 재시작 시에는 기존 Arc 내부의
+        // 상태를 새 config로 교체한다 — 그렇지 않으면 stop/start 후에도
+        // 이전 설정이 계속 적용된다.
+        if let Some(existing) = HOOK_STATE.get() {
+            match existing.lock() {
+                Ok(mut guard) => *guard = HookState::new(config),
+                Err(_) => return Err("훅 상태 잠금 실패".into()),
+            }
+        } else {
+            let _ = HOOK_STATE.set(Arc::new(Mutex::new(HookState::new(config))));
+        }
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
@@ -726,17 +744,25 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
                 tracing::info!("키보드 훅 설치 완료");
 
-                // 메시지 루프 (훅이 동작하려면 필수)
+                // stop()이 WM_QUIT를 보낼 수 있도록 스레드 ID 공개
+                HOOK_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
+
+                // 메시지 루프 (훅이 동작하려면 필수).
+                // GetMessageW 블로킹 대기 — 기존 PeekMessageW + 1ms sleep은
+                // 상시 데몬이 초당 ~1000회 깨어나는 busy-wait였다.
+                // WM_QUIT(ret==0) 또는 에러(ret==-1)에서 종료.
                 let mut msg: MSG = std::mem::zeroed();
-                while running.load(Ordering::Relaxed) {
-                    let ret = PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE);
-                    if ret != 0 {
-                        TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                loop {
+                    let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+                    if ret == 0 || ret == -1 {
+                        break;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
                 }
 
+                HOOK_THREAD_ID.store(0, Ordering::SeqCst);
+                running.store(false, Ordering::Relaxed);
                 UnhookWindowsHookEx(hook);
                 tracing::info!("키보드 훅 해제 완료");
             }
@@ -748,6 +774,13 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
     fn stop(&mut self) -> Result<(), String> {
         self.running.store(false, Ordering::Relaxed);
+        // GetMessageW에서 블로킹 중인 메시지 루프를 WM_QUIT로 깨운다
+        let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                PostThreadMessageW(tid, WM_QUIT, 0, 0);
+            }
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
