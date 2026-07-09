@@ -901,8 +901,11 @@ impl App {
                         self.daemon_autostart_enabled = None;
                     }
                 }
-                if self.query.starts_with(":set") {
-                    self.handle_settings_query(":set");
+                if crate::query_prefix::prefix_of(self.query.trim())
+                    == crate::query_prefix::Prefix::Settings
+                {
+                    let current_query = self.query.clone();
+                    self.handle_settings_query(&current_query);
                 }
                 Task::none()
             }

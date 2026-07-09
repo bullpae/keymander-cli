@@ -14,6 +14,7 @@ pub mod keymap;
 pub mod plugin;
 pub mod portable;
 pub mod prompt;
+pub mod query_prefix;
 pub mod search;
 pub mod single_instance;
 pub mod transform;

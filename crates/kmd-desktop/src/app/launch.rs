@@ -82,7 +82,9 @@ impl App {
         };
 
         // Help entries now act like quick templates.
-        if self.query.starts_with(":help") && result.item.path.starts_with("Type ") {
+        let in_help_mode =
+            crate::query_prefix::prefix_of(self.query.trim()) == crate::query_prefix::Prefix::Help;
+        if in_help_mode && result.item.path.starts_with("Type ") {
             if let Some(seed) = help_query_seed(&result.item.name) {
                 self.query = seed.to_string();
                 self.selected = 0;

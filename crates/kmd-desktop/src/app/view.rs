@@ -120,9 +120,8 @@ impl App {
                 ..Default::default()
             });
 
-        let is_keys_mode = self.query.trim().starts_with(":keys")
-            || self.query.trim() == ":k"
-            || self.query.trim().starts_with(":k ");
+        let is_keys_mode =
+            crate::query_prefix::prefix_of(self.query.trim()) == crate::query_prefix::Prefix::Keys;
 
         let results_body: Element<'_, Message> = if is_keys_mode && has_results {
             container(scrollable(self.view_cheatsheet()).width(Fill).height(Fill))
