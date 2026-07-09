@@ -5,11 +5,8 @@
 //!
 //! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
 
-use super::{
-    is_modifier_key, modifier_satisfied, resolve_launch_cmd, BindAction, KeybindConfig,
-    KeyboardBackend, MacroStep, VKey,
-};
-use std::collections::HashSet;
+use super::engine::{EngineState, KeyDecision};
+use super::{resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -508,29 +505,6 @@ unsafe fn tis_select_source_by_language(lang: &[u8]) -> bool {
     found
 }
 
-// ── 헬퍼 ─────────────────────────────────────────────────────────────────────
-
-/// OS 플래그 기반으로 modifiers_held를 동기화.
-/// 특정 modifier 플래그가 꺼져 있으면 해당 Left/Right 키 모두 제거.
-fn sync_modifiers_with_flags(held: &mut HashSet<VKey>, flags: u64) {
-    if (flags & CG_EVENT_FLAG_MASK_SHIFT) == 0 {
-        held.remove(&VKey::LShift);
-        held.remove(&VKey::RShift);
-    }
-    if (flags & CG_EVENT_FLAG_MASK_CONTROL) == 0 {
-        held.remove(&VKey::LCtrl);
-        held.remove(&VKey::RCtrl);
-    }
-    if (flags & CG_EVENT_FLAG_MASK_ALTERNATE) == 0 {
-        held.remove(&VKey::LAlt);
-        held.remove(&VKey::RAlt);
-    }
-    if (flags & CG_EVENT_FLAG_MASK_COMMAND) == 0 {
-        held.remove(&VKey::LWin);
-        held.remove(&VKey::RWin);
-    }
-}
-
 // ── 액션 실행 ────────────────────────────────────────────────────────────────
 
 fn execute_action(action: &BindAction) {
@@ -607,8 +581,11 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
 }
 
 // ── 글로벌 상태 ──────────────────────────────────────────────────────────────
+//
+// 바인딩 판정 로직은 전부 keybind::engine(플랫폼 독립, 단위 테스트 가능)에
+// 있다. 이 파일은 CGEventTap 설치/이벤트 변환/액션 실행만 담당한다.
 
-static HOOK_STATE: OnceLock<Arc<Mutex<HookState>>> = OnceLock::new();
+static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
 /// CGEventTap 포인터 — 타임아웃 후 재활성화에 사용
 static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
@@ -618,48 +595,18 @@ static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
 /// 타이핑을 시작했는지"를 감지해 재선택(조합 취소 유발)을 중단하는 데 쓴다.
 static INPUT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-struct HookState {
-    config: KeybindConfig,
-    keymap_enabled: bool,
-    active_layer: Option<usize>,
-    trigger_down_time: Instant,
-    layer_key_used: bool,
-    pending_layer_launch: Option<BindAction>,
-    modifiers_held: HashSet<VKey>,
-    /// 홀드 중 다른 키와 조합되어 "수정자로 사용된" 키 집합.
-    /// 사용된 수정자의 release는 더블탭의 탭으로 기록하지 않는다.
-    /// (예: RShift+ㅅ=ㅆ 입력 후 RShift+/=? — RShift release가 탭으로
-    /// 기록되면 ?의 RShift down이 더블탭으로 오판정되어 한/영이 토글됨)
-    mods_used_while_held: HashSet<VKey>,
-    last_tap_key: Option<VKey>,
-    last_tap_time: Instant,
-    combo_consumed_key: Option<VKey>,
-    dt_consumed_key: Option<VKey>,
-    layer_dt_last_key: Option<VKey>,
-    layer_dt_last_time: Instant,
+/// 엔진에 넘길 밀리초 단조 tick (u32 wrapping — 엔진의 wrapping_sub 규약)
+fn tick_ms() -> u32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u32
 }
 
-fn combo_trigger_matches(
-    trigger: &super::ComboTrigger,
-    vkey: VKey,
-    modifiers_held: &HashSet<VKey>,
-) -> bool {
-    trigger.key == vkey
-        && trigger
-            .modifiers
-            .iter()
-            .all(|m| modifier_satisfied(m, modifiers_held))
-}
-
-fn reset_keymap_runtime_state(guard: &mut HookState) {
-    guard.active_layer = None;
-    guard.layer_key_used = false;
-    guard.pending_layer_launch = None;
-    guard.mods_used_while_held.clear();
-    guard.last_tap_key = None;
-    guard.combo_consumed_key = None;
-    guard.dt_consumed_key = None;
-    guard.layer_dt_last_key = None;
+/// 엔진 결정 실행 — 레이어 컨텍스트가 있으면 트리거 수정자 해제 경로 사용
+fn run_action(action: &BindAction, layer_trigger: Option<VKey>) {
+    match layer_trigger {
+        Some(trigger) => execute_layer_action(action, trigger),
+        None => execute_action(action),
+    }
 }
 
 // ── CGEventTap 콜백 ─────────────────────────────────────────────────────────
@@ -675,21 +622,16 @@ unsafe extern "C" fn event_tap_callback(
         return event;
     }
 
-    // 타임아웃으로 비활성화된 경우 재활성화 + modifier 상태 리셋
+    // 타임아웃으로 비활성화된 경우 재활성화 + 일시 상태 리셋
     if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
         let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);
         if !tap.is_null() {
-            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화 및 modifier 상태 리셋");
+            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화 및 상태 리셋");
             CGEventTapEnable(tap, true);
         }
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(mut guard) = state.lock() {
-                guard.modifiers_held.clear();
-                guard.active_layer = None;
-                guard.layer_key_used = false;
-                guard.pending_layer_launch = None;
-                guard.combo_consumed_key = None;
-                guard.dt_consumed_key = None;
+                guard.reset_transient_state();
             }
         }
         return event;
@@ -722,9 +664,9 @@ unsafe extern "C" fn event_tap_callback(
         Err(_) => return event,
     };
 
-    let now = Instant::now();
+    let tick = tick_ms();
 
-    // ── flagsChanged 이벤트: 수정자 키 상태 추적 ──
+    // ── flagsChanged 이벤트: 수정자 키를 down/up으로 변환해 엔진에 위임 ──
     if type_ == CG_EVENT_FLAGS_CHANGED {
         // 실제 OS 플래그에서 modifier 상태 판단 (토글 방식 대신)
         let flags = CGEventGetFlags(event);
@@ -734,313 +676,59 @@ unsafe extern "C" fn event_tap_callback(
             VKey::LAlt | VKey::RAlt => (flags & CG_EVENT_FLAG_MASK_ALTERNATE) != 0,
             VKey::LWin | VKey::RWin => (flags & CG_EVENT_FLAG_MASK_COMMAND) != 0,
             VKey::CapsLock => (flags & 0x0001_0000) != 0,
-            _ => !guard.modifiers_held.contains(&vkey),
+            _ => !guard.is_modifier_held(vkey),
         };
-        if is_down {
-            // 새 수정자가 합류하면 기존 홀드 중 수정자들은 "사용됨"으로 표시
-            let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
-            guard.mods_used_while_held.extend(held);
-            guard.modifiers_held.insert(vkey);
-            // 새로 눌린 키 자신은 깨끗한 탭 후보로 시작
-            guard.mods_used_while_held.remove(&vkey);
-        } else {
-            guard.modifiers_held.remove(&vkey);
-        }
-        // 플래그가 클리어된 modifier는 held에서도 제거 (동기화)
-        sync_modifiers_with_flags(&mut guard.modifiers_held, flags);
 
-        if !guard.keymap_enabled {
-            return event;
-        }
+        let decision = guard.process_key(vkey, is_down, tick);
 
-        // 레이어 트리거 확인
-        for (idx, layer) in guard.config.layers.iter().enumerate() {
-            if vkey == layer.trigger {
-                if is_down {
-                    if guard.active_layer.is_none() {
-                        tracing::debug!("레이어 활성: {}", layer.name);
-                        guard.active_layer = Some(idx);
-                        guard.trigger_down_time = now;
-                        guard.layer_key_used = false;
-                        guard.pending_layer_launch = None;
-                    }
-                    return std::ptr::null_mut(); // 억제
-                } else if guard.active_layer == Some(idx) {
-                    let elapsed = guard.trigger_down_time.elapsed().as_millis() as u32;
-                    let tap_hold_ms = layer.tap_hold_ms;
-                    let tap_action = layer.tap_action;
-                    let was_used = guard.layer_key_used;
-                    let pending_launch = guard.pending_layer_launch.take();
+        // 놓친 keyup으로 인한 stuck modifier 방지 — OS 플래그와 동기화
+        guard.sync_modifier_flags(
+            (flags & CG_EVENT_FLAG_MASK_SHIFT) != 0,
+            (flags & CG_EVENT_FLAG_MASK_CONTROL) != 0,
+            (flags & CG_EVENT_FLAG_MASK_ALTERNATE) != 0,
+            (flags & CG_EVENT_FLAG_MASK_COMMAND) != 0,
+        );
 
-                    guard.active_layer = None;
-                    guard.layer_key_used = false;
-
-                    if !was_used && elapsed < tap_hold_ms {
-                        if let Some(tap_key) = tap_action {
-                            let action = BindAction::SendKey(tap_key);
-                            drop(guard);
-                            execute_action(&action);
-                        }
-                    } else if let Some(action) = pending_launch {
-                        drop(guard);
-                        execute_action(&action);
-                    }
-                    return std::ptr::null_mut(); // 억제
-                }
+        return match decision {
+            KeyDecision::PassThrough => {
+                drop(guard);
+                event
             }
-        }
-
-        // 콤보 키의 keyup 억제
-        if !is_down {
-            if guard.combo_consumed_key == Some(vkey) {
-                guard.combo_consumed_key = None;
-                return std::ptr::null_mut();
+            KeyDecision::Suppress => std::ptr::null_mut(),
+            KeyDecision::Execute {
+                action,
+                layer_trigger,
+            } => {
+                drop(guard);
+                run_action(&action, layer_trigger);
+                std::ptr::null_mut()
             }
-            if guard.dt_consumed_key == Some(vkey) {
-                guard.dt_consumed_key = None;
-                return std::ptr::null_mut();
-            }
-        }
-
-        // 더블탭 (RShift 등 수정자 키)
-        if is_down {
-            let dt_binding = guard
-                .config
-                .double_taps
-                .iter()
-                .find(|dt| dt.key == vkey)
-                .cloned();
-            if let Some(dt) = dt_binding {
-                if guard.last_tap_key == Some(vkey) {
-                    let elapsed = guard.last_tap_time.elapsed().as_millis() as u32;
-                    if elapsed < dt.timeout_ms {
-                        guard.last_tap_key = None;
-                        guard.dt_consumed_key = Some(vkey);
-                        guard.modifiers_held.remove(&vkey);
-                        let action = dt.action.clone();
-                        drop(guard);
-                        tracing::info!("더블탭 발동: {vkey:?} (elapsed={elapsed}ms)");
-                        execute_action(&action);
-                        return std::ptr::null_mut();
-                    }
-                }
-            }
-        }
-        if !is_down {
-            // 홀드 중 다른 키와 조합된 수정자는 탭으로 기록하지 않는다.
-            // (RShift+ㅅ=ㅆ 직후 RShift+/=? 가 더블탭으로 오판정되는 것 방지)
-            let was_used = guard.mods_used_while_held.remove(&vkey);
-            let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
-            if has_dt && !was_used {
-                guard.last_tap_key = Some(vkey);
-                guard.last_tap_time = now;
-            }
-        }
-
-        return event;
+        };
     }
 
     // ── keyDown / keyUp 이벤트 ──
     let is_down = type_ == CG_EVENT_KEY_DOWN;
-    let is_up = type_ == CG_EVENT_KEY_UP;
 
     if is_down {
         // 타이핑 활동 시퀀스 (입력 소스 전환 워커의 재선택 중단 신호)
         INPUT_SEQ.fetch_add(1, Ordering::Relaxed);
-        // 이 keyDown과 함께 홀드 중인 수정자는 전부 "사용됨" — 이후 release가
-        // 더블탭의 탭으로 기록되지 않게 한다 (콤보/더블탭으로 소비되기 전에 마킹)
-        let held: Vec<VKey> = guard.modifiers_held.iter().copied().collect();
-        guard.mods_used_while_held.extend(held);
     }
 
-    if is_down && !is_modifier_key(&vkey) {
-        if let Some(toggle) = guard.config.toggle_keymap.clone() {
-            if combo_trigger_matches(&toggle, vkey, &guard.modifiers_held) {
-                let enabled = !guard.keymap_enabled;
-                reset_keymap_runtime_state(&mut guard);
-                guard.keymap_enabled = enabled;
-                guard.combo_consumed_key = Some(vkey);
-                tracing::info!(
-                    "keymap {}",
-                    if guard.keymap_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-                return std::ptr::null_mut();
-            }
-        }
-    }
-
-    // 콤보/더블탭으로 소비된 키의 keyup 억제
-    if is_up {
-        if guard.combo_consumed_key == Some(vkey) {
-            guard.combo_consumed_key = None;
-            return std::ptr::null_mut();
-        }
-        if guard.dt_consumed_key == Some(vkey) {
-            guard.dt_consumed_key = None;
-            return std::ptr::null_mut();
-        }
-    }
-
-    if !guard.keymap_enabled {
-        if is_down && !is_modifier_key(&vkey) {
-            let combo_action = guard
-                .config
-                .combos
-                .iter()
-                .find(|(trigger, action)| {
-                    matches!(action, BindAction::Launch(_))
-                        && combo_trigger_matches(trigger, vkey, &guard.modifiers_held)
-                })
-                .map(|(_, action)| action.clone());
-
-            if let Some(action) = combo_action {
-                guard.combo_consumed_key = Some(vkey);
-                drop(guard);
-                execute_action(&action);
-                return std::ptr::null_mut();
-            }
-        }
-
-        drop(guard);
-        return event;
-    }
-
-    // ── 활성 레이어 매핑 확인 ──
-    if let Some(layer_idx) = guard.active_layer {
-        let trigger = guard.config.layers[layer_idx].trigger;
-
-        // 레이어 내 더블탭 매핑
-        let dt_opt = guard.config.layers[layer_idx]
-            .double_tap_mappings
-            .get(&vkey)
-            .cloned();
-
-        if let Some(dt) = dt_opt {
-            if is_down {
-                guard.layer_key_used = true;
-
-                if guard.layer_dt_last_key == Some(vkey) {
-                    let elapsed = guard.layer_dt_last_time.elapsed().as_millis() as u32;
-                    if elapsed < dt.timeout_ms {
-                        guard.layer_dt_last_key = None;
-                        let action = dt.double_action.clone();
-                        drop(guard);
-                        execute_layer_action(&action, trigger);
-                        return std::ptr::null_mut();
-                    }
-                }
-
-                guard.layer_dt_last_key = Some(vkey);
-                guard.layer_dt_last_time = now;
-                let action = dt.single_action.clone();
-                drop(guard);
-                execute_layer_action(&action, trigger);
-                return std::ptr::null_mut();
-            }
-            if is_up {
-                return std::ptr::null_mut();
-            }
-        }
-
-        // 일반 레이어 매핑
-        let action_opt = guard.config.layers[layer_idx].mappings.get(&vkey).cloned();
-
-        if let Some(action) = action_opt {
-            if is_down {
-                guard.layer_key_used = true;
-                guard.layer_dt_last_key = None;
-                if matches!(action, BindAction::Launch(_)) {
-                    guard.pending_layer_launch = Some(action);
-                    return std::ptr::null_mut();
-                }
-                drop(guard);
-                execute_layer_action(&action, trigger);
-                return std::ptr::null_mut();
-            }
-            if is_up {
-                return std::ptr::null_mut();
-            }
-        }
-    }
-
-    // ── 콤보 리맵 확인 ──
-    if is_down && !is_modifier_key(&vkey) {
-        let combo_action = guard
-            .config
-            .combos
-            .iter()
-            .find(|(trigger, _)| {
-                trigger.key == vkey
-                    && trigger
-                        .modifiers
-                        .iter()
-                        .all(|m| modifier_satisfied(m, &guard.modifiers_held))
-            })
-            .map(|(_, action)| action.clone());
-
-        if let Some(action) = combo_action {
-            guard.combo_consumed_key = Some(vkey);
+    match guard.process_key(vkey, is_down, tick) {
+        KeyDecision::PassThrough => {
             drop(guard);
-            tracing::info!("콤보 발동: {vkey:?}");
-            execute_action(&action);
-            return std::ptr::null_mut();
+            event
         }
-    }
-
-    // ── 더블탭 확인 ──
-    if is_down {
-        let dt_binding = guard
-            .config
-            .double_taps
-            .iter()
-            .find(|dt| dt.key == vkey)
-            .cloned();
-
-        if let Some(dt) = dt_binding {
-            if guard.last_tap_key == Some(vkey) {
-                let elapsed = guard.last_tap_time.elapsed().as_millis() as u32;
-                if elapsed < dt.timeout_ms {
-                    guard.last_tap_key = None;
-                    guard.dt_consumed_key = Some(vkey);
-                    let action = dt.action.clone();
-                    drop(guard);
-                    tracing::info!("더블탭 발동(keyDown): {vkey:?} (elapsed={elapsed}ms)");
-                    execute_action(&action);
-                    return std::ptr::null_mut();
-                }
-            }
-        } else if !is_modifier_key(&vkey) {
-            guard.last_tap_key = None;
-        }
-    }
-
-    // ── 단순 리매핑 확인 ──
-    if let Some(action) = guard.config.remaps.get(&vkey).cloned() {
-        if is_down {
+        KeyDecision::Suppress => std::ptr::null_mut(),
+        KeyDecision::Execute {
+            action,
+            layer_trigger,
+        } => {
             drop(guard);
-            execute_action(&action);
-            return std::ptr::null_mut();
-        }
-        if is_up {
-            return std::ptr::null_mut();
+            run_action(&action, layer_trigger);
+            std::ptr::null_mut()
         }
     }
-
-    // ── 더블탭 상태 기록 (keyup 시) ──
-    if is_up {
-        let has_dt = guard.config.double_taps.iter().any(|dt| dt.key == vkey);
-        if has_dt {
-            guard.last_tap_key = Some(vkey);
-            guard.last_tap_time = now;
-        }
-    }
-
-    drop(guard);
-    event
 }
 
 // ── Backend 구현 ─────────────────────────────────────────────────────────────
@@ -1111,25 +799,18 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             );
         }
 
-        let now = Instant::now();
-        let state = Arc::new(Mutex::new(HookState {
-            config,
-            keymap_enabled: true,
-            active_layer: None,
-            trigger_down_time: now,
-            layer_key_used: false,
-            pending_layer_launch: None,
-            modifiers_held: HashSet::new(),
-            mods_used_while_held: HashSet::new(),
-            last_tap_key: None,
-            last_tap_time: now,
-            combo_consumed_key: None,
-            dt_consumed_key: None,
-            layer_dt_last_key: None,
-            layer_dt_last_time: now,
-        }));
-
-        let _ = HOOK_STATE.set(state);
+        // OnceLock은 최초 1회만 set 가능하므로, 재시작 시에는 기존 Arc 내부의
+        // 상태를 새 config로 교체한다 — 그렇지 않으면 stop/start 후에도
+        // 이전 설정이 계속 적용된다.
+        let new_state = EngineState::new(config);
+        if let Some(existing) = HOOK_STATE.get() {
+            match existing.lock() {
+                Ok(mut guard) => *guard = new_state,
+                Err(_) => return Err("훅 상태 잠금 실패".into()),
+            }
+        } else {
+            let _ = HOOK_STATE.set(Arc::new(Mutex::new(new_state)));
+        }
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
@@ -1216,13 +897,10 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         // stuck modifier 방지: 종료 전에 held 상태인 modifier key-up 전송
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(mut guard) = state.lock() {
-                for &vkey in guard.modifiers_held.iter() {
-                    let keycode = vkey_to_cg(vkey);
-                    send_key_event(keycode, false, 0);
+                for vkey in guard.held_modifiers() {
+                    send_key_event(vkey_to_cg(vkey), false, 0);
                 }
-                guard.modifiers_held.clear();
-                guard.active_layer = None;
-                guard.pending_layer_launch = None;
+                guard.reset_transient_state();
             }
         }
 

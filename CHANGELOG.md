@@ -2,6 +2,19 @@
 
 All notable changes to keymander are documented here.
 
+## [0.8.0] — 2026-07-09
+
+### Refactoring
+- **macOS backend unified onto the shared key-binding engine** — `macos.rs`'s own decision logic (~380 lines, a divergent copy of the Windows logic) now delegates to `keybind::engine` (extracted in 0.7.0, 21 unit tests). Both platforms share identical, tested behavior. The CGEventTap callback is now a thin adapter: flagsChanged → down/up translation, OS flag sync, decision execution.
+- **Layer Launch deferral promoted to the engine** — launch actions bound inside a layer now wait for the trigger key release on *both* platforms (previously macOS-only; Windows fired immediately while the trigger modifier was still held).
+- `KeyDecision::Execute` now carries `layer_trigger` context so macOS can clear residual trigger-modifier flags before synthetic events.
+
+### Bug Fixes (macOS)
+- **CapsLock remap now works** — the old flagsChanged branch never consulted `remaps`, so the `minimal` preset (CapsLock → Escape) silently did nothing on macOS.
+- **Backend restart applies new config** — same `OnceLock` restart bug fixed on Windows in 0.7.0.
+
+---
+
 ## [0.7.1] — 2026-07-08
 
 ### Bug Fixes

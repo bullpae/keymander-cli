@@ -388,14 +388,16 @@ unsafe extern "system" fn keyboard_hook_proc(
         Err(_) => return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param),
     };
 
-    // 바인딩 판정은 순수 엔진에 위임 — 이 콜백은 큐잉만 하고 즉시 반환
+    // 바인딩 판정은 순수 엔진에 위임 — 이 콜백은 큐잉만 하고 즉시 반환.
+    // layer_trigger는 무시한다: Windows SendInput은 물리 modifier가 눌린
+    // 상태에서도 합성 이벤트에 간섭하지 않는다 (macOS 전용 컨텍스트).
     match guard.process_key(vkey, is_down, kb.time) {
         KeyDecision::PassThrough => {
             drop(guard);
             CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
         }
         KeyDecision::Suppress => 1,
-        KeyDecision::Execute(action) => {
+        KeyDecision::Execute { action, .. } => {
             drop(guard);
             queue_action(action);
             1
