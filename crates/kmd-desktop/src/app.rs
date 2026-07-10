@@ -1156,36 +1156,6 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
     });
 }
 
-fn help_query_seed(name: &str) -> Option<&'static str> {
-    if name.starts_with("@ll") || name.starts_with("@llm") {
-        Some("@ll ")
-    } else if name.starts_with("@m") {
-        Some("@m ")
-    } else if name.starts_with("@") {
-        Some("@")
-    } else if name.starts_with(":calc") {
-        Some(":calc ")
-    } else if name.starts_with(":emoji") {
-        Some(":emoji ")
-    } else if name.starts_with(":set") {
-        Some(":set")
-    } else if name.starts_with(":keymap") {
-        Some(":keymap")
-    } else if name.starts_with(":version") || name.starts_with("Version Info") {
-        Some(":version")
-    } else if name.starts_with("!") {
-        Some("!")
-    } else if name.starts_with("Fuzzy Search") {
-        Some("firefox")
-    } else if name.starts_with("*.ext") {
-        Some("*.pdf")
-    } else if name.starts_with("/regex/") {
-        Some("/test\\d+/")
-    } else {
-        None
-    }
-}
-
 /// Load → mutate → save the user config file. Logs on failure.
 fn save_config(f: impl FnOnce(&mut kmd_core::Config)) {
     let config_dir = kmd_core::Config::default_config_dir();

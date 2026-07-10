@@ -90,37 +90,12 @@ impl App {
     }
 
     pub(super) fn handle_version_query(&mut self) {
-        let emoji = self.use_emoji;
-        let version_items = vec![
-            IndexItem {
-                name: format!("kmd-desktop {}", env!("CARGO_PKG_VERSION")),
-                path: "Desktop launcher version".to_string(),
-                icon: if emoji { "\u{1F4E6}" } else { "[VER]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-            IndexItem {
-                name: format!("kmd-core {}", kmd_core::Index::current_version()),
-                path: "Search index schema version".to_string(),
-                icon: if emoji { "\u{1F9E0}" } else { "[CORE]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-            IndexItem {
-                name: format!("target {}", std::env::consts::ARCH),
-                path: format!("os {}", std::env::consts::OS),
-                icon: if emoji { "\u{1F5A5}\u{FE0F}" } else { "[SYS]" }.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: "kmd:settings:noop".to_string(),
-                icon_path: None,
-            },
-        ];
-        self.apply_contains_items(version_items);
+        let items = kmd_core::query_prefix::version_items(
+            "kmd-desktop",
+            env!("CARGO_PKG_VERSION"),
+            self.use_emoji,
+        );
+        self.apply_contains_items(items);
     }
 
     /// :t / :transform 쿼리 처리 (클립보드 변환)
@@ -335,7 +310,11 @@ impl App {
 
     /// :keys / :k — 키 맵핑 치트시트
     pub(super) fn handle_keys_query(&mut self) {
-        let items = kmd_core::keymap::keybinding_cheatsheet(&self.runtime_config, self.use_emoji);
+        let items = kmd_core::keymap::keybinding_cheatsheet(
+            &self.runtime_config,
+            self.use_emoji,
+            kmd_core::keymap::CheatsheetApp::Desktop,
+        );
         self.apply_contains_items(items);
     }
 
@@ -393,138 +372,9 @@ impl App {
         self.commit_results(results, self.search_mode, true);
     }
 
-    /// `:f /경로 쿼리` — 지정 폴더 안에서 파일/폴더를 즉석 검색.
-    ///
-    /// 형식: `:f /path/to/dir 검색어` 또는 `:f ~/dir 검색어`
-    /// 경로만 있고 검색어가 없으면 최상위 목록을 보여준다.
+    /// `:f /경로 쿼리` — 지정 폴더 안에서 파일/폴더를 즉석 검색 (kmd-core 공용 구현).
     pub(super) fn handle_folder_search(&mut self, raw: &str) {
-        // ":f " 또는 ":f" 이후 텍스트 파싱
-        let after_prefix = raw.strip_prefix(":f").unwrap_or("").trim();
-
-        if after_prefix.is_empty() {
-            // 도움말 항목만 표시
-            self.commit_results(
-                vec![folder_search_help_item()],
-                kmd_core::SearchMode::Fuzzy,
-                true,
-            );
-            return;
-        }
-
-        // 첫 번째 토큰을 경로로, 나머지를 검색어로 사용
-        let (dir_part, name_query) = match after_prefix.find(' ') {
-            Some(pos) => (after_prefix[..pos].trim(), after_prefix[pos + 1..].trim()),
-            None => (after_prefix, ""),
-        };
-
-        // ~ 확장
-        let dir_str = if dir_part.starts_with('~') {
-            let home = std::env::var("HOME").unwrap_or_default();
-            dir_part.replacen('~', &home, 1)
-        } else {
-            dir_part.to_string()
-        };
-
-        let dir = std::path::Path::new(&dir_str);
-        if !dir.is_dir() {
-            self.commit_results(
-                vec![folder_not_found_item(dir_part)],
-                kmd_core::SearchMode::Fuzzy,
-                true,
-            );
-            return;
-        }
-
-        // 폴더 내 항목 열거 (1단계 + 선택적 재귀)
-        let query_lower = name_query.to_lowercase();
-        let mut results: Vec<kmd_core::SearchResult> = Vec::new();
-
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                // 숨김 파일 제외
-                if file_name.starts_with('.') {
-                    continue;
-                }
-
-                // 검색어 필터 — 쿼리가 있을 때만 lowercase 변환 (할당 최소화)
-                if !query_lower.is_empty() {
-                    let name_lower = file_name.to_ascii_lowercase();
-                    if !name_lower.contains(query_lower.as_str()) {
-                        continue;
-                    }
-                }
-
-                let is_dir = path.is_dir();
-                let kind = if is_dir {
-                    kmd_core::index::ItemKind::Directory
-                } else {
-                    kmd_core::index::ItemKind::File
-                };
-                // 이모지 설정 여부에 따라 아이콘 선택
-                let icon = if is_dir {
-                    if self.use_emoji {
-                        "\u{1F4C1}"
-                    } else {
-                        "D/"
-                    }
-                } else {
-                    if self.use_emoji {
-                        "\u{1F4C4}"
-                    } else {
-                        "F "
-                    }
-                };
-
-                // 검색어와 얼마나 일치하는지 점수 부여 (이름 접두사 일치 우대)
-                let score: u32 = if !query_lower.is_empty() {
-                    let nl = file_name.to_ascii_lowercase();
-                    if nl.starts_with(query_lower.as_str()) {
-                        20
-                    } else {
-                        10
-                    }
-                } else {
-                    0
-                };
-
-                results.push(kmd_core::SearchResult {
-                    item: kmd_core::index::IndexItem {
-                        name: file_name,
-                        path: path.to_string_lossy().to_string(),
-                        kind,
-                        source: kmd_core::index::Source::FileProvider,
-                        icon: icon.to_string(),
-                        keywords: String::new(),
-                        icon_path: None,
-                    },
-                    score,
-                });
-            }
-        }
-
-        // 점수 내림차순 → 같은 점수는 폴더 우선 → 이름 오름차순
-        results.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| {
-                    let a_dir = a.item.kind == kmd_core::index::ItemKind::Directory;
-                    let b_dir = b.item.kind == kmd_core::index::ItemKind::Directory;
-                    b_dir.cmp(&a_dir)
-                })
-                .then(a.item.name.cmp(&b.item.name))
-        });
-
-        if results.is_empty() {
-            results.push(no_match_in_folder_item(dir_part, name_query));
-        }
-
+        let results = kmd_core::folder_search::folder_search_results(raw, self.use_emoji);
         self.commit_results(results, kmd_core::SearchMode::Contains, true);
     }
 
@@ -580,52 +430,5 @@ impl App {
         });
 
         items
-    }
-}
-
-// ── 폴더 검색 헬퍼 항목 ──────────────────────────────────────────────────────
-
-fn folder_search_help_item() -> kmd_core::SearchResult {
-    kmd_core::SearchResult {
-        item: kmd_core::index::IndexItem {
-            name: ":f /경로  또는  :f ~/경로 검색어".to_string(),
-            path: "Enter로 폴더를 열거나, 경로 뒤에 검색어를 입력해 파일을 찾으세요".to_string(),
-            kind: kmd_core::index::ItemKind::SystemCommand,
-            source: kmd_core::index::Source::Plugin,
-            icon: "\u{1F4C2}".to_string(),
-            keywords: "kmd:folder_search:hint".to_string(),
-            icon_path: None,
-        },
-        score: 0,
-    }
-}
-
-fn folder_not_found_item(dir: &str) -> kmd_core::SearchResult {
-    kmd_core::SearchResult {
-        item: kmd_core::index::IndexItem {
-            name: format!("폴더를 찾을 수 없음: {dir}"),
-            path: "경로가 올바른지 확인하거나 Tab으로 경로를 완성해 보세요".to_string(),
-            kind: kmd_core::index::ItemKind::SystemCommand,
-            source: kmd_core::index::Source::Plugin,
-            icon: "\u{26A0}\u{FE0F}".to_string(),
-            keywords: "kmd:folder_search:error".to_string(),
-            icon_path: None,
-        },
-        score: 0,
-    }
-}
-
-fn no_match_in_folder_item(dir: &str, query: &str) -> kmd_core::SearchResult {
-    kmd_core::SearchResult {
-        item: kmd_core::index::IndexItem {
-            name: format!("'{query}'에 해당하는 파일이 없습니다"),
-            path: format!("검색 위치: {dir}"),
-            kind: kmd_core::index::ItemKind::SystemCommand,
-            source: kmd_core::index::Source::Plugin,
-            icon: "\u{1F50D}".to_string(),
-            keywords: "kmd:folder_search:empty".to_string(),
-            icon_path: None,
-        },
-        score: 0,
     }
 }
