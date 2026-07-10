@@ -16,6 +16,7 @@ use kmd_core::index::{
     ItemKind, Source,
 };
 use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
+use kmd_core::query_prefix::QueryPrefix;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
 
@@ -503,7 +504,7 @@ fn handle_key(
             flush_composer(state);
             // Execute the item the user is currently looking at — do NOT
             // re-run search first, as that resets selected_index to 0.
-            execute_selected(state, db);
+            execute_selected(state, engine, db);
         }
         (KeyCode::Backspace, _) => {
             if state.hangul_mode && state.composer.is_composing() {
@@ -619,10 +620,67 @@ fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
 }
 
 /// Execute the currently selected item
-fn execute_selected(state: &mut AppState, db: Option<&kmd_core::Database>) {
+fn execute_selected(
+    state: &mut AppState,
+    engine: &mut SearchEngine,
+    db: Option<&kmd_core::Database>,
+) {
     let Some(result) = state.results.get(state.selected_index) else {
         return;
     };
+
+    // ── kmd 가상 항목 (도움말/설정/키맵 등 UI 내부 명령) ──
+    if result.item.kind == ItemKind::SystemCommand && result.item.keywords.starts_with("kmd:") {
+        let keywords = result.item.keywords.clone();
+        let item_name = result.item.name.clone();
+        let item_path = result.item.path.clone();
+
+        // 도움말 항목 → 시작 쿼리(퀵 템플릿)로 전환
+        if keywords.starts_with("kmd:help:") {
+            if let Some(seed) = kmd_core::query_prefix::help_query_seed(&item_name) {
+                state.query = seed.to_string();
+                state.refresh_effective_query();
+                state.selected_index = 0;
+                update_search(state, engine, db);
+            }
+            return;
+        }
+        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
+        if keywords.starts_with("kmd:bang_hint:") {
+            state.query = item_path;
+            state.refresh_effective_query();
+            state.selected_index = 0;
+            update_search(state, engine, db);
+            return;
+        }
+        // 미지 명령 안내 → :help 로 이동
+        if keywords == "kmd:unknown_cmd" {
+            state.query = ":help".to_string();
+            state.refresh_effective_query();
+            state.selected_index = 0;
+            update_search(state, engine, db);
+            return;
+        }
+        // 설정 모달 열기 (:set)
+        if keywords == "kmd:tui:open_settings" {
+            let config = crate::cmd::load_config().unwrap_or_default();
+            state.settings = Some(SettingsState::new(config));
+            return;
+        }
+        // 키맵 액션 (start/stop/프로파일 전환)
+        if keywords.starts_with("kmd:keymap:") && !keywords.ends_with(":noop") {
+            let mut config = crate::cmd::load_config().unwrap_or_default();
+            if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, &keywords) {
+                state.status_message = Some(msg);
+            }
+            let query = kmd_core::query_prefix::normalize_slash_command(&state.query)
+                .unwrap_or_else(|| state.query.clone());
+            handle_keymap_query(&query, state);
+            return;
+        }
+        // 나머지 kmd:* 항목은 안내용(noop) — 실행할 대상이 없다
+        return;
+    }
 
     // Calculator result → copy to clipboard
     if result.item.kind == ItemKind::Calculator && !result.item.path.is_empty() {
@@ -802,30 +860,17 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         state.drill_stack.clear();
     }
 
-    if query.starts_with('@') {
-        return handle_web_query(&query, state);
-    }
+    // /help → :help 정규화 — 표시되는 쿼리는 그대로, 디스패치만 : 형태로
+    let query = kmd_core::query_prefix::normalize_slash_command(&query).unwrap_or(query);
 
-    if query.starts_with(":transform") || query.starts_with(":t ") || query == ":t" {
-        return handle_transform_query(&query, state);
-    }
+    let prefix = kmd_core::query_prefix::prefix_of(&query);
 
-    if query.starts_with(":prompt") || query.starts_with(":pt") {
-        return handle_prompt_query(&query, state);
-    }
-
-    if query.starts_with(":calc") {
-        return handle_calc_query(&query, state);
-    }
-
-    let is_emoji_prefix = query.starts_with(":emoji") || query.starts_with(":e ") || query == ":e";
-    if is_emoji_prefix {
-        // Auto-activate built-in Hangul mode for real-time Korean search
+    // :e / :emoji 모드에서만 내장 한글 조합 자동 활성화
+    if prefix == QueryPrefix::Emoji {
         if !state.hangul_mode && !state.hangul_auto {
             state.hangul_mode = true;
             state.hangul_auto = true;
         }
-        return handle_emoji_query(&query, state);
     } else if state.hangul_auto {
         // Left emoji prefix — auto-deactivate hangul mode
         flush_composer(state);
@@ -833,11 +878,36 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         state.hangul_auto = false;
     }
 
-    if query.starts_with('!') {
-        return handle_shell_query(&query, state);
+    match prefix {
+        QueryPrefix::Web => handle_web_query(&query, state),
+        QueryPrefix::Transform => handle_transform_query(&query, state),
+        QueryPrefix::Prompt => handle_prompt_query(&query, state),
+        QueryPrefix::Calc => handle_calc_query(&query, state),
+        QueryPrefix::Emoji => handle_emoji_query(&query, state),
+        QueryPrefix::Settings => handle_settings_query(state),
+        QueryPrefix::Help => handle_help_query(state),
+        QueryPrefix::Version => handle_version_query(state),
+        QueryPrefix::Shell => handle_shell_query(&query, state),
+        QueryPrefix::Keymap => handle_keymap_query(&query, state),
+        QueryPrefix::Keys => handle_keys_query(state),
+        QueryPrefix::FolderSearch => handle_folder_search(&query, state),
+        QueryPrefix::General => {
+            handle_main_search(&query, state, engine, db);
+            // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
+            if let Some(hint) =
+                kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)
+            {
+                state.results.insert(
+                    0,
+                    SearchResult {
+                        item: hint,
+                        score: 0,
+                    },
+                );
+                state.selected_index = 0;
+            }
+        }
     }
-
-    handle_main_search(&query, state, engine, db);
 }
 
 /// Empty query: show drill directory contents or recent history
@@ -1069,12 +1139,97 @@ fn handle_emoji_query(query: &str, state: &mut AppState) {
     state.selected_index = 0;
 }
 
+/// Handle :help / :h prefix — 공용 도움말 항목 표시 (Enter로 시작 쿼리 전환)
+fn handle_help_query(state: &mut AppState) {
+    let items = kmd_core::query_prefix::help_items(state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :version prefix — 버전 정보 표시
+fn handle_version_query(state: &mut AppState) {
+    let items =
+        kmd_core::query_prefix::version_items("kmd", env!("CARGO_PKG_VERSION"), state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :set / :settings prefix — Enter로 설정 모달(F2)을 여는 항목 표시
+fn handle_settings_query(state: &mut AppState) {
+    let item = kmd_core::IndexItem {
+        name: "Settings 열기".to_string(),
+        path: "Enter로 설정 모달을 엽니다 (단축키 F2)".to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: if state.use_emoji {
+            "\u{2699}\u{FE0F}"
+        } else {
+            "[SET]"
+        }
+        .to_string(),
+        keywords: "kmd:tui:open_settings".to_string(),
+        icon_path: None,
+    };
+    state.results = items_to_results(std::iter::once(item), SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :keymap / :km prefix — kanata 키맵 제어 항목 표시
+fn handle_keymap_query(query: &str, state: &mut AppState) {
+    let sub = query
+        .strip_prefix(":keymap")
+        .or_else(|| query.strip_prefix(":km"))
+        .unwrap_or("")
+        .trim();
+    let config = crate::cmd::load_config().unwrap_or_default();
+    let items = kmd_core::keymap::keymap_items(&config, sub, state.use_emoji);
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :keys / :k prefix — 키 바인딩 치트시트 표시
+fn handle_keys_query(state: &mut AppState) {
+    let config = crate::cmd::load_config().unwrap_or_default();
+    let items = kmd_core::keymap::keybinding_cheatsheet(
+        &config,
+        state.use_emoji,
+        kmd_core::keymap::CheatsheetApp::Tui,
+    );
+    state.results = items_to_results(items, SCORE_CALC);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle :f prefix — 폴더 지정 즉석 검색 (kmd-core 공용 구현)
+fn handle_folder_search(query: &str, state: &mut AppState) {
+    state.results = kmd_core::folder_search::folder_search_results(query, state.use_emoji);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
 /// Handle ! prefix (shell commands and quick actions)
 fn handle_shell_query(query: &str, state: &mut AppState) {
-    let shell_query = query.strip_prefix('!').unwrap_or("").trim();
+    let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
     let shell_ext = builtin_shell::ShellExtension;
     let items = shell_ext.search(shell_query);
     state.results = items_to_results(items, SCORE_CALC);
+
+    // !g rust → @g rust 웹 검색 전환 힌트 (셸 항목 아래에 표시)
+    if let Some(hint) = kmd_core::query_prefix::bang_web_hint(query, state.use_emoji) {
+        let pos = state.results.len().min(1);
+        state.results.insert(
+            pos,
+            SearchResult {
+                item: hint,
+                score: 0,
+            },
+        );
+    }
+
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }

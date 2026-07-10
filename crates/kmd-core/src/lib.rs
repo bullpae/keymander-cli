@@ -6,6 +6,7 @@
 pub mod action;
 pub mod config;
 pub mod db;
+pub mod folder_search;
 pub mod hangul;
 pub mod history;
 pub mod index;
@@ -14,6 +15,7 @@ pub mod keymap;
 pub mod plugin;
 pub mod portable;
 pub mod prompt;
+pub mod query_prefix;
 pub mod search;
 pub mod single_instance;
 pub mod transform;

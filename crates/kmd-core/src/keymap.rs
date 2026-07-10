@@ -671,7 +671,18 @@ fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapCo
 }
 
 /// 키맵핑 치트시트 생성 — 프리셋+사용자 config 병합 결과를 시각화
-pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem> {
+/// 치트시트를 표시하는 프런트엔드 — 내장 단축키 섹션이 달라진다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheatsheetApp {
+    Desktop,
+    Tui,
+}
+
+pub fn keybinding_cheatsheet(
+    config: &Config,
+    use_emoji: bool,
+    app: CheatsheetApp,
+) -> Vec<IndexItem> {
     let mut items: Vec<IndexItem> = Vec::new();
 
     let section = |items: &mut Vec<IndexItem>, title: &str, icon: &str| {
@@ -699,48 +710,107 @@ pub fn keybinding_cheatsheet(config: &Config, use_emoji: bool) -> Vec<IndexItem>
 
     let e = use_emoji;
 
-    // ── kmd-desktop 내장 단축키 ──
-    section(
-        &mut items,
-        "KMD Desktop",
-        if e { "\u{2328}\u{FE0F}" } else { "[KMD]" },
-    );
-    entry(
-        &mut items,
-        "Esc",
-        "프로그램 종료",
-        if e { "\u{274C}" } else { "[X]" },
-    );
-    entry(
-        &mut items,
-        "\u{2191} / \u{2193}",
-        "결과 목록 이동",
-        if e { "\u{1F503}" } else { "[^v]" },
-    );
-    entry(
-        &mut items,
-        "Enter",
-        "선택 항목 실행",
-        if e { "\u{23CE}" } else { "[>]" },
-    );
-    entry(
-        &mut items,
-        "Tab",
-        "상세 패널 열기",
-        if e { "\u{21E5}" } else { "[T]" },
-    );
-    entry(
-        &mut items,
-        "Ctrl+1~4",
-        "컨텍스트 액션 실행",
-        if e { "\u{1F522}" } else { "[#]" },
-    );
-    entry(
-        &mut items,
-        "Ctrl+Shift+Enter",
-        "관리자 권한 실행",
-        if e { "\u{1F512}" } else { "[!]" },
-    );
+    // ── 프런트엔드 내장 단축키 ──
+    match app {
+        CheatsheetApp::Desktop => {
+            section(
+                &mut items,
+                "KMD Desktop",
+                if e { "\u{2328}\u{FE0F}" } else { "[KMD]" },
+            );
+            entry(
+                &mut items,
+                "Esc",
+                "프로그램 종료",
+                if e { "\u{274C}" } else { "[X]" },
+            );
+            entry(
+                &mut items,
+                "\u{2191} / \u{2193}",
+                "결과 목록 이동",
+                if e { "\u{1F503}" } else { "[^v]" },
+            );
+            entry(
+                &mut items,
+                "Enter",
+                "선택 항목 실행",
+                if e { "\u{23CE}" } else { "[>]" },
+            );
+            entry(
+                &mut items,
+                "Tab",
+                "상세 패널 열기",
+                if e { "\u{21E5}" } else { "[T]" },
+            );
+            entry(
+                &mut items,
+                "Ctrl+1~4",
+                "컨텍스트 액션 실행",
+                if e { "\u{1F522}" } else { "[#]" },
+            );
+            entry(
+                &mut items,
+                "Ctrl+Shift+Enter",
+                "관리자 권한 실행",
+                if e { "\u{1F512}" } else { "[!]" },
+            );
+        }
+        CheatsheetApp::Tui => {
+            section(
+                &mut items,
+                "KMD TUI",
+                if e { "\u{2328}\u{FE0F}" } else { "[KMD]" },
+            );
+            entry(
+                &mut items,
+                "Esc",
+                "드릴 뒤로 → 쿼리 지우기 → 종료",
+                if e { "\u{274C}" } else { "[X]" },
+            );
+            entry(
+                &mut items,
+                "\u{2191} / \u{2193}",
+                "결과 목록 이동",
+                if e { "\u{1F503}" } else { "[^v]" },
+            );
+            entry(
+                &mut items,
+                "Enter",
+                "선택 항목 실행",
+                if e { "\u{23CE}" } else { "[>]" },
+            );
+            entry(
+                &mut items,
+                "Tab / \u{2192}",
+                "폴더 드릴다운",
+                if e { "\u{21E5}" } else { "[T]" },
+            );
+            entry(
+                &mut items,
+                "\u{2190}",
+                "드릴 뒤로",
+                if e { "\u{2B05}\u{FE0F}" } else { "[<]" },
+            );
+            entry(
+                &mut items,
+                "Ctrl+P",
+                "미리보기 패널 토글",
+                if e { "\u{1F441}\u{FE0F}" } else { "[P]" },
+            );
+            entry(
+                &mut items,
+                "F2",
+                "설정 모달 열기",
+                if e { "\u{2699}\u{FE0F}" } else { "[S]" },
+            );
+            entry(
+                &mut items,
+                "Ctrl+C",
+                "종료",
+                if e { "\u{1F6D1}" } else { "[Q]" },
+            );
+        }
+    }
 
     // ── 명령어 ──
     section(

@@ -1,7 +1,7 @@
 //! 항목 실행, 컨텍스트 액션, 단축키 처리
 
 use super::*;
-use super::{context_actions_for, help_query_seed, launch_in_terminal};
+use super::{context_actions_for, launch_in_terminal};
 
 impl App {
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
@@ -81,14 +81,28 @@ impl App {
             return Task::none();
         };
 
-        // Help entries now act like quick templates.
-        if self.query.starts_with(":help") && result.item.path.starts_with("Type ") {
-            if let Some(seed) = help_query_seed(&result.item.name) {
+        // Help entries act like quick templates — 선택 시 시작 쿼리로 전환.
+        if result.item.keywords.starts_with("kmd:help:") {
+            if let Some(seed) = kmd_core::query_prefix::help_query_seed(&result.item.name) {
                 self.query = seed.to_string();
                 self.selected = 0;
                 return self.perform_search();
             }
             return Task::none();
+        }
+
+        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
+        if result.item.keywords.starts_with("kmd:bang_hint:") {
+            self.query = result.item.path.clone();
+            self.selected = 0;
+            return self.perform_search();
+        }
+
+        // 미지 명령 안내 → :help 로 이동
+        if result.item.keywords == "kmd:unknown_cmd" {
+            self.query = ":help".to_string();
+            self.selected = 0;
+            return self.perform_search();
         }
 
         if result.item.kind == ItemKind::SystemCommand

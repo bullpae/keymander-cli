@@ -43,10 +43,12 @@ impl SearchMode {
             return (Self::Glob, q.to_string());
         }
 
-        // Regex: /pattern/
+        // Regex: /pattern/ — 내부에 /가 더 있으면 Unix 경로(/usr/bin/)로 보고 제외
         if q.starts_with('/') && q.len() > 2 && q.ends_with('/') {
             let pattern = &q[1..q.len() - 1];
-            return (Self::Regex, pattern.to_string());
+            if !pattern.contains('/') {
+                return (Self::Regex, pattern.to_string());
+            }
         }
 
         // Extension shortcut: .doc -> *.doc
@@ -506,6 +508,9 @@ mod tests {
         assert_eq!(SearchMode::detect("*.doc").0, SearchMode::Glob);
         assert_eq!(SearchMode::detect("test*").0, SearchMode::Glob);
         assert_eq!(SearchMode::detect("/test\\d+/").0, SearchMode::Regex);
+        // Unix 절대경로 형태는 정규식으로 오판하지 않는다
+        assert_eq!(SearchMode::detect("/usr/bin/").0, SearchMode::Fuzzy);
+        assert_eq!(SearchMode::detect("/home/user/docs/").0, SearchMode::Fuzzy);
         assert_eq!(SearchMode::detect(".pdf").0, SearchMode::Glob);
     }
 

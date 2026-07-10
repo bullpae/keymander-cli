@@ -39,7 +39,8 @@ impl App {
         {
             tracing::info!("keymap action: {msg}");
         }
-        let current_query = self.query.clone();
+        let current_query = kmd_core::query_prefix::normalize_slash_command(self.query.trim())
+            .unwrap_or_else(|| self.query.clone());
         self.handle_keymap_query(&current_query);
         Task::none()
     }
@@ -275,120 +276,7 @@ impl App {
     }
 
     pub(super) fn handle_help_query(&mut self) {
-        let emoji = self.use_emoji;
-        let entries: &[(&str, &str, &str)] = &[
-            (
-                "@  Web Search",
-                "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
-                if emoji { "\u{1F310}" } else { "[WEB]" },
-            ),
-            (
-                ":calc  Calculator",
-                "Type :calc expression  (e.g. :calc (2+3)*4)",
-                if emoji { "\u{1F522}" } else { "[CAL]" },
-            ),
-            (
-                ":emoji  Emoji Search",
-                "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
-                if emoji { "\u{1F60A}" } else { "[EMO]" },
-            ),
-            (
-                ":set  Settings",
-                "Type :set or :settings to manage config, themes, index",
-                if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" },
-            ),
-            (
-                ":t  Quick Transform",
-                "Type :t spell/tr/trko/tren  (clipboard text → spell/translate)",
-                if emoji { "\u{26A1}" } else { "[QT]" },
-            ),
-            (
-                ":prompt  Prompt Templates",
-                "Type :prompt  (manage reusable prompt templates for @ll)",
-                if emoji { "\u{1F4DD}" } else { "[PT]" },
-            ),
-            (
-                ":keys  Key Mapping Sheet",
-                "Type :keys or :k or press F1  (show all keybinding cheatsheet)",
-                if emoji { "\u{1F5FA}\u{FE0F}" } else { "[KEY]" },
-            ),
-            (
-                ":keymap  Keymap Control",
-                "Type :keymap or :km  (kanata status, on/off, profile switch)",
-                if emoji { "\u{2328}\u{FE0F}" } else { "[KM]" },
-            ),
-            (
-                ":version  Version Info",
-                "Type :version  (show desktop/core/target/os versions)",
-                if emoji { "\u{1F4E6}" } else { "[VER]" },
-            ),
-            (
-                "@llm  Multi LLM Compare",
-                "Type @ll prompt  (alias: @llm, open selected LLM providers)",
-                if emoji { "\u{1F9E0}" } else { "[LLM]" },
-            ),
-            (
-                "@msearch  Multi Web Search",
-                "Type @m query  (alias: @msearch, open selected web engines)",
-                if emoji { "\u{1F50E}" } else { "[MWEB]" },
-            ),
-            (
-                "@sp  Spell Check",
-                "Type @sp text  (Korean spelling check on selected providers)",
-                if emoji { "\u{270D}\u{FE0F}" } else { "[SPL]" },
-            ),
-            (
-                "@tr  Translate",
-                "Type @tr/@trko/@tren text  (auto / en->ko / ko->en)",
-                if emoji { "\u{1F5E3}\u{FE0F}" } else { "[TR]" },
-            ),
-            (
-                "Version Info",
-                "CLI also supports: kmd-desktop --version",
-                if emoji { "\u{2139}\u{FE0F}" } else { "[VER]" },
-            ),
-            (
-                "!  Shell Command",
-                "Type !command  (e.g. !ip, !hostname, !echo hello)",
-                if emoji { "\u{1F4BB}" } else { "[SHL]" },
-            ),
-            (
-                "Fuzzy Search",
-                "Just type to search files, apps, folders  (e.g. firefox)",
-                if emoji { "\u{1F50D}" } else { "[FZF]" },
-            ),
-            (
-                "*.ext  Glob Pattern",
-                "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
-                if emoji { "\u{1F4C4}" } else { "[GLB]" },
-            ),
-            (
-                "/regex/  Regular Expression",
-                "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
-                if emoji { "\u{1F9EA}" } else { "[RGX]" },
-            ),
-        ];
-
-        let items: Vec<IndexItem> = entries
-            .iter()
-            .map(|(name, desc, icon)| IndexItem {
-                name: name.to_string(),
-                path: desc.to_string(),
-                icon: icon.to_string(),
-                kind: ItemKind::SystemCommand,
-                source: Source::Plugin,
-                keywords: if name.starts_with("Fuzzy Search")
-                    || name.starts_with("*.ext")
-                    || name.starts_with("/regex/")
-                {
-                    "kmd:help:example".to_string()
-                } else {
-                    String::new()
-                },
-                icon_path: None,
-            })
-            .collect();
-
+        let items = kmd_core::query_prefix::help_items(self.use_emoji);
         self.apply_contains_items(items);
     }
 

@@ -901,8 +901,11 @@ impl App {
                         self.daemon_autostart_enabled = None;
                     }
                 }
-                if self.query.starts_with(":set") {
-                    self.handle_settings_query(":set");
+                if crate::query_prefix::prefix_of(self.query.trim())
+                    == crate::query_prefix::Prefix::Settings
+                {
+                    let current_query = self.query.clone();
+                    self.handle_settings_query(&current_query);
                 }
                 Task::none()
             }
@@ -993,19 +996,8 @@ impl App {
 
 // ─── Search Logic ─────────────────────────────────────────────────────────────
 
-/// All supported command prefixes for the search bar.
-///
-/// | Prefix    | Mode              | Example                        |
-/// |-----------|-------------------|--------------------------------|
-/// | `@`       | Web service       | `@g rust tutorial`, `@ai why`  |
-/// | `:calc`   | Calculator        | `:calc (2+3)*4`                |
-/// | `:emoji`  | Emoji search      | `:emoji fire`, `:e 하트`       |
-/// | `:set`    | Settings          | `:set`, `:settings theme`      |
-/// | `:keymap` | Keymap control    | `:keymap`, `:km on`, `:km off` |
-/// | `:keys`   | Keybinding sheet  | `:keys`, `:k`, `F1`            |
-/// | `:help`   | Help / commands   | `:help`, `:h`                  |
-/// | `!`       | Shell command     | `!ip`, `!echo hello`           |
-/// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
+// 지원하는 검색창 프리픽스 전체 목록은 kmd_core::query_prefix::COMMANDS 레지스트리
+// (단일 진실 소스)와 :help 화면을 참고.
 
 // ─── Shell Terminal Launch ────────────────────────────────────────────────────
 
@@ -1151,36 +1143,6 @@ fn ensure_multi_web_hint(items: &mut Vec<IndexItem>, use_emoji: bool) {
                 .to_string(),
         icon_path: None,
     });
-}
-
-fn help_query_seed(name: &str) -> Option<&'static str> {
-    if name.starts_with("@ll") || name.starts_with("@llm") {
-        Some("@ll ")
-    } else if name.starts_with("@m") {
-        Some("@m ")
-    } else if name.starts_with("@") {
-        Some("@")
-    } else if name.starts_with(":calc") {
-        Some(":calc ")
-    } else if name.starts_with(":emoji") {
-        Some(":emoji ")
-    } else if name.starts_with(":set") {
-        Some(":set")
-    } else if name.starts_with(":keymap") {
-        Some(":keymap")
-    } else if name.starts_with(":version") || name.starts_with("Version Info") {
-        Some(":version")
-    } else if name.starts_with("!") {
-        Some("!")
-    } else if name.starts_with("Fuzzy Search") {
-        Some("firefox")
-    } else if name.starts_with("*.ext") {
-        Some("*.pdf")
-    } else if name.starts_with("/regex/") {
-        Some("/test\\d+/")
-    } else {
-        None
-    }
 }
 
 /// Load → mutate → save the user config file. Logs on failure.
