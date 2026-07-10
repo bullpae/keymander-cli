@@ -656,7 +656,8 @@ fn execute_selected(
             if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, &keywords) {
                 state.status_message = Some(msg);
             }
-            let query = state.query.clone();
+            let query = kmd_core::query_prefix::normalize_slash_command(&state.query)
+                .unwrap_or_else(|| state.query.clone());
             handle_keymap_query(&query, state);
             return;
         }
@@ -841,6 +842,9 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         state.drill_path = None;
         state.drill_stack.clear();
     }
+
+    // /help → :help 정규화 — 표시되는 쿼리는 그대로, 디스패치만 : 형태로
+    let query = kmd_core::query_prefix::normalize_slash_command(&query).unwrap_or(query);
 
     let prefix = kmd_core::query_prefix::prefix_of(&query);
 

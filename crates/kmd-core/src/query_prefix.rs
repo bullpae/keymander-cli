@@ -250,6 +250,30 @@ pub fn matches_command(query: &str, aliases: &[&str]) -> bool {
     })
 }
 
+/// `/help`, `/set`처럼 `/`로 시작하는 명령 입력을 `:` 형태로 정규화한다.
+///
+/// Slack/Discord/ChatGPT 계열에 익숙한 사용자를 위한 관용 별칭.
+/// 닫힌 `/pattern/` 형태(정규식 검색)와 알 수 없는 `/...` 입력은 `None`을
+/// 반환해 일반 검색으로 흘려보낸다.
+pub fn normalize_slash_command(query: &str) -> Option<String> {
+    let rest = query.strip_prefix('/')?;
+    // 닫힌 /pattern/ 형태는 정규식 검색 문법이 우선한다
+    if query.len() > 2 && query.ends_with('/') {
+        return None;
+    }
+    for spec in COMMANDS {
+        for alias in spec.aliases {
+            let name = alias.strip_prefix(':').unwrap_or(alias);
+            if let Some(r) = rest.strip_prefix(name) {
+                if r.is_empty() || r.starts_with(' ') {
+                    return Some(format!(":{name}{r}"));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 검색창 입력을 프리픽스 종류로 분류한다.
 pub fn prefix_of(query: &str) -> QueryPrefix {
     if query.starts_with('@') {
@@ -264,6 +288,9 @@ pub fn prefix_of(query: &str) -> QueryPrefix {
                 return spec.prefix;
             }
         }
+    }
+    if let Some(normalized) = normalize_slash_command(query) {
+        return prefix_of(&normalized);
     }
     QueryPrefix::General
 }
@@ -402,6 +429,28 @@ mod tests {
         assert_eq!(prefix_of(":ex"), QueryPrefix::General);
         assert_eq!(prefix_of(":helpme"), QueryPrefix::General);
         assert_eq!(prefix_of(":keysx"), QueryPrefix::General);
+    }
+
+    #[test]
+    fn slash_command_aliases() {
+        // Slack/Discord 스타일 / 명령도 : 명령과 동일하게 동작
+        assert_eq!(prefix_of("/help"), QueryPrefix::Help);
+        assert_eq!(prefix_of("/h"), QueryPrefix::Help);
+        assert_eq!(prefix_of("/set"), QueryPrefix::Settings);
+        assert_eq!(prefix_of("/calc (2+3)*4"), QueryPrefix::Calc);
+        assert_eq!(prefix_of("/t spell hello"), QueryPrefix::Transform);
+        assert_eq!(prefix_of("/km on"), QueryPrefix::Keymap);
+        assert_eq!(
+            normalize_slash_command("/emoji fire"),
+            Some(":emoji fire".to_string())
+        );
+        // 닫힌 /pattern/ 형태는 정규식이 우선한다
+        assert_eq!(prefix_of("/test\\d+/"), QueryPrefix::General);
+        assert_eq!(normalize_slash_command("/e fire/"), None);
+        // 명령이 아닌 / 입력(경로, 미지 명령)은 일반 검색
+        assert_eq!(prefix_of("/usr"), QueryPrefix::General);
+        assert_eq!(prefix_of("/unknown thing"), QueryPrefix::General);
+        assert_eq!(prefix_of("/"), QueryPrefix::General);
     }
 
     #[test]

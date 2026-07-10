@@ -39,7 +39,8 @@ impl App {
         {
             tracing::info!("keymap action: {msg}");
         }
-        let current_query = self.query.clone();
+        let current_query = kmd_core::query_prefix::normalize_slash_command(self.query.trim())
+            .unwrap_or_else(|| self.query.clone());
         self.handle_keymap_query(&current_query);
         Task::none()
     }

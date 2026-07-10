@@ -12,6 +12,10 @@ impl App {
             return Task::none();
         }
 
+        // /help → :help 정규화 — 표시되는 쿼리는 그대로, 디스패치만 : 형태로
+        let normalized = kmd_core::query_prefix::normalize_slash_command(trimmed);
+        let trimmed = normalized.as_deref().unwrap_or(trimmed);
+
         let prev_signature = self.last_results_signature;
         let mut post_task: Task<Message> = Task::none();
 

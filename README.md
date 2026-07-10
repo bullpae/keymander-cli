@@ -217,6 +217,8 @@ In `:help`, selecting an entry and pressing Enter fills a starter query (quick t
 
 Command aliases match on a token boundary: `:e fire` is the emoji search, but `:example` is just a regular search.
 
+Every `:` command can also be typed with a leading `/` (e.g. `/help`, `/set`, `/calc 2+3`) — handy if you are used to Slack/Discord-style slash commands. The closed `/pattern/` form is still a regex search, and unknown `/...` input falls back to normal search.
+
 | Prefix | Mode | Example | Description |
 |--------|------|---------|-------------|
 | `@prefix` | Web search | `@g rust tutorial` | Search via web service |
