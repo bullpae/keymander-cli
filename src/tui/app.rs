@@ -633,6 +633,7 @@ fn execute_selected(
     if result.item.kind == ItemKind::SystemCommand && result.item.keywords.starts_with("kmd:") {
         let keywords = result.item.keywords.clone();
         let item_name = result.item.name.clone();
+        let item_path = result.item.path.clone();
 
         // 도움말 항목 → 시작 쿼리(퀵 템플릿)로 전환
         if keywords.starts_with("kmd:help:") {
@@ -642,6 +643,14 @@ fn execute_selected(
                 state.selected_index = 0;
                 update_search(state, engine, db);
             }
+            return;
+        }
+        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
+        if keywords.starts_with("kmd:bang_hint:") {
+            state.query = item_path;
+            state.refresh_effective_query();
+            state.selected_index = 0;
+            update_search(state, engine, db);
             return;
         }
         // 설정 모달 열기 (:set)
@@ -1181,10 +1190,23 @@ fn handle_folder_search(query: &str, state: &mut AppState) {
 
 /// Handle ! prefix (shell commands and quick actions)
 fn handle_shell_query(query: &str, state: &mut AppState) {
-    let shell_query = query.strip_prefix('!').unwrap_or("").trim();
+    let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
     let shell_ext = builtin_shell::ShellExtension;
     let items = shell_ext.search(shell_query);
     state.results = items_to_results(items, SCORE_CALC);
+
+    // !g rust → @g rust 웹 검색 전환 힌트 (셸 항목 아래에 표시)
+    if let Some(hint) = kmd_core::query_prefix::bang_web_hint(query, state.use_emoji) {
+        let pos = state.results.len().min(1);
+        state.results.insert(
+            pos,
+            SearchResult {
+                item: hint,
+                score: 0,
+            },
+        );
+    }
+
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }

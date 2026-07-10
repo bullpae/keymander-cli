@@ -207,7 +207,7 @@ const HELP_BOTTOM: &[HelpEntry] = &[
     },
     HelpEntry {
         name: "!  Shell Command",
-        usage: "Type !command  (e.g. !ip, !hostname, !echo hello)",
+        usage: "Type !command or >command  (e.g. !ip, !hostname, >echo hello)",
         seed: "!",
         icon_emoji: "\u{1F4BB}",
         icon_ascii: "[SHL]",
@@ -279,7 +279,8 @@ pub fn prefix_of(query: &str) -> QueryPrefix {
     if query.starts_with('@') {
         return QueryPrefix::Web;
     }
-    if query.starts_with('!') {
+    // `>`는 런처 생태계(PowerToys Run, Flow Launcher, Alfred)의 셸 관례 별칭
+    if query.starts_with('!') || query.starts_with('>') {
         return QueryPrefix::Shell;
     }
     if query.starts_with(':') {
@@ -357,6 +358,42 @@ pub fn help_query_seed(name: &str) -> Option<&'static str> {
         .map(|e| e.seed)
 }
 
+/// `!g rust`처럼 `!` 뒤에 등록된 웹 서비스 프리픽스가 오면
+/// `@g rust` 웹 검색으로 전환하는 안내 항목을 만든다.
+///
+/// DuckDuckGo bang(`!g`) 습관이 있는 사용자가 셸 모드에 빠졌을 때를 위한 힌트.
+/// 항목의 `path`가 전환할 쿼리이며, keywords는 `kmd:bang_hint:<service_id>`.
+pub fn bang_web_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
+    let rest = query.strip_prefix('!')?;
+    let (word, tail) = match rest.split_once(' ') {
+        Some((w, t)) => (w, t.trim()),
+        None => (rest, ""),
+    };
+    if word.is_empty() {
+        return None;
+    }
+    let at_prefix = format!("@{}", word.to_ascii_lowercase());
+    let service = crate::web::WEB_SERVICES.iter().find(|s| {
+        s.prefixes
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(&at_prefix))
+    })?;
+    let seed = if tail.is_empty() {
+        format!("{at_prefix} ")
+    } else {
+        format!("{at_prefix} {tail}")
+    };
+    Some(IndexItem {
+        name: format!("웹 검색으로 전환: {}", seed.trim_end()),
+        path: seed,
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{1F310}" } else { "[WEB]" }.to_string(),
+        keywords: format!("kmd:bang_hint:{}", service.id),
+        icon_path: None,
+    })
+}
+
 /// `:version` 결과 목록 — 앱 이름/버전만 프런트엔드별로 다르다.
 pub fn version_items(app_label: &str, app_version: &str, use_emoji: bool) -> Vec<IndexItem> {
     let emoji = use_emoji;
@@ -400,6 +437,21 @@ mod tests {
         assert_eq!(prefix_of("@g rust"), QueryPrefix::Web);
         assert_eq!(prefix_of("@"), QueryPrefix::Web);
         assert_eq!(prefix_of("!ip"), QueryPrefix::Shell);
+        assert_eq!(prefix_of(">ip"), QueryPrefix::Shell);
+    }
+
+    #[test]
+    fn bang_web_hint_for_ddg_habit() {
+        // !g rust → @g rust 전환 힌트 (DuckDuckGo bang 습관)
+        let hint = bang_web_hint("!g rust tutorial", false).expect("힌트가 있어야 함");
+        assert_eq!(hint.path, "@g rust tutorial");
+        assert!(hint.keywords.starts_with("kmd:bang_hint:"));
+        // 쿼리가 없어도 프리픽스만 맞으면 힌트 제공
+        assert_eq!(bang_web_hint("!yt", false).unwrap().path, "@yt ");
+        // 등록된 웹 프리픽스가 아니면 힌트 없음
+        assert!(bang_web_hint("!echo hello", false).is_none());
+        assert!(bang_web_hint("!ip", false).is_none());
+        assert!(bang_web_hint("!", false).is_none());
     }
 
     #[test]

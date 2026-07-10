@@ -41,7 +41,7 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Quick Transform**: `:t spell text`, `:t trko text` — clipboard → spell check / translate instantly
 - **Inline calculator**: Type math expressions anywhere — result appears instantly
 - **Emoji search**: `:emoji fire` or `:e 하트` — search & copy Unicode emoji (English + Korean)
-- **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command
+- **Shell commands**: `!ip`, `!hostname`, `!uptime` — quick system info, or run any shell command (`>` also works)
 - **Single-instance toggle**: Hotkey press toggles on/off — no duplicate windows
 - **Frecency history**: Recently and frequently used items bubble to the top (time-decay scoring)
 - **History auto-pruning**: Aging algorithm prevents database from growing unboundedly
@@ -237,7 +237,9 @@ Every `:` command can also be typed with a leading `/` (e.g. `/help`, `/set`, `/
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
 | `:version` / `:ver` / `:v` | Version info | `:version` | Show app/core/target/os versions |
 | `:help` / `:h` | Help | `:help` | Show all available commands |
-| `!command` | Shell | `!ip`, `!echo hello` | Run shell command |
+| `!command` / `>command` | Shell | `!ip`, `>echo hello` | Run shell command |
+
+Coming from DuckDuckGo bangs? Typing `!g rust` runs a shell command here — but kmd shows a one-line hint offering to switch to the `@g rust` web search.
 
 ### Web Services
 

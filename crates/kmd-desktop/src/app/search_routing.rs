@@ -307,9 +307,17 @@ impl App {
     }
 
     pub(super) fn handle_shell_query(&mut self, query: &str) {
-        let shell_query = query.strip_prefix('!').unwrap_or("").trim();
+        let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
         let shell_ext = builtin_shell::ShellExtension;
-        self.apply_contains_items(shell_ext.search(shell_query));
+        let mut items = shell_ext.search(shell_query);
+
+        // !g rust → @g rust 웹 검색 전환 힌트 (셸 항목 아래에 표시)
+        if let Some(hint) = kmd_core::query_prefix::bang_web_hint(query, self.use_emoji) {
+            let pos = items.len().min(1);
+            items.insert(pos, hint);
+        }
+
+        self.apply_contains_items(items);
     }
 
     /// :keys / :k — 키 맵핑 치트시트

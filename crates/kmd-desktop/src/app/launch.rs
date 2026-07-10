@@ -91,6 +91,13 @@ impl App {
             return Task::none();
         }
 
+        // 셸 모드의 웹 검색 전환 힌트 (!g → @g)
+        if result.item.keywords.starts_with("kmd:bang_hint:") {
+            self.query = result.item.path.clone();
+            self.selected = 0;
+            return self.perform_search();
+        }
+
         if result.item.kind == ItemKind::SystemCommand
             && result.item.keywords.starts_with("kmd:settings:")
         {
