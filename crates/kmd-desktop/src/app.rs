@@ -996,19 +996,8 @@ impl App {
 
 // ─── Search Logic ─────────────────────────────────────────────────────────────
 
-/// All supported command prefixes for the search bar.
-///
-/// | Prefix    | Mode              | Example                        |
-/// |-----------|-------------------|--------------------------------|
-/// | `@`       | Web service       | `@g rust tutorial`, `@ai why`  |
-/// | `:calc`   | Calculator        | `:calc (2+3)*4`                |
-/// | `:emoji`  | Emoji search      | `:emoji fire`, `:e 하트`       |
-/// | `:set`    | Settings          | `:set`, `:settings theme`      |
-/// | `:keymap` | Keymap control    | `:keymap`, `:km on`, `:km off` |
-/// | `:keys`   | Keybinding sheet  | `:keys`, `:k`, `F1`            |
-/// | `:help`   | Help / commands   | `:help`, `:h`                  |
-/// | `!`       | Shell command     | `!ip`, `!echo hello`           |
-/// | (other)   | Fuzzy / glob / …  | `firefox`, `*.pdf`, `한글`     |
+// 지원하는 검색창 프리픽스 전체 목록은 kmd_core::query_prefix::COMMANDS 레지스트리
+// (단일 진실 소스)와 :help 화면을 참고.
 
 // ─── Shell Terminal Launch ────────────────────────────────────────────────────
 

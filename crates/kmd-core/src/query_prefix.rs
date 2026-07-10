@@ -3,6 +3,10 @@
 //! 별칭 매칭 규칙: **완전일치 또는 별칭 바로 뒤 공백**(토큰 경계).
 //! 예: `:pt hello` → Prompt, `:pto` → General (별칭 오인 방지),
 //! `:settings` → Settings, `:setup` → General.
+//!
+//! [`COMMANDS`] 레지스트리가 단일 진실 소스다: `prefix_of` 판별과
+//! `:help` 목록([`help_items`])·퀵 템플릿 시드([`help_query_seed`])가
+//! 모두 여기서 나온다. 새 명령을 추가할 때는 레지스트리에 한 항목만 넣으면 된다.
 
 use crate::index::{IndexItem, ItemKind, Source};
 
@@ -37,18 +41,202 @@ pub enum QueryPrefix {
     General,
 }
 
-/// `:` 명령과 별칭 테이블 — `prefix_of`가 순회하는 단일 소스.
-pub const COMMAND_ALIASES: &[(QueryPrefix, &[&str])] = &[
-    (QueryPrefix::Transform, &[":transform", ":t"]),
-    (QueryPrefix::Prompt, &[":prompt", ":pt"]),
-    (QueryPrefix::Calc, &[":calc"]),
-    (QueryPrefix::Emoji, &[":emoji", ":e"]),
-    (QueryPrefix::Settings, &[":settings", ":set"]),
-    (QueryPrefix::Help, &[":help", ":h"]),
-    (QueryPrefix::Version, &[":version", ":ver", ":v"]),
-    (QueryPrefix::Keymap, &[":keymap", ":km"]),
-    (QueryPrefix::Keys, &[":keys", ":k"]),
-    (QueryPrefix::FolderSearch, &[":f"]),
+/// `:` 명령 하나의 정의 — 별칭, 도움말 표기, Enter 시 시작 쿼리까지 한 곳에.
+pub struct CommandSpec {
+    pub prefix: QueryPrefix,
+    /// 토큰 경계로 매칭되는 별칭 목록 (긴 형태를 앞에)
+    pub aliases: &'static [&'static str],
+    /// `:help` 목록에 표시되는 제목
+    pub title: &'static str,
+    /// `:help` 목록에 표시되는 사용법 설명
+    pub usage: &'static str,
+    /// 도움말 항목을 Enter로 선택했을 때 검색창에 채울 시작 쿼리
+    pub seed: &'static str,
+    pub icon_emoji: &'static str,
+    pub icon_ascii: &'static str,
+}
+
+/// `:` 명령 레지스트리 — 배열 순서가 `:help` 표시 순서다.
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        prefix: QueryPrefix::Calc,
+        aliases: &[":calc"],
+        title: ":calc  Calculator",
+        usage: "Type :calc expression  (e.g. :calc (2+3)*4)",
+        seed: ":calc ",
+        icon_emoji: "\u{1F522}",
+        icon_ascii: "[CAL]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Emoji,
+        aliases: &[":emoji", ":e"],
+        title: ":emoji  Emoji Search",
+        usage: "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
+        seed: ":emoji ",
+        icon_emoji: "\u{1F60A}",
+        icon_ascii: "[EMO]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Settings,
+        aliases: &[":settings", ":set"],
+        title: ":set  Settings",
+        usage: "Type :set or :settings to manage config, themes, index",
+        seed: ":set",
+        icon_emoji: "\u{2699}\u{FE0F}",
+        icon_ascii: "[SET]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Transform,
+        aliases: &[":transform", ":t"],
+        title: ":t  Quick Transform",
+        usage: "Type :t spell/tr/trko/tren  (clipboard text → spell/translate)",
+        seed: ":t ",
+        icon_emoji: "\u{26A1}",
+        icon_ascii: "[QT]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Prompt,
+        aliases: &[":prompt", ":pt"],
+        title: ":prompt  Prompt Templates",
+        usage: "Type :prompt  (manage reusable prompt templates for @ll)",
+        seed: ":prompt",
+        icon_emoji: "\u{1F4DD}",
+        icon_ascii: "[PT]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::FolderSearch,
+        aliases: &[":f"],
+        title: ":f  Folder Search",
+        usage: "Type :f /path query  (search inside a specific folder)",
+        seed: ":f ",
+        icon_emoji: "\u{1F4C2}",
+        icon_ascii: "[DIR]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Keys,
+        aliases: &[":keys", ":k"],
+        title: ":keys  Key Mapping Sheet",
+        usage: "Type :keys or :k  (show all keybinding cheatsheet)",
+        seed: ":keys",
+        icon_emoji: "\u{1F5FA}\u{FE0F}",
+        icon_ascii: "[KEY]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Keymap,
+        aliases: &[":keymap", ":km"],
+        title: ":keymap  Keymap Control",
+        usage: "Type :keymap or :km  (kanata status, on/off, profile switch)",
+        seed: ":keymap",
+        icon_emoji: "\u{2328}\u{FE0F}",
+        icon_ascii: "[KM]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Version,
+        aliases: &[":version", ":ver", ":v"],
+        title: ":version  Version Info",
+        usage: "Type :version  (show app/core/target/os versions)",
+        seed: ":version",
+        icon_emoji: "\u{1F4E6}",
+        icon_ascii: "[VER]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Help,
+        aliases: &[":help", ":h"],
+        title: ":help  Help",
+        usage: "Type :help or :h  (show this command list)",
+        seed: ":help",
+        icon_emoji: "\u{2753}",
+        icon_ascii: "[?]",
+    },
+];
+
+/// `:` 명령이 아닌 도움말 항목 (시길 프리픽스, 검색 모드 예시 등)
+struct HelpEntry {
+    name: &'static str,
+    usage: &'static str,
+    seed: &'static str,
+    icon_emoji: &'static str,
+    icon_ascii: &'static str,
+    /// true면 검색 모드 예시 항목 (`kmd:help:example` 키워드)
+    example: bool,
+}
+
+/// `:help` 상단 — 가장 많이 쓰는 시길 프리픽스
+const HELP_TOP: &[HelpEntry] = &[HelpEntry {
+    name: "@  Web Search",
+    usage: "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
+    seed: "@",
+    icon_emoji: "\u{1F310}",
+    icon_ascii: "[WEB]",
+    example: false,
+}];
+
+/// `:help` 하단 — @ 계열 확장, 셸, 검색 모드 예시
+const HELP_BOTTOM: &[HelpEntry] = &[
+    HelpEntry {
+        name: "@llm  Multi LLM Compare",
+        usage: "Type @ll prompt  (alias: @llm, open selected LLM providers)",
+        seed: "@ll ",
+        icon_emoji: "\u{1F9E0}",
+        icon_ascii: "[LLM]",
+        example: false,
+    },
+    HelpEntry {
+        name: "@msearch  Multi Web Search",
+        usage: "Type @m query  (alias: @msearch, open selected web engines)",
+        seed: "@m ",
+        icon_emoji: "\u{1F50E}",
+        icon_ascii: "[MWEB]",
+        example: false,
+    },
+    HelpEntry {
+        name: "@sp  Spell Check",
+        usage: "Type @sp text  (Korean spelling check on selected providers)",
+        seed: "@sp ",
+        icon_emoji: "\u{270D}\u{FE0F}",
+        icon_ascii: "[SPL]",
+        example: false,
+    },
+    HelpEntry {
+        name: "@tr  Translate",
+        usage: "Type @tr/@trko/@tren text  (auto / en->ko / ko->en)",
+        seed: "@tr ",
+        icon_emoji: "\u{1F5E3}\u{FE0F}",
+        icon_ascii: "[TR]",
+        example: false,
+    },
+    HelpEntry {
+        name: "!  Shell Command",
+        usage: "Type !command  (e.g. !ip, !hostname, !echo hello)",
+        seed: "!",
+        icon_emoji: "\u{1F4BB}",
+        icon_ascii: "[SHL]",
+        example: false,
+    },
+    HelpEntry {
+        name: "Fuzzy Search",
+        usage: "Just type to search files, apps, folders  (e.g. firefox)",
+        seed: "firefox",
+        icon_emoji: "\u{1F50D}",
+        icon_ascii: "[FZF]",
+        example: true,
+    },
+    HelpEntry {
+        name: "*.ext  Glob Pattern",
+        usage: "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
+        seed: "*.pdf",
+        icon_emoji: "\u{1F4C4}",
+        icon_ascii: "[GLB]",
+        example: true,
+    },
+    HelpEntry {
+        name: "/regex/  Regular Expression",
+        usage: "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
+        seed: "/test\\d+/",
+        icon_emoji: "\u{1F9EA}",
+        icon_ascii: "[RGX]",
+        example: true,
+    },
 ];
 
 /// query가 별칭 중 하나와 토큰 경계로 일치하는지 검사.
@@ -62,166 +250,84 @@ pub fn matches_command(query: &str, aliases: &[&str]) -> bool {
     })
 }
 
+/// 검색창 입력을 프리픽스 종류로 분류한다.
+pub fn prefix_of(query: &str) -> QueryPrefix {
+    if query.starts_with('@') {
+        return QueryPrefix::Web;
+    }
+    if query.starts_with('!') {
+        return QueryPrefix::Shell;
+    }
+    if query.starts_with(':') {
+        for spec in COMMANDS {
+            if matches_command(query, spec.aliases) {
+                return spec.prefix;
+            }
+        }
+    }
+    QueryPrefix::General
+}
+
+fn help_item(name: &str, usage: &str, icon: &str, example: bool) -> IndexItem {
+    IndexItem {
+        name: name.to_string(),
+        path: usage.to_string(),
+        icon: icon.to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        keywords: if example {
+            "kmd:help:example".to_string()
+        } else {
+            "kmd:help:entry".to_string()
+        },
+        icon_path: None,
+    }
+}
+
 /// `:help` 결과 목록 — TUI와 데스크톱이 공유하는 명령 안내 항목.
 ///
 /// 항목을 Enter로 선택하면 [`help_query_seed`]가 주는 시작 쿼리로 전환된다.
 pub fn help_items(use_emoji: bool) -> Vec<IndexItem> {
-    let emoji = use_emoji;
-    let entries: &[(&str, &str, &str)] = &[
-        (
-            "@  Web Search",
-            "Type @prefix query  (e.g. @g rust, @ai why is the sky blue)",
-            if emoji { "\u{1F310}" } else { "[WEB]" },
-        ),
-        (
-            ":calc  Calculator",
-            "Type :calc expression  (e.g. :calc (2+3)*4)",
-            if emoji { "\u{1F522}" } else { "[CAL]" },
-        ),
-        (
-            ":emoji  Emoji Search",
-            "Type :emoji keyword  or  :e keyword  (e.g. :e fire)",
-            if emoji { "\u{1F60A}" } else { "[EMO]" },
-        ),
-        (
-            ":set  Settings",
-            "Type :set or :settings to manage config, themes, index",
-            if emoji { "\u{2699}\u{FE0F}" } else { "[SET]" },
-        ),
-        (
-            ":t  Quick Transform",
-            "Type :t spell/tr/trko/tren  (clipboard text → spell/translate)",
-            if emoji { "\u{26A1}" } else { "[QT]" },
-        ),
-        (
-            ":prompt  Prompt Templates",
-            "Type :prompt  (manage reusable prompt templates for @ll)",
-            if emoji { "\u{1F4DD}" } else { "[PT]" },
-        ),
-        (
-            ":f  Folder Search",
-            "Type :f /path query  (search inside a specific folder)",
-            if emoji { "\u{1F4C2}" } else { "[DIR]" },
-        ),
-        (
-            ":keys  Key Mapping Sheet",
-            "Type :keys or :k  (show all keybinding cheatsheet)",
-            if emoji { "\u{1F5FA}\u{FE0F}" } else { "[KEY]" },
-        ),
-        (
-            ":keymap  Keymap Control",
-            "Type :keymap or :km  (kanata status, on/off, profile switch)",
-            if emoji { "\u{2328}\u{FE0F}" } else { "[KM]" },
-        ),
-        (
-            ":version  Version Info",
-            "Type :version  (show app/core/target/os versions)",
-            if emoji { "\u{1F4E6}" } else { "[VER]" },
-        ),
-        (
-            "@llm  Multi LLM Compare",
-            "Type @ll prompt  (alias: @llm, open selected LLM providers)",
-            if emoji { "\u{1F9E0}" } else { "[LLM]" },
-        ),
-        (
-            "@msearch  Multi Web Search",
-            "Type @m query  (alias: @msearch, open selected web engines)",
-            if emoji { "\u{1F50E}" } else { "[MWEB]" },
-        ),
-        (
-            "@sp  Spell Check",
-            "Type @sp text  (Korean spelling check on selected providers)",
-            if emoji { "\u{270D}\u{FE0F}" } else { "[SPL]" },
-        ),
-        (
-            "@tr  Translate",
-            "Type @tr/@trko/@tren text  (auto / en->ko / ko->en)",
-            if emoji { "\u{1F5E3}\u{FE0F}" } else { "[TR]" },
-        ),
-        (
-            "!  Shell Command",
-            "Type !command  (e.g. !ip, !hostname, !echo hello)",
-            if emoji { "\u{1F4BB}" } else { "[SHL]" },
-        ),
-        (
-            "Fuzzy Search",
-            "Just type to search files, apps, folders  (e.g. firefox)",
-            if emoji { "\u{1F50D}" } else { "[FZF]" },
-        ),
-        (
-            "*.ext  Glob Pattern",
-            "Use * or ? for glob matching  (e.g. *.pdf, test?.rs)",
-            if emoji { "\u{1F4C4}" } else { "[GLB]" },
-        ),
-        (
-            "/regex/  Regular Expression",
-            "Wrap in /slashes/ for regex  (e.g. /test\\d+/)",
-            if emoji { "\u{1F9EA}" } else { "[RGX]" },
-        ),
-    ];
+    let icon = |emoji: &'static str, ascii: &'static str| if use_emoji { emoji } else { ascii };
 
-    entries
-        .iter()
-        .map(|(name, desc, icon)| IndexItem {
-            name: name.to_string(),
-            path: desc.to_string(),
-            icon: icon.to_string(),
-            kind: ItemKind::SystemCommand,
-            source: Source::Plugin,
-            keywords: if name.starts_with("Fuzzy Search")
-                || name.starts_with("*.ext")
-                || name.starts_with("/regex/")
-            {
-                "kmd:help:example".to_string()
-            } else {
-                "kmd:help:entry".to_string()
-            },
-            icon_path: None,
-        })
-        .collect()
+    let mut items: Vec<IndexItem> = Vec::new();
+    for e in HELP_TOP {
+        items.push(help_item(
+            e.name,
+            e.usage,
+            icon(e.icon_emoji, e.icon_ascii),
+            e.example,
+        ));
+    }
+    for spec in COMMANDS {
+        items.push(help_item(
+            spec.title,
+            spec.usage,
+            icon(spec.icon_emoji, spec.icon_ascii),
+            false,
+        ));
+    }
+    for e in HELP_BOTTOM {
+        items.push(help_item(
+            e.name,
+            e.usage,
+            icon(e.icon_emoji, e.icon_ascii),
+            e.example,
+        ));
+    }
+    items
 }
 
 /// 도움말 항목 이름 → Enter 시 검색창에 채울 시작 쿼리(퀵 템플릿).
 pub fn help_query_seed(name: &str) -> Option<&'static str> {
-    if name.starts_with("@ll") || name.starts_with("@llm") {
-        Some("@ll ")
-    } else if name.starts_with("@m") {
-        Some("@m ")
-    } else if name.starts_with("@sp") {
-        Some("@sp ")
-    } else if name.starts_with("@tr") {
-        Some("@tr ")
-    } else if name.starts_with('@') {
-        Some("@")
-    } else if name.starts_with(":calc") {
-        Some(":calc ")
-    } else if name.starts_with(":emoji") {
-        Some(":emoji ")
-    } else if name.starts_with(":set") {
-        Some(":set")
-    } else if name.starts_with(":t ") {
-        Some(":t ")
-    } else if name.starts_with(":prompt") {
-        Some(":prompt")
-    } else if name.starts_with(":f ") {
-        Some(":f ")
-    } else if name.starts_with(":keys") {
-        Some(":keys")
-    } else if name.starts_with(":keymap") {
-        Some(":keymap")
-    } else if name.starts_with(":version") || name.starts_with("Version Info") {
-        Some(":version")
-    } else if name.starts_with('!') {
-        Some("!")
-    } else if name.starts_with("Fuzzy Search") {
-        Some("firefox")
-    } else if name.starts_with("*.ext") {
-        Some("*.pdf")
-    } else if name.starts_with("/regex/") {
-        Some("/test\\d+/")
-    } else {
-        None
+    if let Some(spec) = COMMANDS.iter().find(|s| s.title == name) {
+        return Some(spec.seed);
     }
+    HELP_TOP
+        .iter()
+        .chain(HELP_BOTTOM)
+        .find(|e| e.name == name)
+        .map(|e| e.seed)
 }
 
 /// `:version` 결과 목록 — 앱 이름/버전만 프런트엔드별로 다르다.
@@ -256,24 +362,6 @@ pub fn version_items(app_label: &str, app_version: &str, use_emoji: bool) -> Vec
             icon_path: None,
         },
     ]
-}
-
-/// 검색창 입력을 프리픽스 종류로 분류한다.
-pub fn prefix_of(query: &str) -> QueryPrefix {
-    if query.starts_with('@') {
-        return QueryPrefix::Web;
-    }
-    if query.starts_with('!') {
-        return QueryPrefix::Shell;
-    }
-    if query.starts_with(':') {
-        for (prefix, aliases) in COMMAND_ALIASES {
-            if matches_command(query, aliases) {
-                return *prefix;
-            }
-        }
-    }
-    QueryPrefix::General
 }
 
 #[cfg(test)]
@@ -323,5 +411,36 @@ mod tests {
         assert_eq!(prefix_of("/test\\d+/"), QueryPrefix::General);
         assert_eq!(prefix_of(":"), QueryPrefix::General);
         assert_eq!(prefix_of(""), QueryPrefix::General);
+    }
+
+    #[test]
+    fn every_help_entry_has_a_seed() {
+        for item in help_items(false) {
+            assert!(
+                help_query_seed(&item.name).is_some(),
+                "도움말 항목에 시드가 없음: {}",
+                item.name
+            );
+        }
+    }
+
+    #[test]
+    fn registry_covers_all_command_prefixes() {
+        // General/Web/Shell을 제외한 모든 프리픽스가 레지스트리에 있어야 한다
+        let covered: Vec<QueryPrefix> = COMMANDS.iter().map(|s| s.prefix).collect();
+        for p in [
+            QueryPrefix::Transform,
+            QueryPrefix::Prompt,
+            QueryPrefix::Calc,
+            QueryPrefix::Emoji,
+            QueryPrefix::Settings,
+            QueryPrefix::Help,
+            QueryPrefix::Version,
+            QueryPrefix::Keymap,
+            QueryPrefix::Keys,
+            QueryPrefix::FolderSearch,
+        ] {
+            assert!(covered.contains(&p), "레지스트리에 없는 명령: {p:?}");
+        }
     }
 }

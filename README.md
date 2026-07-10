@@ -46,7 +46,7 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Frecency history**: Recently and frequently used items bubble to the top (time-decay scoring)
 - **History auto-pruning**: Aging algorithm prevents database from growing unboundedly
 - **Plugin system**: Extension trait + script-based plugins (JSON over stdin/stdout)
-- **Settings** (TUI): F2 key opens settings modal; (Desktop): `:set` command
+- **Settings**: `:set` command in both UIs; (TUI) F2 also opens the settings modal
 - **Theming** (Desktop): 5 built-in presets — Midnight, Obsidian, Snow, Rose Pine, Nord
 - **Korean input** (TUI): Built-in 2-벌식 Hangul composer for direct Korean input
 - **Search priority weights**: Configure which item kinds rank higher
@@ -212,20 +212,28 @@ kmd daemon status
 
 ## Special Command Prefixes
 
-Type `:help` (or `:h`) in the search bar to see all available commands.
+Type `:help` (or `:h`) in the search bar to see all available commands — works in both the TUI and the desktop app.
 In `:help`, selecting an entry and pressing Enter fills a starter query (quick template).
+
+Command aliases match on a token boundary: `:e fire` is the emoji search, but `:example` is just a regular search.
 
 | Prefix | Mode | Example | Description |
 |--------|------|---------|-------------|
 | `@prefix` | Web search | `@g rust tutorial` | Search via web service |
 | `@ai` | AI search | `@ai why is the sky blue` | Ask Perplexity AI |
-| `@ll` / `@llm` / `@cmp` | Multi LLM compare | `@ll explain Rust lifetimes` | Open selected LLMs with same prompt |
-| `@m` / `@mw` / `@msearch` | Multi web search | `@m 러스트 소유권` | Open selected search engines with same query |
+| `@ll` / `@llm` / `@multi` / `@cmp` / `@compare` | Multi LLM compare | `@ll explain Rust lifetimes` | Open selected LLMs with same prompt |
+| `@m` / `@mw` / `@msearch` / `@multisearch` / `@searchall` / `@krsearch` | Multi web search | `@m 러스트 소유권` | Open selected search engines with same query |
 | `@sp` / `@spell` | Korean spelling check | `@sp 안녕 하세요` | Open selected spell check providers |
 | `@tr` / `@trko` / `@tren` | Translate | `@trko hello world` | Translate text in selected providers |
 | `:calc` | Calculator | `:calc (2+3)*4` | Evaluate math expression |
 | `:emoji` / `:e` | Emoji | `:e fire`, `:e 하트` | Search & copy emoji |
+| `:t` / `:transform` | Quick Transform | `:t spell`, `:t trko text` | Clipboard text → spell check / translate |
+| `:prompt` / `:pt` | Prompt templates | `:prompt add review ...` | Manage reusable prompt templates for `@ll` |
+| `:f` | Folder search | `:f ~/docs report` | Search inside a specific folder |
+| `:keys` / `:k` | Keybinding sheet | `:keys` | Show keybinding cheatsheet |
+| `:keymap` / `:km` | Keymap control | `:km on`, `:km off` | Kanata status, on/off, profile switch |
 | `:set` / `:settings` | Settings | `:set`, `:settings theme` | Manage config, themes, index |
+| `:version` / `:ver` / `:v` | Version info | `:version` | Show app/core/target/os versions |
 | `:help` / `:h` | Help | `:help` | Show all available commands |
 | `!command` | Shell | `!ip`, `!echo hello` | Run shell command |
 
