@@ -653,6 +653,14 @@ fn execute_selected(
             update_search(state, engine, db);
             return;
         }
+        // 미지 명령 안내 → :help 로 이동
+        if keywords == "kmd:unknown_cmd" {
+            state.query = ":help".to_string();
+            state.refresh_effective_query();
+            state.selected_index = 0;
+            update_search(state, engine, db);
+            return;
+        }
         // 설정 모달 열기 (:set)
         if keywords == "kmd:tui:open_settings" {
             let config = crate::cmd::load_config().unwrap_or_default();
@@ -883,7 +891,22 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
-        QueryPrefix::General => handle_main_search(&query, state, engine, db),
+        QueryPrefix::General => {
+            handle_main_search(&query, state, engine, db);
+            // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
+            if let Some(hint) =
+                kmd_core::query_prefix::unknown_command_hint(&query, state.use_emoji)
+            {
+                state.results.insert(
+                    0,
+                    SearchResult {
+                        item: hint,
+                        score: 0,
+                    },
+                );
+                state.selected_index = 0;
+            }
+        }
     }
 }
 

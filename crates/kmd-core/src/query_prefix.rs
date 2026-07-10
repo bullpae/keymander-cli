@@ -394,6 +394,37 @@ pub fn bang_web_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
     })
 }
 
+/// `:clac`처럼 `:`로 시작하지만 알려진 명령이 아닌 입력에 대한 안내 항목.
+///
+/// 오타나 미지원 명령일 때 결과 최상단에 표시할 힌트 — 일반 검색 폴스루는
+/// 유지하되, Vim의 `E492: Not an editor command`처럼 조용히 넘어가지 않는다.
+/// Enter 시 `:help`로 이동(keywords: `kmd:unknown_cmd`).
+pub fn unknown_command_hint(query: &str, use_emoji: bool) -> Option<IndexItem> {
+    if !query.starts_with(':') || query.len() < 2 {
+        return None;
+    }
+    if prefix_of(query) != QueryPrefix::General {
+        return None;
+    }
+    let token = query.split_whitespace().next().unwrap_or(query);
+    // 알려진 명령을 입력하는 중(별칭의 접두사)이면 아직 힌트를 띄우지 않는다
+    let typing_known = COMMANDS
+        .iter()
+        .any(|s| s.aliases.iter().any(|a| a.starts_with(token)));
+    if typing_known {
+        return None;
+    }
+    Some(IndexItem {
+        name: format!("알 수 없는 명령: {token}"),
+        path: "Enter로 :help 를 열어 사용 가능한 명령을 확인하세요".to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        icon: if use_emoji { "\u{2753}" } else { "[?]" }.to_string(),
+        keywords: "kmd:unknown_cmd".to_string(),
+        icon_path: None,
+    })
+}
+
 /// `:version` 결과 목록 — 앱 이름/버전만 프런트엔드별로 다르다.
 pub fn version_items(app_label: &str, app_version: &str, use_emoji: bool) -> Vec<IndexItem> {
     let emoji = use_emoji;
@@ -512,6 +543,25 @@ mod tests {
         assert_eq!(prefix_of("/test\\d+/"), QueryPrefix::General);
         assert_eq!(prefix_of(":"), QueryPrefix::General);
         assert_eq!(prefix_of(""), QueryPrefix::General);
+    }
+
+    #[test]
+    fn unknown_command_feedback() {
+        // 오타/미지원 : 명령 → 안내 항목
+        let hint = unknown_command_hint(":clac 2+3", false).expect("힌트가 있어야 함");
+        assert!(hint.name.contains(":clac"));
+        assert_eq!(hint.keywords, "kmd:unknown_cmd");
+        assert!(unknown_command_hint(":pto", false).is_some());
+        // 정상 명령, 일반 검색, 미완성 입력에는 힌트 없음
+        assert!(unknown_command_hint(":calc 2+3", false).is_none());
+        assert!(unknown_command_hint(":e fire", false).is_none());
+        assert!(unknown_command_hint("firefox", false).is_none());
+        assert!(unknown_command_hint(":", false).is_none());
+        assert!(unknown_command_hint("/unknown", false).is_none());
+        // 알려진 명령을 입력하는 중이면 힌트를 띄우지 않는다 (:cal → :calc)
+        assert!(unknown_command_hint(":cal", false).is_none());
+        assert!(unknown_command_hint(":se", false).is_none());
+        assert!(unknown_command_hint(":keym", false).is_none());
     }
 
     #[test]

@@ -381,6 +381,17 @@ impl App {
             self.search_mode = kmd_core::SearchMode::Contains;
         }
 
+        // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)
+        if let Some(hint) = kmd_core::query_prefix::unknown_command_hint(query, self.use_emoji) {
+            results.insert(
+                0,
+                kmd_core::SearchResult {
+                    item: hint,
+                    score: SCORE_PLUGIN,
+                },
+            );
+        }
+
         self.commit_results(results, self.search_mode, true);
     }
 

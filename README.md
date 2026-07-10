@@ -219,6 +219,8 @@ Command aliases match on a token boundary: `:e fire` is the emoji search, but `:
 
 Every `:` command can also be typed with a leading `/` (e.g. `/help`, `/set`, `/calc 2+3`) — handy if you are used to Slack/Discord-style slash commands. The closed `/pattern/` form is still a regex search, and unknown `/...` input falls back to normal search.
 
+Mistyped a command? Unknown `:command` input shows an "unknown command" hint pointing to `:help` at the top of the results, while normal search still runs underneath.
+
 | Prefix | Mode | Example | Description |
 |--------|------|---------|-------------|
 | `@prefix` | Web search | `@g rust tutorial` | Search via web service |

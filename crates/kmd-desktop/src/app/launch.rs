@@ -98,6 +98,13 @@ impl App {
             return self.perform_search();
         }
 
+        // 미지 명령 안내 → :help 로 이동
+        if result.item.keywords == "kmd:unknown_cmd" {
+            self.query = ":help".to_string();
+            self.selected = 0;
+            return self.perform_search();
+        }
+
         if result.item.kind == ItemKind::SystemCommand
             && result.item.keywords.starts_with("kmd:settings:")
         {
