@@ -2,6 +2,30 @@
 
 All notable changes to keymander are documented here.
 
+## [0.9.0] — 2026-07-10
+
+Command-prefix UX release — 프리픽스 문법을 업계 관례에 맞추고 TUI/데스크톱 명령 표면을 통일.
+
+### Refactoring
+- **Prefix parser unified into kmd-core** — the TUI and desktop each carried their own `starts_with` chains that had drifted apart. A single `query_prefix::prefix_of` now serves both, and the `COMMANDS` registry (aliases, help title/usage, quick-template seed, icons) is the single source of truth for command dispatch, the `:help` list, and the docs.
+- **Token-boundary alias matching** — aliases match only on exact input or alias-plus-space. `:pto` no longer triggers `:pt`, `:setup` no longer triggers `:set`, `:verbose` no longer triggers `:ver`.
+
+### Features
+- **TUI command parity** — `:help`, `:set` (opens the F2 settings modal), `:version`, `:keymap` (with start/stop/profile actions), `:keys` (TUI-specific cheatsheet), and `:f` folder search now work in the TUI, matching the desktop app. Folder search moved to `kmd_core::folder_search` (with `USERPROFILE` fallback for `~` on Windows).
+- **Slash command aliases** — every `:` command can be typed with a leading `/` (`/help`, `/set`, `/calc 2+3`), matching Slack/Discord/ChatGPT conventions. The closed `/pattern/` regex form still wins; unknown `/...` falls back to normal search.
+- **`>` shell alias** — `>command` works like `!command`, matching the PowerToys Run / Flow Launcher / Alfred convention.
+- **DuckDuckGo-bang hint** — typing `!g rust` (a shell command here, a web search there) shows a one-line "switch to `@g rust`" hint under the shell item; Enter switches to the web search.
+- **Unknown-command feedback** — a mistyped `:clac` shows an "unknown command → `:help`" hint at the top of the results (suppressed while typing a known command's prefix); normal search still runs underneath.
+
+### Bug Fixes
+- **Unix paths no longer misdetected as regex** — `/usr/bin/` (slashes inside the pattern) now falls back to fuzzy search instead of regex mode.
+- **Help entries all seed a quick template** — selecting the Fuzzy/Glob/Regex example rows in `:help` now fills a starter query (previously dead rows); detection is keyword-based instead of sniffing the description string.
+
+### Docs
+- README prefix table synced with the code: added `:t` `:prompt` `:f` `:keys` `:keymap` `:version`, full multi-search alias list, token-boundary rule, `/` and `>` aliases, bang hint.
+
+---
+
 ## [0.8.0] — 2026-07-09
 
 ### Refactoring
