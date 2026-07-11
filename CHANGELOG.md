@@ -2,6 +2,13 @@
 
 All notable changes to keymander are documented here.
 
+## [0.9.1] — 2026-07-11
+
+### Bug Fixes
+- **Windows binaries no longer require the VC++ Redistributable** — 0.9.0's MSVC builds dynamically linked the CRT, so `kmd daemon start` failed with a missing-`VCRUNTIME140.dll` error on a clean Windows install. All MSVC-target builds (x86_64/aarch64) now statically link the CRT via `.cargo/config.toml` (`-C target-feature=+crt-static`); the binaries run standalone.
+
+---
+
 ## [0.9.0] — 2026-07-10
 
 Command-prefix UX release — 프리픽스 문법을 업계 관례에 맞추고 TUI/데스크톱 명령 표면을 통일.

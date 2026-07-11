@@ -1,3 +1,8 @@
 # O:\ 등 하드링크를 지원하지 않는 파일시스템에서 incremental 캐시 경고를 피한다.
 [profile.dev]
 incremental = false
+
+# MSVC 빌드는 CRT를 정적 링크한다 — VC++ 재배포 패키지(VCRUNTIME140.dll) 없는
+# 깨끗한 Windows에서도 단일 exe로 실행되게. (x86_64/aarch64 msvc 모두 적용)
+[target.'cfg(target_env = "msvc")']
+rustflags = ["-C", "target-feature=+crt-static"]
