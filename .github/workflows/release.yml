@@ -218,9 +218,60 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum */* | awk '{n=split($2,p,"/"); print $1 "  " p[n]}' > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  # 릴리스마다 bullpae/homebrew-tap의 formula를 자동 갱신한다.
+  # TAP_GITHUB_TOKEN(homebrew-tap 저장소 쓰기 권한 PAT) 시크릿이 없으면 건너뛴다.
+  update-tap:
+    name: Update Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tap token
+        id: tap
+        env:
+          HAS_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN != '' }}
+        run: echo "has=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        if: steps.tap.outputs.has == 'true'
+
+      - uses: actions/download-artifact@v4
+        if: steps.tap.outputs.has == 'true'
+        with:
+          path: artifacts
+
+      - name: Generate and push formula
+        if: steps.tap.outputs.has == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sha() { sha256sum "artifacts/$1/$1.tar.gz" | cut -d' ' -f1; }
+          scripts/gen-homebrew-formula.sh "$VERSION" \
+            "$(sha keymander-portable-aarch64-apple-darwin)" \
+            "$(sha keymander-portable-x86_64-apple-darwin)" \
+            "$(sha keymander-portable-x86_64-unknown-linux-gnu)" \
+            > keymander.rb
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/bullpae/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp keymander.rb tap/Formula/keymander.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/keymander.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "keymander ${VERSION}"
+          git push

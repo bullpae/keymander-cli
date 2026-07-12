@@ -54,6 +54,15 @@ Both share the same **kmd-core** library — identical search, config, index, an
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install bullpae/tap/keymander
+```
+
+Installs `kmd` (TUI/CLI), `kmd-desktop`, and `kmd-daemon`. A starter config is
+available at `$(brew --prefix)/share/keymander/config.example.toml`.
+
 ### From source
 
 ```bash
@@ -67,6 +76,11 @@ cargo install --path crates/kmd-desktop
 ### From releases
 
 Download the latest binary from [GitHub Releases](https://github.com/bullpae/keymander-cli/releases).
+Verify downloads against the `SHA256SUMS.txt` attached to each release:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
 
 ## Usage
 
