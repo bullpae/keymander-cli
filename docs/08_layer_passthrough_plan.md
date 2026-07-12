@@ -134,10 +134,21 @@ unmapped = "passthrough"   # passthrough | plain(현행) | block
   7. toggle_keymap 콤보를 코드 모드 중 눌러도 Alt가 stuck되지 않음
   8. kmd daemon stop을 코드 모드 중 실행해도 Alt가 stuck되지 않음
 
-### P3 — macOS 어댑터 (1일)
-- CGEventPost로 동일 시퀀스. flagsChanged 특성상 기존
-  `sync_modifier_flags` / 잔여 플래그 해제 루틴과의 상호작용 확인
-- macOS는 Cmd 계열 조합(Cmd+Tab)이 대상이 될 가능성 — 트리거 키 설정과 함께 검증
+### P3 — macOS 어댑터 (1일) — 구현됨, 실기기 검증 대기
+- ✅ `send_chord_engage`: 트리거 down → 키 down 주입 (MAGIC_USER_DATA로
+  탭 재진입 차단은 기존 인프라 재사용). 주입된 트리거가 OS 수정자 상태에
+  유지되므로 이후 통과되는 물리 키가 트리거 조합으로 인식된다
+- ✅ ReleaseChord: 물리 트리거 up(flagsChanged) 억제 → 주입 up 대체.
+  keyDown 경로(토글이 코드를 끊는 경우)에도 동일 처리
+- ✅ stuck 방지: 기존 stop()의 held_modifiers 해제 루프가 코드 트리거를
+  자연히 포함한다 (코드 모드 중에는 트리거가 항상 물리 홀드 상태)
+- 실기기 검증 체크리스트 (LAlt 트리거 + unmapped = "passthrough"):
+  1. Alt 홀드 + 미매핑 글자(T 등) → Option 특수문자(†) 입력 (OS 조합 복원)
+  2. Alt 홀드 + H/J/K/L → 코드 진입 전이면 방향키 유지
+  3. Alt 짧은 탭 → Escape 유지
+  4. 코드 진입 후 같은 홀드의 H → Option+H로 전달 (A안)
+  5. 한글 IME 조합 중 간섭 없음 (45ms 지연 노하우 관련 회귀 확인)
+  6. 코드 모드 중 daemon stop → Option stuck 없음
 
 ### P4 — UX 정리 + 토글 은퇴 결정 (반나절)
 - `:keymap` 화면에 레이어별 passthrough 상태 표시

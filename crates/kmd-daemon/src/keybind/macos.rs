@@ -367,6 +367,16 @@ fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
     }
 }
 
+/// 코드(chord) 진입 주입 (docs/08 P3): 트리거 down → 키 down 순서로 주입한다.
+/// 트리거 up은 ReleaseChord에서 별도 주입 — 그 사이 OS 수정자 상태에 트리거가
+/// 유지되므로 이후 통과되는 물리 키들이 트리거 조합(Option+키 등)으로 인식된다.
+/// 키의 물리 up은 엔진이 PassThrough — OS가 현재 수정자 상태로 플래그를 채운다.
+fn send_chord_engage(trigger: VKey, key: VKey) {
+    let tflags = modifiers_to_flags(&[trigger]);
+    send_key_event(vkey_to_cg(trigger), true, tflags);
+    send_key_event(vkey_to_cg(key), true, tflags);
+}
+
 // ── 입력 소스 전환 (한/영 토글) ───────────────────────────────────────────────
 
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
@@ -703,18 +713,21 @@ unsafe extern "C" fn event_tap_callback(
                 run_action(&action, layer_trigger);
                 std::ptr::null_mut()
             }
-            // TODO(P3, docs/08): 지속 주입 구현 전 스텁 — plain과 동일 동작
+            // 코드 진입 (flagsChanged 경로로는 실제 발생하지 않지만 대칭 구현)
             KeyDecision::EngageChord { trigger, key } => {
-                tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
                 drop(guard);
-                event
+                tracing::debug!("chord engage: {trigger:?}+{key:?}");
+                send_chord_engage(trigger, key);
+                std::ptr::null_mut()
             }
+            // 코드 해제: 물리 트리거 up(flagsChanged)을 억제하고 주입 up으로 대체
             KeyDecision::ReleaseChord {
                 trigger,
                 deferred_action,
             } => {
-                tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
                 drop(guard);
+                tracing::debug!("chord release: {trigger:?}");
+                send_key_event(vkey_to_cg(trigger), false, 0);
                 if let Some(action) = deferred_action {
                     run_action(&action, None);
                 }
@@ -745,18 +758,23 @@ unsafe extern "C" fn event_tap_callback(
             run_action(&action, layer_trigger);
             std::ptr::null_mut()
         }
-        // TODO(P3, docs/08): 지속 주입 구현 전 스텁 — plain과 동일 동작
+        // 코드 진입: 물리 키 down을 억제하고 트리거 down + 키 down을 주입.
+        // 이후 이 홀드의 물리 키들은 PassThrough — OS 수정자 상태에 주입된
+        // 트리거가 있으므로 트리거 조합으로 인식된다.
         KeyDecision::EngageChord { trigger, key } => {
-            tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
             drop(guard);
-            event
+            tracing::debug!("chord engage: {trigger:?}+{key:?}");
+            send_chord_engage(trigger, key);
+            std::ptr::null_mut()
         }
+        // 코드 해제 (keymap 토글이 코드 모드를 끊는 경우 이 경로로도 온다)
         KeyDecision::ReleaseChord {
             trigger,
             deferred_action,
         } => {
-            tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
             drop(guard);
+            tracing::debug!("chord release: {trigger:?}");
+            send_key_event(vkey_to_cg(trigger), false, 0);
             if let Some(action) = deferred_action {
                 run_action(&action, None);
             }
