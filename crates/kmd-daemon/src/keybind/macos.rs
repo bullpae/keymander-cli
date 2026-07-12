@@ -703,6 +703,23 @@ unsafe extern "C" fn event_tap_callback(
                 run_action(&action, layer_trigger);
                 std::ptr::null_mut()
             }
+            // TODO(P3, docs/08): 지속 주입 구현 전 스텁 — plain과 동일 동작
+            KeyDecision::EngageChord { trigger, key } => {
+                tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
+                drop(guard);
+                event
+            }
+            KeyDecision::ReleaseChord {
+                trigger,
+                deferred_action,
+            } => {
+                tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
+                drop(guard);
+                if let Some(action) = deferred_action {
+                    run_action(&action, None);
+                }
+                std::ptr::null_mut()
+            }
         };
     }
 
@@ -726,6 +743,23 @@ unsafe extern "C" fn event_tap_callback(
         } => {
             drop(guard);
             run_action(&action, layer_trigger);
+            std::ptr::null_mut()
+        }
+        // TODO(P3, docs/08): 지속 주입 구현 전 스텁 — plain과 동일 동작
+        KeyDecision::EngageChord { trigger, key } => {
+            tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
+            drop(guard);
+            event
+        }
+        KeyDecision::ReleaseChord {
+            trigger,
+            deferred_action,
+        } => {
+            tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
+            drop(guard);
+            if let Some(action) = deferred_action {
+                run_action(&action, None);
+            }
             std::ptr::null_mut()
         }
     }

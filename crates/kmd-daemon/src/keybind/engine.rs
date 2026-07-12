@@ -7,7 +7,10 @@
 
 use std::collections::HashSet;
 
-use super::{is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, VKey};
+use super::{
+    is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, UnmappedBehavior,
+    VKey,
+};
 
 /// 키 이벤트 처리 결정
 #[derive(Debug, Clone)]
@@ -24,6 +27,20 @@ pub enum KeyDecision {
     Execute {
         action: BindAction,
         layer_trigger: Option<VKey>,
+    },
+    /// 코드(chord) 모드 진입 — 레이어 패스쓰루에서 미매핑 키가 눌렸다.
+    ///
+    /// 어댑터는 물리 이벤트를 억제하고 `trigger` down → `key` down을
+    /// 순서대로 주입해 OS가 트리거 조합(Alt+Tab 등)으로 인식하게 한다.
+    /// 이후 홀드가 끝날 때까지 후속 키는 `PassThrough`로 전달된다
+    /// (OS 쪽에는 주입된 트리거가 눌려 있는 상태).
+    EngageChord { trigger: VKey, key: VKey },
+    /// 코드 모드 종료 — 어댑터는 물리 이벤트를 억제하고 `trigger` up을
+    /// 주입한다 (Alt+Tab 스위처 확정 등). `deferred_action`은 코드 진입
+    /// 전에 지연돼 있던 레이어 Launch가 있으면 트리거 해제 후 실행한다.
+    ReleaseChord {
+        trigger: VKey,
+        deferred_action: Option<BindAction>,
     },
 }
 
@@ -87,6 +104,10 @@ pub struct EngineState {
     layer_dt_last_key: Option<VKey>,
     /// 레이어 내 더블탭: 마지막 실행 시각 (tick count)
     layer_dt_last_tick: u32,
+    /// 패스쓰루 코드(chord) 모드 — 트리거가 OS에 주입된 상태.
+    /// true인 동안 모든 키는 OS 조합으로 통과하고, 트리거 up에서
+    /// [`KeyDecision::ReleaseChord`]로 해제된다 (A안, docs/08 참조).
+    chord_engaged: bool,
 }
 
 impl EngineState {
@@ -106,6 +127,7 @@ impl EngineState {
             dt_consumed_key: None,
             layer_dt_last_key: None,
             layer_dt_last_tick: 0,
+            chord_engaged: false,
         }
     }
 
@@ -119,6 +141,22 @@ impl EngineState {
         self.combo_consumed_key = None;
         self.dt_consumed_key = None;
         self.layer_dt_last_key = None;
+        self.chord_engaged = false;
+    }
+
+    /// 코드 모드가 걸린 상태에서 상태 초기화가 필요할 때, 주입된 트리거를
+    /// 해제할 [`KeyDecision::ReleaseChord`]가 필요한지 확인한다.
+    /// (keymap 토글 등이 코드 모드를 끊을 때 stuck-modifier 방지)
+    fn take_engaged_chord_trigger(&mut self) -> Option<VKey> {
+        if !self.chord_engaged {
+            return None;
+        }
+        let trigger = self
+            .active_layer
+            .and_then(|idx| self.config.layers.get(idx))
+            .map(|l| l.trigger);
+        self.chord_engaged = false;
+        trigger
     }
 
     // ── macOS 어댑터용 헬퍼 ──────────────────────────────────────────────
@@ -197,6 +235,8 @@ impl EngineState {
             if let Some(toggle) = self.config.toggle_keymap.clone() {
                 if combo_trigger_matches(&toggle, vkey, &self.modifiers_held) {
                     let enabled = !self.keymap_enabled;
+                    // 코드 모드를 끊는 경우 주입된 트리거를 해제해야 한다
+                    let chord_trigger = self.take_engaged_chord_trigger();
                     self.reset_runtime_state();
                     self.keymap_enabled = enabled;
                     self.combo_consumed_key = Some(vkey);
@@ -208,6 +248,12 @@ impl EngineState {
                             "disabled"
                         }
                     );
+                    if let Some(trigger) = chord_trigger {
+                        return KeyDecision::ReleaseChord {
+                            trigger,
+                            deferred_action: None,
+                        };
+                    }
                     return KeyDecision::Suppress;
                 }
             }
@@ -266,6 +312,17 @@ impl EngineState {
                 .map(|l| l.trigger == vkey)
                 .unwrap_or(false);
             if is_active_trigger {
+                // 코드 모드 종료 — 주입된 트리거 해제 (tap 판정 없음)
+                if self.chord_engaged {
+                    self.chord_engaged = false;
+                    self.active_layer = None;
+                    self.layer_key_used = false;
+                    let deferred = self.pending_layer_launch.take();
+                    return KeyDecision::ReleaseChord {
+                        trigger: vkey,
+                        deferred_action: deferred,
+                    };
+                }
                 let elapsed = tick.wrapping_sub(self.trigger_down_tick);
                 let layer = &self.config.layers[active_idx];
                 let tap_hold_ms = layer.tap_hold_ms;
@@ -291,6 +348,12 @@ impl EngineState {
         // ── 4. 활성 레이어 매핑 확인 ──
         if let Some(layer_idx) = self.active_layer {
             let trigger = self.config.layers[layer_idx].trigger;
+
+            // 4-pre. 코드 모드 중에는 홀드가 끝날 때까지 매핑 키 포함 전부
+            // OS 조합으로 통과한다 (A안 — OS에는 주입된 트리거가 눌려 있음)
+            if self.chord_engaged {
+                return KeyDecision::PassThrough;
+            }
 
             // 4a. 레이어 내 더블탭 매핑 우선 확인
             let dt_opt = self.config.layers[layer_idx]
@@ -335,6 +398,30 @@ impl EngineState {
                     return KeyDecision::execute_in_layer(action, trigger);
                 }
                 return KeyDecision::Suppress;
+            }
+
+            // 4c. 미매핑 키 — 레이어별 unmapped 정책 적용
+            match self.config.layers[layer_idx].unmapped {
+                // 현행 동작: 아래 콤보/더블탭/리맵 검사로 폴스루 (맨키 통과)
+                UnmappedBehavior::Plain => {}
+                // VIA KC_NO: 비수정자 키 억제 (수정자는 추적을 위해 통과)
+                UnmappedBehavior::Block => {
+                    if !is_modifier_key(&vkey) {
+                        if is_down {
+                            self.layer_key_used = true;
+                        }
+                        return KeyDecision::Suppress;
+                    }
+                }
+                // VIA KC_TRNS: 트리거 조합으로 코드 모드 진입.
+                // 트리거가 수정자일 때만 성립 — 아니면 Plain 폴백
+                UnmappedBehavior::Passthrough => {
+                    if is_down && !is_modifier_key(&vkey) && is_modifier_key(&trigger) {
+                        self.chord_engaged = true;
+                        self.layer_key_used = true;
+                        return KeyDecision::EngageChord { trigger, key: vkey };
+                    }
+                }
             }
         }
 
@@ -443,9 +530,17 @@ mod tests {
             trigger: VKey::LAlt,
             tap_action: Some(VKey::Escape),
             tap_hold_ms: 200,
+            unmapped: UnmappedBehavior::Plain,
             mappings,
             double_tap_mappings: dt_mappings,
         });
+        cfg
+    }
+
+    /// layer_config에서 unmapped 정책만 바꾼 변형
+    fn layer_config_unmapped(behavior: UnmappedBehavior) -> KeybindConfig {
+        let mut cfg = layer_config();
+        cfg.layers[0].unmapped = behavior;
         cfg
     }
 
@@ -567,6 +662,193 @@ mod tests {
 
         // timeout 초과 → 다시 싱글 액션
         assert_execute_sendkey(e.process_key(VKey::I, true, 1500), VKey::Home);
+    }
+
+    // ── 레이어 패스쓰루 (코드 모드) — docs/08 P0/P1 ──
+
+    /// Alt 홀드 + 미매핑 Tab → 코드 진입, Tab up 통과, Alt up → 해제 (tap 없음)
+    #[test]
+    fn passthrough_unmapped_key_engages_and_releases_chord() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+
+        match e.process_key(VKey::Tab, true, 1050) {
+            KeyDecision::EngageChord {
+                trigger: VKey::LAlt,
+                key: VKey::Tab,
+            } => {}
+            other => panic!("EngageChord(LAlt, Tab) 기대, 실제: {other:?}"),
+        }
+        // 물리 Tab up은 통과 (down은 주입됐지만 up 상태는 일관됨)
+        assert!(matches!(
+            e.process_key(VKey::Tab, false, 1080),
+            KeyDecision::PassThrough
+        ));
+        // 빠르게 뗐어도 코드 모드였으므로 tap(Escape)이 아니라 ReleaseChord
+        match e.process_key(VKey::LAlt, false, 1150) {
+            KeyDecision::ReleaseChord {
+                trigger: VKey::LAlt,
+                deferred_action: None,
+            } => {}
+            other => panic!("ReleaseChord(LAlt) 기대, 실제: {other:?}"),
+        }
+    }
+
+    /// 코드 모드 중에는 후속 키(반복 Tab, 매핑 키 H 포함)가 전부 OS로 통과 (A안)
+    #[test]
+    fn chord_mode_passes_all_keys_until_release() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Tab, true, 1050); // EngageChord
+
+        // Alt 홀드 + Tab Tab (스위처 순회) → 통과
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1200),
+            KeyDecision::PassThrough
+        ));
+        // 매핑된 H도 코드 모드 중엔 레이어 액션이 아니라 OS 조합(Alt+H)
+        assert!(matches!(
+            e.process_key(VKey::H, true, 1300),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::H, false, 1330),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::LAlt, false, 1400),
+            KeyDecision::ReleaseChord { .. }
+        ));
+    }
+
+    /// 코드 진입 전의 매핑 키는 정상 실행 — 진입은 미매핑 키에서만
+    #[test]
+    fn passthrough_mapped_key_executes_before_chord() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert_execute_sendkey(e.process_key(VKey::H, true, 1050), VKey::Left);
+        e.process_key(VKey::H, false, 1080);
+
+        // 그 다음 미매핑 키 → 코드 진입
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1100),
+            KeyDecision::EngageChord { .. }
+        ));
+    }
+
+    /// 코드 해제 후 레이어를 다시 활성화하면 매핑이 정상 동작 (상태 오염 없음)
+    #[test]
+    fn chord_state_clean_after_release() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Tab, true, 1050);
+        e.process_key(VKey::Tab, false, 1080);
+        e.process_key(VKey::LAlt, false, 1100); // ReleaseChord
+
+        // 재활성화 → 매핑 키 정상, 미매핑 키는 새 코드 진입
+        e.process_key(VKey::LAlt, true, 2000);
+        assert_execute_sendkey(e.process_key(VKey::H, true, 2050), VKey::Left);
+        e.process_key(VKey::H, false, 2080);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 2100),
+            KeyDecision::EngageChord { .. }
+        ));
+    }
+
+    /// plain(기본값) 레이어는 기존 동작 유지 — 코드 진입 없음
+    #[test]
+    fn plain_layer_unmapped_never_engages_chord() {
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1050),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    /// block 레이어는 미매핑 키를 억제하고, tap 액션도 발동하지 않는다
+    #[test]
+    fn block_layer_suppresses_unmapped_and_tap() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Block));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1050),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::Tab, false, 1080),
+            KeyDecision::Suppress
+        ));
+        // 억제된 키도 "사용됨" — 빠른 해제에서 tap(Escape) 미발동
+        assert!(matches!(
+            e.process_key(VKey::LAlt, false, 1150),
+            KeyDecision::Suppress
+        ));
+    }
+
+    /// 비수정자 트리거(CapsLock)의 passthrough는 plain으로 폴백
+    #[test]
+    fn passthrough_with_non_modifier_trigger_falls_back_to_plain() {
+        let mut cfg = layer_config_unmapped(UnmappedBehavior::Passthrough);
+        cfg.layers[0].trigger = VKey::CapsLock;
+        let mut e = EngineState::new(cfg);
+
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1050),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    /// keymap 토글이 코드 모드를 끊으면 ReleaseChord로 주입 트리거를 해제
+    #[test]
+    fn toggle_during_chord_releases_injected_trigger() {
+        let mut cfg = layer_config_unmapped(UnmappedBehavior::Passthrough);
+        cfg.toggle_keymap = Some(ComboTrigger {
+            modifiers: vec![],
+            key: VKey::F12,
+        });
+        let mut e = EngineState::new(cfg);
+
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Tab, true, 1050); // EngageChord
+        e.process_key(VKey::Tab, false, 1080);
+
+        match e.process_key(VKey::F12, true, 1200) {
+            KeyDecision::ReleaseChord {
+                trigger: VKey::LAlt,
+                deferred_action: None,
+            } => {}
+            other => panic!("ReleaseChord(LAlt) 기대, 실제: {other:?}"),
+        }
+        // 토글 후 keymap 비활성 — 일반 키는 통과
+        assert!(matches!(
+            e.process_key(VKey::H, true, 1300),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    /// 코드 진입 전에 지연된 레이어 Launch는 ReleaseChord로 전달된다
+    #[test]
+    fn pending_launch_delivered_via_release_chord() {
+        let mut cfg = layer_config_unmapped(UnmappedBehavior::Passthrough);
+        cfg.layers[0]
+            .mappings
+            .insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
+        let mut e = EngineState::new(cfg);
+
+        e.process_key(VKey::LAlt, true, 1000);
+        e.process_key(VKey::Space, true, 1050); // Launch 지연
+        e.process_key(VKey::Space, false, 1080);
+        e.process_key(VKey::Tab, true, 1100); // EngageChord
+
+        match e.process_key(VKey::LAlt, false, 1200) {
+            KeyDecision::ReleaseChord {
+                trigger: VKey::LAlt,
+                deferred_action: Some(BindAction::Launch(cmd)),
+            } => assert_eq!(cmd, "kmd-desktop"),
+            other => panic!("ReleaseChord + Launch 기대, 실제: {other:?}"),
+        }
     }
 
     // ── 레이어 Launch 지연 실행 ──

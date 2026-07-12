@@ -320,6 +320,9 @@ pub struct LayerToml {
     pub tap_action: Option<String>,
     /// tap-hold 판정 시간 (ms, 기본 200)
     pub tap_hold_ms: Option<u32>,
+    /// 미매핑 키 동작: "plain"(기본, 맨키 통과) | "passthrough"(트리거 조합
+    /// 그대로 OS로, 예: Alt+Tab 유지) | "block"(억제)
+    pub unmapped: Option<String>,
     /// 레이어 내 키 매핑: 키이름 = "대상" (예: H = "Left", P = "Ctrl+V")
     pub mappings: HashMap<String, String>,
     /// 레이어 내 더블탭: 키이름 = { single, double, timeout_ms }

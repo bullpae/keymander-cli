@@ -402,6 +402,25 @@ unsafe extern "system" fn keyboard_hook_proc(
             queue_action(action);
             1
         }
+        // TODO(P2, docs/08): 트리거 down + key down 지속 주입 구현 전까지는
+        // plain과 동일하게 물리 키만 통과시킨다
+        KeyDecision::EngageChord { trigger, key } => {
+            tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
+            drop(guard);
+            CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+        }
+        // TODO(P2): 주입 트리거 해제. 스텁에서는 지연 액션만 실행
+        KeyDecision::ReleaseChord {
+            trigger,
+            deferred_action,
+        } => {
+            tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
+            drop(guard);
+            if let Some(action) = deferred_action {
+                queue_action(action);
+            }
+            1
+        }
     }
 }
 

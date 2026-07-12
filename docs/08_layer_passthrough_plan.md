@@ -96,6 +96,19 @@ unmapped = "passthrough"   # passthrough | plain(현행) | block
 - 실패 시나리오를 단위 테스트로 먼저 작성 (tap 미발동, 연속 Tab, 이중 진입,
   tick wraparound, keymap 토글 중 코드 모드 등)
 
+#### P0 결정 기록 (2026-07-12 확정)
+
+| 결정 | 내용 |
+|---|---|
+| 코드 모드 정책 | **A안 채택** — 진입 후 홀드 종료까지 매핑 키 포함 전부 OS 조합으로 통과 |
+| Decision 명세 | `EngageChord { trigger, key }` (트리거 down + key down 순서 주입, 물리 억제) / `ReleaseChord { trigger, deferred_action }` (트리거 up 주입 + 지연 Launch 전달) |
+| 코드 모드 중 후속 키 | 첫 키만 `EngageChord`로 묶음 주입해 순서 보장. 이후 키는 OS에 트리거가 이미 눌려 있으므로 물리 이벤트 그대로 `PassThrough` (up 포함) |
+| 설정 스키마 | 레이어별 `unmapped = "plain"(기본) \| "passthrough" \| "block"` — 기본값이 현행이므로 완전 하위 호환 |
+| 패스쓰루 성립 조건 | 트리거가 수정자 키일 때만 코드 진입. 비수정자 트리거는 plain으로 폴백 |
+| tap 억제 | 코드 진입 = `layer_key_used` 설정 → tap_action 미발동. Block의 억제된 키 down도 동일 |
+| keymap 토글 중 코드 | 토글이 코드 모드를 끊을 때 `ReleaseChord` 반환 — 주입 트리거 stuck 방지 |
+| 어댑터 미구현 구간 | P2/P3 전까지 어댑터 스텁은 plain과 동일하게 동작 (EngageChord→통과, ReleaseChord→억제+지연 액션 실행). 설정을 미리 켜도 안전 |
+
 ### P1 — 엔진 구현 (1일)
 - `EngineState`에 `chord_engaged: bool` + 미매핑 키 up 추적(`chorded_keys`)
 - 순수 로직이므로 플랫폼 코드 없이 테스트 완결
@@ -121,7 +134,35 @@ unmapped = "passthrough"   # passthrough | plain(현행) | block
   키맵 전체를 끄고 싶다"는 별개 용도가 남는다. 문서에서 용도를 재정의하는
   것으로 충분하다.
 
-## 5. 리스크
+## 5. 후속 로드맵 — VIA 레이어 개념 완성과 그 너머
+
+패스쓰루(P0~P4) 이후, VIA/QMK 대비 남는 격차를 메우는 순서.
+자세한 대응표는 이 문서의 배경이 된 2026-07-12 검토 참조.
+
+### R1 — TG / OSL / TT (저비용 고효율, 패스쓰루 P1과 같은 사이클에 얹기 좋음)
+- `TG(n)` 레이어 고정 토글, `OSL(n)` 원샷(다음 1키만), `TT(n)` 홀드=모멘터리·N탭=고정
+- 셋 다 엔진 상태 1~2개 추가 수준. 설정: 레이어에 `toggle_key`, `one_shot = true` 등
+- 여기까지 하면 "VIA 사용자가 이질감 없이 쓰는 수준"
+
+### R2 — 레이어 스택 + 투과 순서 (개념적 완성)
+- 단일 `active_layer: Option<usize>` → 활성 레이어 스택으로 리팩토링
+- 키 조회를 스택 상단부터 내려가며 투과(KC_TRNS 의미론의 완전형)
+- 중규모 리팩토링이므로 독립 단계로. R1의 TG가 생기면 다층 동시 활성이
+  실제로 발생하므로 그 직후가 적기
+
+### R3 — 앱별 레이어 (VIA가 원리적으로 불가능한 차별화 영역)
+- 포커스된 앱에 따라 레이어 매핑 전환 (예: VSCode용 Alt 레이어 ≠ 브라우저용)
+- 플랫폼별 포커스 추적(Win32 이벤트 훅 / NSWorkspace) 기반 — 독립 트랙
+- 런처(kmd)와의 시너지: `:keymap` UI에서 앱별 프로필 관리
+
+### R4 — 홈로우 모드 (가장 마지막)
+- 기능이 아니라 타이밍 판정이 본체 — QMK/kanata의 판정 모드
+  (hold-on-other-press, permissive hold 등)를 벤치마킹해 설계
+- 빠른 타이핑 롤오버 오판정과의 싸움이므로 실사용 튜닝 기간 필요
+
+키별 tapping term, 3탭+ 탭댄스 확장은 필요해질 때 R1~R2에 끼워 넣는다.
+
+## 6. 리스크
 
 | 리스크 | 완화 |
 |---|---|

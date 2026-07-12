@@ -428,6 +428,31 @@ pub struct DoubleTapBinding {
 
 // ── 레이어 ──────────────────────────────────────────────────────────────────
 
+/// 레이어 활성 중 매핑되지 않은 키의 처리 방식 (VIA의 KC_TRNS/KC_NO 대응)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnmappedBehavior {
+    /// 맨키만 통과 — 트리거는 억제된 상태이므로 OS 조합(Alt+Tab 등)은 죽는다 (현행)
+    #[default]
+    Plain,
+    /// 트리거 조합을 OS로 투과 — 코드(chord) 모드로 진입해 Alt+Tab 등이 그대로 동작.
+    /// 트리거가 수정자 키일 때만 성립하며, 아니면 Plain으로 폴백한다.
+    Passthrough,
+    /// 미매핑 키 억제 (VIA의 KC_NO)
+    Block,
+}
+
+impl UnmappedBehavior {
+    /// TOML 문자열 파싱 — 미지 값은 None (호출부에서 경고 후 기본값 사용)
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "plain" => Some(Self::Plain),
+            "passthrough" => Some(Self::Passthrough),
+            "block" => Some(Self::Block),
+            _ => None,
+        }
+    }
+}
+
 /// 키 레이어: 특정 키를 홀드하면 활성화되는 리매핑 세트
 #[derive(Debug, Clone)]
 pub struct Layer {
@@ -438,6 +463,8 @@ pub struct Layer {
     pub tap_action: Option<VKey>,
     /// tap-hold 판정 시간 (밀리초)
     pub tap_hold_ms: u32,
+    /// 매핑되지 않은 키의 처리 방식
+    pub unmapped: UnmappedBehavior,
     /// 레이어 활성 시 키 매핑 (즉시 실행)
     pub mappings: HashMap<VKey, BindAction>,
     /// 레이어 내 더블탭 매핑: 첫 탭 → single_action, 두 번째 탭(timeout 이내) → double_action
@@ -551,6 +578,7 @@ impl KeybindConfig {
                 trigger: VKey::LAlt,
                 tap_action: Some(VKey::Escape),
                 tap_hold_ms: 200,
+                unmapped: UnmappedBehavior::default(),
                 mappings,
                 double_tap_mappings,
             }],
@@ -593,6 +621,7 @@ impl KeybindConfig {
                     bl.tap_action = custom_layer.tap_action;
                 }
                 bl.tap_hold_ms = custom_layer.tap_hold_ms;
+                bl.unmapped = custom_layer.unmapped;
                 for (k, v) in custom_layer.mappings {
                     bl.mappings.insert(k, v);
                 }
@@ -735,11 +764,20 @@ impl KeybindConfig {
                 );
             }
 
+            let unmapped = match layer_cfg.unmapped.as_deref() {
+                None => UnmappedBehavior::default(),
+                Some(s) => UnmappedBehavior::from_name(s).unwrap_or_else(|| {
+                    tracing::warn!("레이어 '{name}' unmapped 값 파싱 실패: {s} — plain 사용");
+                    UnmappedBehavior::default()
+                }),
+            };
+
             layers.push(Layer {
                 name: name.clone(),
                 trigger,
                 tap_action,
                 tap_hold_ms: layer_cfg.tap_hold_ms.unwrap_or(200),
+                unmapped,
                 mappings,
                 double_tap_mappings,
             });

@@ -614,6 +614,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
         trigger: "LAlt".into(),
         tap_action: Some("Escape".into()),
         tap_hold_ms: Some(200),
+        unmapped: None,
         mappings,
         double_taps,
     }

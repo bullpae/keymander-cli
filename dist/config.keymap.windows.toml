@@ -9,6 +9,9 @@ active_profile = "vim-nav"
 trigger = "LAlt"
 tap_action = "Escape"
 tap_hold_ms = 200
+# 미매핑 키 동작: "plain"(맨키 통과, 기본) | "passthrough"(트리거 조합을 OS로 투과,
+# 예: Alt+Tab 유지 — 어댑터 구현 전까지는 plain과 동일하게 동작) | "block"(억제)
+# unmapped = "passthrough"
 
 [launcher.keymap.layers.nav.mappings]
 H = "Left"
