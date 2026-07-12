@@ -1,0 +1,132 @@
+# 레이어 패스쓰루(VIA/QMK KC_TRNS 스타일) 도입 검토 및 단계별 전략
+
+작성: 2026-07-12 (v0.9.2 엔진 기준)
+
+## 1. 문제 정의
+
+현재 Windows에서 Alt를 레이어 트리거로 쓰면:
+
+- 트리거 down은 **즉시 억제**된다 (`engine.rs` §3, tap-vs-hold 판정을 위해
+  OS에 Alt를 보이지 않게 함).
+- 레이어에 **매핑된 키**는 새 액션을 실행한다. ✅
+- 레이어에 **매핑되지 않은 키**는 엔진 최하단에서 `PassThrough`되지만,
+  OS 입장에서는 Alt가 눌린 적이 없으므로 **맨키(Tab, F4)만 전달**된다.
+  → Alt+Tab 창 전환, Alt+F4 닫기 등 OS 기본 조합이 전부 죽는다.
+
+이 때문에 지금은 `toggle_keymap` 콤보(키맵 임시 on/off)로 우회하고 있다.
+VIA의 KC_TRNS처럼 "매핑 없는 키는 아래 레이어로 투과"가 되면
+Alt+Tab은 그대로 살고, 토글 기능의 존재 이유가 크게 줄어든다.
+
+## 2. 현재 구조 진단 — 도입 가능한가?
+
+**결론: 가능하다. 엔진 쪽 기반은 좋고, 어려운 부분은 훅 어댑터의 "지속 주입"이다.**
+
+유리한 점:
+
+1. **결정 엔진이 순수 상태 머신으로 분리**되어 있다 (`keybind/engine.rs`,
+   입력 = (VKey, down/up, tick) → 출력 = `KeyDecision`). 패스쓰루도 새
+   Decision 변형 + 상태 추가로 표현 가능하고, 단위 테스트로 타이밍 시나리오를
+   전부 시뮬레이션할 수 있다 (기존 테스트 21+개와 같은 방식).
+2. **양 플랫폼이 동일 엔진을 공유** (0.8.0에서 macOS 통합 완료) — 로직을 한 번만
+   만들면 된다.
+3. **훅 콜백은 이미 주입 이벤트를 무시** (`LLKHF_INJECTED` skip) — 우리가 Alt를
+   합성 주입해도 피드백 루프가 없다.
+4. **훅 액션이 워커 스레드에서 실행** (0.7.0) — 주입 시퀀스가 길어져도
+   LowLevelHooksTimeout 위험이 없다.
+
+부족한 점 (개선 필요):
+
+1. **지속(hold) 주입 개념이 없다.** 현재 `SendCombo`는 mod down → key →
+   mod up을 한 번에 보내는 일회성이다. Alt+Tab 스위처 UI처럼 "Alt를 계속
+   누르고 있는" 의미론을 만들려면 *트리거 down을 주입한 뒤 물리 트리거 up까지
+   유지*하는 새로운 액션 형태가 필요하다.
+2. **이벤트 순서 제어.** 물리 Tab을 그대로 통과시키고 Alt만 주입하면 큐 순서상
+   Tab이 Alt보다 먼저 도달할 수 있다. 물리 키를 억제하고 (Alt down → Tab down)을
+   묶어서 주입해야 순서가 보장된다. 이때 물리 Tab의 keyup도 추적해 주입
+   Tab up으로 변환해야 한다.
+3. **코드(chord) 모드 중 레이어 매핑 충돌.** Alt 주입이 걸린 상태에서 레이어
+   매핑 키를 누르면 합성 액션이 Alt+액션으로 오염된다. 정책 결정 필요 (§4 P1).
+4. **설정 스키마**에 레이어별 미매핑 키 동작 옵션이 없다.
+
+## 3. 목표 동작 (설계)
+
+```
+[Alt down]           → 억제, 레이어 활성 (현행 유지)
+[매핑 키 down]        → 레이어 액션 실행 (현행 유지)
+[미매핑 키 down]      → "코드 모드" 진입:
+                        Alt down 주입 → 해당 키 down 주입 (물리 이벤트는 억제)
+                        이후 이 키의 물리 up → 주입 up으로 변환
+[코드 모드 중 추가 키] → 그대로 주입 통과 (Alt 유지 중이므로 Alt+연속키 동작,
+                        예: Alt 홀드 + Tab Tab Tab)
+[Alt up]             → 코드 모드였으면 Alt up 주입 (스위처 확정 등),
+                        아니면 현행 tap/hold 판정
+[순수 Alt tap]        → 현행 유지 (tap_action or 무시). OS 메뉴 포커스는
+                        지금처럼 발생하지 않음 — 회귀 없음
+```
+
+핵심 불변식:
+
+- 코드 모드에 들어간 홀드에서는 **tap_action을 발동하지 않는다** (Alt+Tab 후
+  Alt를 뗐는데 Escape가 나가면 안 됨) — `layer_key_used`와 같은 방식.
+- 패스쓰루는 **트리거가 수정자 키일 때만** 의미가 있다 (Alt/Ctrl/Win/Shift).
+  CapsLock 같은 비수정자 트리거는 지금처럼 맨키 통과가 자연스럽다.
+- 데몬 종료/키맵 off 시 주입된 트리거가 stuck되지 않아야 한다
+  (기존 `held_modifiers()` 해제 경로에 주입 상태 포함).
+
+설정안 (레이어 단위, 기본값은 현행 유지로 하위 호환):
+
+```toml
+[[keymap.layers]]
+trigger = "LAlt"
+unmapped = "passthrough"   # passthrough | plain(현행) | block
+```
+
+추후 필요하면 VIA처럼 키 단위 `transparent = ["Tab", "F4"]` /
+`blocked = [...]` 목록으로 세분화한다.
+
+## 4. 단계별 전략
+
+### P0 — 설계 확정 + 엔진 테스트 선행 (반나절)
+- `KeyDecision`에 `EngageChord { trigger }` / 코드 모드 상태 추가 설계
+- 정책 결정 1건: **코드 모드 중 레이어 매핑 키 처리**
+  - A안(단순, 권장): 코드 모드 진입 후엔 홀드가 끝날 때까지 전부 OS 조합으로
+    통과. "Alt+Tab을 시작했으면 그 홀드는 OS 것"— 멘탈 모델이 명확
+  - B안(정교): 매핑 키가 오면 Alt up 주입 → 액션 실행 → Alt down 재주입.
+    스위처 UI가 닫히는 등 부작용이 커서 비권장
+- 실패 시나리오를 단위 테스트로 먼저 작성 (tap 미발동, 연속 Tab, 이중 진입,
+  tick wraparound, keymap 토글 중 코드 모드 등)
+
+### P1 — 엔진 구현 (1일)
+- `EngineState`에 `chord_engaged: bool` + 미매핑 키 up 추적(`chorded_keys`)
+- 순수 로직이므로 플랫폼 코드 없이 테스트 완결
+- `unmapped` 설정 파싱 (`config.rs` + `06_config_reference.md` 갱신)
+
+### P2 — Windows 어댑터 (1~2일, 실기기 검증 필수)
+- 워커 스레드에서 Engage 시퀀스 주입: `SendInput`(Alt down, key down)
+- 물리 up → 주입 up 변환, 물리 Alt up → 주입 Alt up
+- 검증 항목: Alt+Tab 홀드 스위처, Alt+F4, Alt+Space(시스템 메뉴),
+  Alt+드래그(앱별), 한/영 전환·IME 조합 간섭, 게임(로우레벨 입력) 회귀
+- stuck-Alt 방지: 데몬 stop / keymap off / 패닉 시 주입 해제
+
+### P3 — macOS 어댑터 (1일)
+- CGEventPost로 동일 시퀀스. flagsChanged 특성상 기존
+  `sync_modifier_flags` / 잔여 플래그 해제 루틴과의 상호작용 확인
+- macOS는 Cmd 계열 조합(Cmd+Tab)이 대상이 될 가능성 — 트리거 키 설정과 함께 검증
+
+### P4 — UX 정리 + 토글 은퇴 결정 (반나절)
+- `:keymap` 화면에 레이어별 passthrough 상태 표시
+- 기본 프리셋(`dist/config.*`)에 `unmapped = "passthrough"` 적용 여부 결정
+- **toggle_keymap은 P4까지 유지** 후 제거가 아닌 *유지* 권장:
+  패스쓰루가 Alt 조합 문제는 해소하지만, 토글은 "게임/원격데스크톱 등에서
+  키맵 전체를 끄고 싶다"는 별개 용도가 남는다. 문서에서 용도를 재정의하는
+  것으로 충분하다.
+
+## 5. 리스크
+
+| 리스크 | 완화 |
+|---|---|
+| 주입 Alt가 stuck (크래시/타이밍) | stop/토글/패닉 경로에서 일괄 해제, 워치독 테스트 |
+| 이벤트 순서 역전 (Tab이 Alt보다 먼저) | 물리 키 억제 후 묶음 주입으로 순서 보장 |
+| 보안 SW의 SendInput 탐지 | 기존에도 SendCombo로 주입 중 — 신규 리스크 아님 |
+| IME 조합 간섭 | macOS 45ms 지연 등 기존 노하우 재사용, P2/P3 실기기 검증 |
+| Alt 단독 tap 의미 변화 | 없음 — tap/hold 로직 그대로, 코드 모드만 추가 |
