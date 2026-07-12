@@ -52,6 +52,35 @@ OriginalFilename = "kmd.exe"
 FileDescription = "keymander - keyboard-driven launcher"
 ProductName = "keymander"
 
+# .deb 패키징 (cargo-deb) — 릴리스 워크플로우의 build-packages 잡이 사용.
+# 바이너리 3개를 함께 담으므로 --no-build로 호출한다 (사전 빌드 필수).
+[package.metadata.deb]
+name = "keymander"
+maintainer = "bullpae <bullpae@gmail.com>"
+copyright = "2026, bullpae"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Keyboard-driven cross-platform launcher: kmd (TUI/CLI), \
+kmd-desktop (GUI launcher), and kmd-daemon (key-remap daemon)."""
+assets = [
+    ["target/release/kmd", "usr/bin/", "755"],
+    ["target/release/kmd-desktop", "usr/bin/", "755"],
+    ["target/release/kmd-daemon", "usr/bin/", "755"],
+    ["target/package/config.example.toml", "usr/share/keymander/config.example.toml", "644"],
+    ["README.md", "usr/share/doc/keymander/README.md", "644"],
+]
+
+# .rpm 패키징 (cargo-generate-rpm) — 동일하게 사전 빌드 후 호출.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/kmd", dest = "/usr/bin/kmd", mode = "755" },
+    { source = "target/release/kmd-desktop", dest = "/usr/bin/kmd-desktop", mode = "755" },
+    { source = "target/release/kmd-daemon", dest = "/usr/bin/kmd-daemon", mode = "755" },
+    { source = "target/package/config.example.toml", dest = "/usr/share/keymander/config.example.toml", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/keymander/README.md", mode = "644" },
+]
+
 [profile.release]
 opt-level = 2
 lto = true

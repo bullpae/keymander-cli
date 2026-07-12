@@ -209,9 +209,49 @@ jobs:
           name: keymander-portable-${{ matrix.target }}
           path: keymander-portable-${{ matrix.target }}.*
 
+  build-packages:
+    name: Linux Packages (deb/rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps (iced/winit + packaging)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libudev-dev libssl-dev dpkg-dev
+      - name: Install packaging tools
+        run: cargo install cargo-deb cargo-generate-rpm --locked
+
+      - name: Build all binaries
+        run: cargo build --release -p keymander -p kmd-desktop -p kmd-daemon
+
+      - name: Stage example config
+        run: |
+          mkdir -p target/package
+          cat dist/config.shared.toml dist/config.keymap.linux.toml \
+            > target/package/config.example.toml
+
+      - name: Build .deb
+        run: cargo deb -p keymander --no-build -o .
+
+      - name: Build .rpm
+        run: cargo generate-rpm -o .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: keymander-linux-packages
+          path: |
+            *.deb
+            *.rpm
+
   release:
     name: Create Release
-    needs: [build-cli, build-desktop, build-bundle]
+    needs: [build-cli, build-desktop, build-bundle, build-packages]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -236,6 +276,7 @@ jobs:
   update-tap:
     name: Update Homebrew Tap
     needs: release
+    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
     runs-on: ubuntu-latest
     steps:
       - name: Check tap token
@@ -275,3 +316,27 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "keymander ${VERSION}"
           git push
+
+  # 릴리스마다 microsoft/winget-pkgs에 버전 갱신 PR을 자동 제출한다.
+  # 최초 등록(bullpae.keymander)이 머지된 뒤부터 동작하며,
+  # WINGET_GITHUB_TOKEN(공개 저장소 fork/PR 권한 PAT) 시크릿이 없으면 건너뛴다.
+  update-winget:
+    name: Update winget package
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    runs-on: windows-latest
+    steps:
+      - name: Check winget token
+        id: winget
+        shell: bash
+        env:
+          HAS_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
+        run: echo "has=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: vedantmgoyal9/winget-releaser@v2
+        if: steps.winget.outputs.has == 'true'
+        with:
+          identifier: bullpae.keymander
+          installers-regex: 'keymander-portable-(x86_64|aarch64)-pc-windows-msvc\.zip$'
+          max-versions-to-keep: 5
+          token: ${{ secrets.WINGET_GITHUB_TOKEN }}
