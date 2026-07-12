@@ -28,20 +28,40 @@ static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 /// 메시지 루프 스레드 ID — stop() 시 WM_QUIT를 보내 GetMessageW를 깨운다
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
-/// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
-static ACTION_TX: Mutex<Option<mpsc::Sender<BindAction>>> = Mutex::new(None);
+/// 워커 스레드 작업 — 일회성 액션 또는 코드(chord) 모드 주입/해제
+enum WorkerJob {
+    Action(BindAction),
+    /// 코드 진입: 트리거 down → 키 down을 원자적으로 주입.
+    /// 트리거 up은 [`WorkerJob::ChordRelease`]에서 — 그 사이 OS는
+    /// 트리거가 눌린 상태를 유지한다 (Alt+Tab 스위처 등).
+    ChordEngage {
+        trigger_vk: u16,
+        key_vk: u16,
+    },
+    /// 코드 해제: 트리거 up 주입
+    ChordRelease {
+        trigger_vk: u16,
+    },
+}
 
-/// 액션을 워커 스레드 큐에 넣는다 (훅 콜백에서 호출 — 블로킹 없음)
-fn queue_action(action: BindAction) {
+/// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
+static ACTION_TX: Mutex<Option<mpsc::Sender<WorkerJob>>> = Mutex::new(None);
+
+/// 작업을 워커 스레드 큐에 넣는다 (훅 콜백에서 호출 — 블로킹 없음)
+fn queue_job(job: WorkerJob) {
     let sender = ACTION_TX.lock().ok().and_then(|g| g.clone());
     match sender {
         Some(tx) => {
-            if tx.send(action).is_err() {
-                tracing::warn!("액션 워커가 종료되어 액션을 실행하지 못했습니다");
+            if tx.send(job).is_err() {
+                tracing::warn!("액션 워커가 종료되어 작업을 실행하지 못했습니다");
             }
         }
-        None => tracing::warn!("액션 워커 미시작 — 액션 무시"),
+        None => tracing::warn!("액션 워커 미시작 — 작업 무시"),
     }
+}
+
+fn queue_action(action: BindAction) {
+    queue_job(WorkerJob::Action(action));
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -297,6 +317,26 @@ fn send_key_press(vk: u16) {
     send_key_up(vk);
 }
 
+/// 코드 진입 주입: 트리거 down → 키 down을 **한 번의 SendInput 호출**로 보낸다.
+/// 두 이벤트 사이에 다른 입력이 끼어들 수 없어 Alt+Tab 같은 조합의
+/// 순서(트리거가 먼저)가 보장된다. 트리거 up은 ChordRelease에서 별도 주입.
+fn send_chord_engage(trigger_vk: u16, key_vk: u16) {
+    unsafe {
+        let mut inputs: [INPUT; 2] = std::mem::zeroed();
+        for (i, vk) in [trigger_vk, key_vk].into_iter().enumerate() {
+            inputs[i].r#type = INPUT_KEYBOARD;
+            inputs[i].Anonymous.ki.wVk = vk;
+            inputs[i].Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
+            inputs[i].Anonymous.ki.dwFlags = if is_extended_vk(vk) {
+                KEYEVENTF_EXTENDEDKEY
+            } else {
+                0
+            };
+        }
+        SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
 fn send_combo(modifier_vks: &[u16], key_vk: u16) {
     for &m in modifier_vks {
         send_key_down(m);
@@ -402,20 +442,29 @@ unsafe extern "system" fn keyboard_hook_proc(
             queue_action(action);
             1
         }
-        // TODO(P2, docs/08): 트리거 down + key down 지속 주입 구현 전까지는
-        // plain과 동일하게 물리 키만 통과시킨다
+        // 코드 진입: 물리 이벤트를 억제하고 트리거+키를 묶어 주입.
+        // 이후 이 홀드의 키들은 엔진이 PassThrough — OS에는 주입된
+        // 트리거가 눌려 있으므로 Alt+Tab 등 조합이 그대로 동작한다.
         KeyDecision::EngageChord { trigger, key } => {
-            tracing::debug!("chord engage 스텁 (P2/P3 예정): {trigger:?}+{key:?} — plain 통과");
             drop(guard);
-            CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+            tracing::debug!("chord engage: {trigger:?}+{key:?}");
+            queue_job(WorkerJob::ChordEngage {
+                trigger_vk: vkey_to_vk(trigger),
+                key_vk: vkey_to_vk(key),
+            });
+            1
         }
-        // TODO(P2): 주입 트리거 해제. 스텁에서는 지연 액션만 실행
+        // 코드 해제: 물리 트리거 up을 억제하고 주입 트리거 up으로 대체.
+        // 지연 Launch는 해제 뒤에 실행 (FIFO 큐가 순서 보장).
         KeyDecision::ReleaseChord {
             trigger,
             deferred_action,
         } => {
-            tracing::debug!("chord release 스텁 (P2/P3 예정): {trigger:?}");
             drop(guard);
+            tracing::debug!("chord release: {trigger:?}");
+            queue_job(WorkerJob::ChordRelease {
+                trigger_vk: vkey_to_vk(trigger),
+            });
             if let Some(action) = deferred_action {
                 queue_action(action);
             }
@@ -463,14 +512,20 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         }
 
         // 액션 워커 시작 — 훅 콜백은 큐잉만 하고 실행은 이 스레드가 담당
-        let (action_tx, action_rx) = mpsc::channel::<BindAction>();
+        let (action_tx, action_rx) = mpsc::channel::<WorkerJob>();
         match ACTION_TX.lock() {
             Ok(mut g) => *g = Some(action_tx),
             Err(_) => return Err("액션 큐 잠금 실패".into()),
         }
         self.action_worker = Some(std::thread::spawn(move || {
-            for action in action_rx {
-                execute_action(&action);
+            for job in action_rx {
+                match job {
+                    WorkerJob::Action(action) => execute_action(&action),
+                    WorkerJob::ChordEngage { trigger_vk, key_vk } => {
+                        send_chord_engage(trigger_vk, key_vk);
+                    }
+                    WorkerJob::ChordRelease { trigger_vk } => send_key_up(trigger_vk),
+                }
             }
             tracing::debug!("액션 워커 종료");
         }));
@@ -541,6 +596,16 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         }
         if let Some(worker) = self.action_worker.take() {
             let _ = worker.join();
+        }
+        // 코드 모드 중 중지된 경우 주입돼 있는 트리거를 해제한다 (stuck-Alt 방지).
+        // 훅/워커가 모두 종료된 뒤라 여기서 직접 주입해도 경합이 없다.
+        if let Some(state) = HOOK_STATE.get() {
+            if let Ok(guard) = state.lock() {
+                if let Some(trigger) = guard.engaged_chord_trigger() {
+                    tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
+                    send_key_up(vkey_to_vk(trigger));
+                }
+            }
         }
         Ok(())
     }

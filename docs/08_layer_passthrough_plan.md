@@ -114,12 +114,25 @@ unmapped = "passthrough"   # passthrough | plain(현행) | block
 - 순수 로직이므로 플랫폼 코드 없이 테스트 완결
 - `unmapped` 설정 파싱 (`config.rs` + `06_config_reference.md` 갱신)
 
-### P2 — Windows 어댑터 (1~2일, 실기기 검증 필수)
-- 워커 스레드에서 Engage 시퀀스 주입: `SendInput`(Alt down, key down)
-- 물리 up → 주입 up 변환, 물리 Alt up → 주입 Alt up
-- 검증 항목: Alt+Tab 홀드 스위처, Alt+F4, Alt+Space(시스템 메뉴),
-  Alt+드래그(앱별), 한/영 전환·IME 조합 간섭, 게임(로우레벨 입력) 회귀
-- stuck-Alt 방지: 데몬 stop / keymap off / 패닉 시 주입 해제
+### P2 — Windows 어댑터 (1~2일, 실기기 검증 필수) — 구현됨, 실기기 검증 대기
+- ✅ 워커 작업 큐를 `WorkerJob`(Action | ChordEngage | ChordRelease)으로 확장
+- ✅ Engage: 트리거 down + 키 down을 **한 번의 SendInput 호출**(INPUT 2개)로
+  원자 주입 — 사이에 다른 입력이 끼어들 수 없어 순서 보장
+- ✅ Release: 물리 트리거 up 억제 → 주입 트리거 up, 지연 Launch는 그 뒤 실행
+- ✅ stuck-Alt 방지: keymap 토글(ReleaseChord) + backend stop() 시 잔여
+  트리거 up 주입
+- 알려진 엣지: 코드 첫 키를 수 ms 내에 떼면 물리 up(통과)이 워커의 주입보다
+  먼저 도달할 수 있다 — 키가 논리적으로 눌린 채 남지만 같은 키를 한 번
+  누르면 회복된다. 실사용 빈도 낮음, 검증에서 문제 시 up 추적 추가 예정
+- 실기기 검증 체크리스트 (unmapped = "passthrough" 설정 후):
+  1. Alt 홀드 + Tab 반복 → 스위처가 열린 채 순회, Alt 놓으면 확정
+  2. Alt+F4 → 활성 창 닫힘
+  3. Alt 짧은 탭 → 여전히 Escape (tap_action 회귀 없음)
+  4. Alt 홀드 + H/J/K/L → 코드 진입 **전이면** 방향키 (레이어 매핑 유지)
+  5. Alt+Tab 후 같은 홀드에서 H → Alt+H로 OS에 전달 (A안 확인)
+  6. 한/영 전환(Shift+Space, RShift 더블탭) 및 한글 조합 간섭 없음
+  7. toggle_keymap 콤보를 코드 모드 중 눌러도 Alt가 stuck되지 않음
+  8. kmd daemon stop을 코드 모드 중 실행해도 Alt가 stuck되지 않음
 
 ### P3 — macOS 어댑터 (1일)
 - CGEventPost로 동일 시퀀스. flagsChanged 특성상 기존

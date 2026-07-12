@@ -144,17 +144,22 @@ impl EngineState {
         self.chord_engaged = false;
     }
 
+    /// 현재 코드 모드로 OS에 주입돼 있는 트리거 키.
+    /// 어댑터가 stop 시 stuck-modifier를 방지하기 위해 해제(up 주입)에 사용한다.
+    pub fn engaged_chord_trigger(&self) -> Option<VKey> {
+        if !self.chord_engaged {
+            return None;
+        }
+        self.active_layer
+            .and_then(|idx| self.config.layers.get(idx))
+            .map(|l| l.trigger)
+    }
+
     /// 코드 모드가 걸린 상태에서 상태 초기화가 필요할 때, 주입된 트리거를
     /// 해제할 [`KeyDecision::ReleaseChord`]가 필요한지 확인한다.
     /// (keymap 토글 등이 코드 모드를 끊을 때 stuck-modifier 방지)
     fn take_engaged_chord_trigger(&mut self) -> Option<VKey> {
-        if !self.chord_engaged {
-            return None;
-        }
-        let trigger = self
-            .active_layer
-            .and_then(|idx| self.config.layers.get(idx))
-            .map(|l| l.trigger);
+        let trigger = self.engaged_chord_trigger();
         self.chord_engaged = false;
         trigger
     }
