@@ -2,6 +2,18 @@
 
 All notable changes to keymander are documented here.
 
+## [0.9.2] — 2026-07-12
+
+### Bug Fixes
+- **Long-running shell commands no longer killed after 10 s (TUI)** — `>`/`!` user commands in the TUI now open in a real terminal window (same UX as the desktop app) instead of running hidden with a 10-second timeout that aborted commands like `>winget upgrade --all` mid-run. Quick actions (`!ip`, `!uptime`, …) keep the inline capture + clipboard behavior.
+- **macOS terminal launch works without Automation permission** — shell commands now run via a self-deleting temp `.command` script opened with `open -a Terminal`, replacing the osascript/AppleEvent approach that silently failed for non-bundled binaries without a TCC prompt. The window shows the exit status and waits for Enter.
+- **Windows: quoted arguments survive `cmd /k`** — the command line is passed via `raw_arg`, fixing commands containing quotes that std's `\"` escaping (which cmd.exe doesn't understand) used to mangle.
+
+### Refactoring
+- Terminal launch unified into `kmd_core::plugin::builtin_shell::launch_in_terminal` — TUI and desktop share one implementation; the desktop's private copy is removed.
+
+---
+
 ## [0.9.1] — 2026-07-11
 
 ### Bug Fixes
