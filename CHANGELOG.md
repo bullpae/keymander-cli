@@ -2,6 +2,30 @@
 
 All notable changes to keymander are documented here.
 
+## [0.9.3] — 2026-07-12
+
+VIA-style layer passthrough (docs/08 P0–P3) — 레이어 트리거(Alt)를 눌러도
+Alt+Tab 같은 OS 조합을 잃지 않는 코드(chord) 모드 도입.
+
+### Features
+- **Layer passthrough (`unmapped = "passthrough"`)** — while a layer is held,
+  pressing a key that has no layer mapping now enters *chord mode*: the trigger
+  and the key are injected to the OS in order, so native combos (Alt+Tab,
+  Alt+F4 on Windows; Option-key characters on macOS) work exactly as without
+  keymander. Everything in that hold passes to the OS until the trigger is
+  released; the layer's tap action does not fire. Opt-in per layer — the
+  default (`"plain"`) keeps the previous behavior, and `"block"` (VIA `KC_NO`)
+  suppresses unmapped keys entirely.
+- Engine guarantees: chord release is injected on keymap toggle and daemon
+  stop (no stuck modifiers); deferred layer `launch:` actions still run after
+  the chord ends. 9 new engine unit tests.
+
+### Packaging
+- First release shipping `.deb`/`.rpm` packages (x86_64 Linux) as release
+  assets, alongside the SHA256SUMS.txt introduced in 0.9.2.
+
+---
+
 ## [0.9.2] — 2026-07-12
 
 ### Bug Fixes
