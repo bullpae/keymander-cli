@@ -62,11 +62,15 @@ fn send_status() -> Result<()> {
             uptime_secs,
             index_items,
             pid,
+            keymap_layers,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
             println!("  가동 시간:  {uptime_secs}초");
             println!("  인덱스:     {index_items}개 항목");
+            for layer in &keymap_layers {
+                println!("  레이어:     {layer}");
+            }
             println!("  자동 시작:  {}", autostart_label());
         }
         Ok(other) => println!("응답: {other:?}"),

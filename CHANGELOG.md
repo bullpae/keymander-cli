@@ -2,6 +2,26 @@
 
 All notable changes to keymander are documented here.
 
+## [0.9.4] — 2026-07-12
+
+Passthrough 진단 릴리스 — 0.9.3의 Windows 검증에서 "Alt+Tab이 Tab처럼 동작"
+증상이 보고되어, 설정이 엔진까지 도달했는지 원격으로 확인할 수단을 추가.
+
+### Bug Fixes
+- **`:keymap` 치트시트가 사용자의 `unmapped` 설정을 무시하던 문제** —
+  vim-nav 프리셋 병합(`effective_keymap`)이 새 필드를 복사하지 않았다.
+  엔진(데몬) 경로는 영향 없음 — 표시만 잘못됐다.
+
+### Diagnostics
+- **`kmd daemon status`에 실행 중인 레이어 요약 표시** — 트리거·unmapped
+  모드·매핑 수를 그대로 보여줘, 설정 파일이 실제 엔진에 적용됐는지 즉시
+  확인할 수 있다 (`레이어: nav: LAlt 홀드 · unmapped=Passthrough · …`).
+- **데몬 로그를 `<데이터 디렉터리>/daemon.log`로 기록** — 기존에는
+  stdout/stderr가 전부 버려져 키맵 파싱 경고를 볼 방법이 없었다.
+  시작마다 새로 쓰며, 경로는 status 출력에 표시된다.
+
+---
+
 ## [0.9.3] — 2026-07-12
 
 VIA-style layer passthrough (docs/08 P0–P3) — 레이어 트리거(Alt)를 눌러도

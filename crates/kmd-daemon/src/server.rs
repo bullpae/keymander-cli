@@ -161,6 +161,7 @@ fn process_request(
                 uptime_secs: uptime,
                 index_items: items,
                 pid: std::process::id(),
+                keymap_layers: KEYMAP_SUMMARY.lock().map(|g| g.clone()).unwrap_or_default(),
             }
         }
 
@@ -257,6 +258,26 @@ fn load_config() -> Config {
 /// - 기타: TOML 커스텀 설정 시도 → 없으면 vim-nav 프리셋 폴백
 ///
 /// `keybindings.global_hotkey`는 프로필과 무관하게 항상 적용됨.
+/// 실행 중인 키맵 레이어 요약 — `kmd daemon status`로 노출해 원격 진단에 쓴다
+/// (어떤 config가 실제 엔진에 적용됐는지 로그 없이 확인 가능).
+static KEYMAP_SUMMARY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn keymap_layer_summaries(kb: &KeybindConfig) -> Vec<String> {
+    kb.layers
+        .iter()
+        .map(|l| {
+            format!(
+                "{}: {:?} 홀드 · unmapped={:?} · 매핑 {}개 · 더블탭 {}개",
+                l.name,
+                l.trigger,
+                l.unmapped,
+                l.mappings.len(),
+                l.double_tap_mappings.len()
+            )
+        })
+        .collect()
+}
+
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     let profile = &config.launcher.keymap.active_profile;
     let keymap_disabled = profile.contains("none");
@@ -297,6 +318,14 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
         } else {
             tracing::warn!("keymap toggle hotkey parse failed: {toggle_keymap}");
         }
+    }
+
+    let summaries = keymap_layer_summaries(&kb);
+    for s in &summaries {
+        tracing::info!("레이어 {s}");
+    }
+    if let Ok(mut g) = KEYMAP_SUMMARY.lock() {
+        *g = summaries;
     }
 
     kb

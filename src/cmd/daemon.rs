@@ -22,6 +22,26 @@ pub fn run(action: Action) -> Result<()> {
     }
 }
 
+/// 데몬 로그 파일 경로 (데이터 디렉터리 아래, 시작마다 새로 씀)
+fn daemon_log_path() -> std::path::PathBuf {
+    kmd_core::config::Config::default_data_dir().join("daemon.log")
+}
+
+/// 데몬 stdout/stderr 리다이렉트 대상. 로그 파일 생성 실패 시 null 폴백.
+/// 이전에는 무조건 null이어서 키맵 파싱 경고 등 진단 정보가 전부 버려졌다.
+fn daemon_log_stdio() -> (std::process::Stdio, std::process::Stdio) {
+    let path = daemon_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(file) = std::fs::File::create(&path) {
+        if let Ok(clone) = file.try_clone() {
+            return (file.into(), clone.into());
+        }
+    }
+    (std::process::Stdio::null(), std::process::Stdio::null())
+}
+
 fn start_daemon() -> Result<()> {
     if let Ok(port) = ipc::read_port() {
         if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
@@ -32,6 +52,7 @@ fn start_daemon() -> Result<()> {
     }
 
     let daemon_exe = find_sibling_exe("kmd-daemon");
+    let (log_out, log_err) = daemon_log_stdio();
 
     #[cfg(windows)]
     {
@@ -43,8 +64,8 @@ fn start_daemon() -> Result<()> {
             .arg("start")
             .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(log_out)
+            .stderr(log_err)
             .spawn()?;
     }
 
@@ -53,8 +74,8 @@ fn start_daemon() -> Result<()> {
         std::process::Command::new(&daemon_exe)
             .arg("start")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(log_out)
+            .stderr(log_err)
             .spawn()?;
     }
 
@@ -78,11 +99,16 @@ fn check_status() -> Result<()> {
             uptime_secs,
             index_items,
             pid,
+            keymap_layers,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
             println!("  가동 시간:  {uptime_secs}초");
             println!("  인덱스:     {index_items}개 항목");
+            for layer in &keymap_layers {
+                println!("  레이어:     {layer}");
+            }
+            println!("  로그:       {}", daemon_log_path().display());
         }
         Ok(_) => println!("예기치 않은 응답"),
         Err(ipc::IpcError::Io(_)) => {

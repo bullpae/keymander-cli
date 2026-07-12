@@ -56,6 +56,9 @@ pub enum Response {
         uptime_secs: u64,
         index_items: usize,
         pid: u32,
+        /// 실행 중인 키맵 레이어 요약 (구버전 데몬 응답에는 없음 → 기본 빈 목록)
+        #[serde(default)]
+        keymap_layers: Vec<String>,
     },
     /// 자동 시작 등록 상태
     AutostartStatus { installed: bool },
@@ -259,6 +262,7 @@ mod tests {
             uptime_secs: 42,
             index_items: 1000,
             pid: 12345,
+            keymap_layers: vec!["nav: LAlt".into()],
         };
         let encoded = encode_response(&res).unwrap();
         let decoded = decode_response(&encoded).unwrap();
@@ -267,11 +271,23 @@ mod tests {
                 uptime_secs,
                 index_items,
                 pid,
+                keymap_layers,
             } => {
                 assert_eq!(uptime_secs, 42);
                 assert_eq!(index_items, 1000);
                 assert_eq!(pid, 12345);
+                assert_eq!(keymap_layers.len(), 1);
             }
+            _ => panic!("잘못된 타입"),
+        }
+    }
+
+    #[test]
+    fn test_status_decodes_without_keymap_layers() {
+        // 구버전 데몬 응답(keymap_layers 없음)과의 하위 호환
+        let old = r#"{"type":"Status","uptime_secs":1,"index_items":2,"pid":3}"#;
+        match decode_response(old).unwrap() {
+            Response::Status { keymap_layers, .. } => assert!(keymap_layers.is_empty()),
             _ => panic!("잘못된 타입"),
         }
     }

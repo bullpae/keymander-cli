@@ -635,6 +635,9 @@ fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapCo
             if user.tap_hold_ms.is_some() {
                 effective.tap_hold_ms = user.tap_hold_ms;
             }
+            if user.unmapped.is_some() {
+                effective.unmapped = user.unmapped;
+            }
             for (k, v) in user.mappings {
                 effective.mappings.insert(k, v);
             }
