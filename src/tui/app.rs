@@ -702,22 +702,40 @@ fn execute_selected(
         return;
     }
 
-    // Shell command → execute and copy output to clipboard
+    // Shell command — quick action은 백그라운드 실행 후 결과를 클립보드에 복사,
+    // 사용자 명령은 새 터미널 창에서 실행한다 (데스크톱과 동일한 UX).
+    // 인라인 실행의 10초 타임아웃은 즉답형 quick action에만 적합하다 —
+    // `>winget upgrade --all` 같은 장시간 명령을 중간에 죽이지 않는다.
     if result.item.kind == ItemKind::Shell {
-        let shell_ext = builtin_shell::ShellExtension;
-        match shell_ext.execute(&result.item) {
-            kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
-                // Copy to clipboard and show first line as status
-                let first_line = output.lines().next().unwrap_or("(no output)");
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(&output);
+        if builtin_shell::ShellExtension::is_quick_action(&result.item.path) {
+            let shell_ext = builtin_shell::ShellExtension;
+            match shell_ext.execute(&result.item) {
+                kmd_core::plugin::ExtensionAction::CopyToClipboard(output) => {
+                    // Copy to clipboard and show first line as status
+                    let first_line = output.lines().next().unwrap_or("(no output)");
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(&output);
+                    }
+                    state.status_message = Some(format!("\u{2705} {}", first_line));
                 }
-                state.status_message = Some(format!("\u{2705} {}", first_line));
+                kmd_core::plugin::ExtensionAction::Display(msg) => {
+                    state.status_message = Some(format!("\u{274C} {}", msg)); // ❌
+                }
+                _ => {}
             }
-            kmd_core::plugin::ExtensionAction::Display(msg) => {
-                state.status_message = Some(format!("\u{274C} {}", msg)); // ❌
+        } else {
+            match builtin_shell::launch_in_terminal(&result.item.path) {
+                Ok(()) => {
+                    state.status_message =
+                        Some(format!("\u{1F4DF} 터미널에서 실행: {}", result.item.path)); // 📟
+                    if state.quit_on_launch {
+                        state.should_quit = true;
+                    }
+                }
+                Err(e) => {
+                    state.status_message = Some(format!("\u{274C} {}", e)); // ❌
+                }
             }
-            _ => {}
         }
         return;
     }

@@ -258,6 +258,90 @@ static QUICK_ACTIONS: &[QuickAction] = &[
     },
 ];
 
+/// 사용자 셸 명령을 새 터미널 창에서 실행한다 (결과가 화면에 유지됨).
+///
+/// TUI와 데스크톱이 공유하는 단일 구현:
+/// - Windows: `cmd /k` 새 콘솔 — `raw_arg`로 명령줄을 그대로 전달한다.
+///   `args()`는 내부 따옴표를 `\"`로 이스케이프하는데 cmd.exe는 그 문법을
+///   모르므로 따옴표 포함 명령이 깨진다.
+/// - macOS: 임시 `.command` 스크립트를 `open -a Terminal`로 연다 —
+///   osascript(AppleEvent)와 달리 자동화(TCC) 권한이 필요 없어
+///   번들이 아닌 단독 바이너리에서도 동작한다.
+/// - Linux: 사용 가능한 첫 터미널 에뮬레이터로 실행
+pub fn launch_in_terminal(cmd_line: &str) -> Result<(), String> {
+    let cmd_line = cmd_line.trim();
+    if cmd_line.is_empty() {
+        return Err("Empty command".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        Command::new("cmd")
+            .raw_arg("/k")
+            .raw_arg(cmd_line)
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("터미널 실행 실패: {e}"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let path =
+            write_command_script(cmd_line).map_err(|e| format!("임시 스크립트 생성 실패: {e}"))?;
+        Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("터미널 실행 실패: {e}"))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let escaped = cmd_line.replace('\'', "'\\''");
+        for term in ["x-terminal-emulator", "gnome-terminal", "xterm"] {
+            if Command::new(term)
+                .args([
+                    "-e",
+                    &format!("sh -c '{escaped} ; read -p \"Press Enter...\"'"),
+                ])
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("사용 가능한 터미널 에뮬레이터를 찾지 못했습니다".to_string())
+    }
+}
+
+/// macOS: 명령을 담은 실행 가능한 `.command` 파일을 임시 디렉터리에 만든다.
+/// 스크립트는 실행 직후 자신을 삭제하고(셸이 fd를 쥐고 있어 안전),
+/// 종료 후 Enter 대기로 결과가 화면에 남는다.
+#[cfg(target_os = "macos")]
+fn write_command_script(cmd_line: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("kmd-shell-{nanos}.command"));
+    let script = format!(
+        "#!/bin/sh\nrm -f \"$0\"\n{cmd_line}\nstatus=$?\n\
+         printf '\\n[kmd] exit %s — Enter를 누르면 닫힙니다\\n' \"$status\"\n\
+         read _\nexit $status\n"
+    );
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(script.as_bytes())?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    Ok(path)
+}
+
 /// Windows에서 콘솔 창 없이 cmd 실행하는 헬퍼
 #[cfg(target_os = "windows")]
 fn hidden_cmd() -> Command {
@@ -500,6 +584,14 @@ mod tests {
             "타임아웃(0.5s) 부근에서 반환되어야 함: {:?}",
             elapsed
         );
+    }
+
+    /// 실제 터미널 창을 여는 수동 검증용 —
+    /// `cargo test -p kmd-core manual_launch -- --ignored`
+    #[test]
+    #[ignore = "실제 터미널 창을 연다 — 수동 실행 전용"]
+    fn manual_launch_in_terminal() {
+        launch_in_terminal("echo kmd-terminal-test").expect("터미널 실행 실패");
     }
 
     #[test]

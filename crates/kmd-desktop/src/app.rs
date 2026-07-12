@@ -999,48 +999,6 @@ impl App {
 // 지원하는 검색창 프리픽스 전체 목록은 kmd_core::query_prefix::COMMANDS 레지스트리
 // (단일 진실 소스)와 :help 화면을 참고.
 
-// ─── Shell Terminal Launch ────────────────────────────────────────────────────
-
-/// 새 터미널 창에서 셸 명령을 실행 (결과가 화면에 유지됨)
-fn launch_in_terminal(cmd: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        let _ = std::process::Command::new("cmd")
-            .args(["/k", cmd])
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!("tell application \"Terminal\" to do script \"{}\"", escaped);
-        if let Err(e) = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .spawn()
-        {
-            tracing::warn!("터미널 실행 실패: {e}");
-        }
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let escaped = cmd.replace('\'', "'\\''");
-        for term in &["x-terminal-emulator", "gnome-terminal", "xterm"] {
-            if std::process::Command::new(term)
-                .args([
-                    "-e",
-                    &format!("sh -c '{escaped} ; read -p \"Press Enter...\"'"),
-                ])
-                .spawn()
-                .is_ok()
-            {
-                return;
-            }
-        }
-    }
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// UTF-8 안전한 문자열 truncation (한글/CJK 안전)

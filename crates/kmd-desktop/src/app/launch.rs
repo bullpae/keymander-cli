@@ -1,7 +1,7 @@
 //! 항목 실행, 컨텍스트 액션, 단축키 처리
 
+use super::context_actions_for;
 use super::*;
-use super::{context_actions_for, launch_in_terminal};
 
 impl App {
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
@@ -141,8 +141,10 @@ impl App {
                     Message::ShellDone(res)
                 });
             }
-            // 사용자 명령 → 새 터미널 창에서 실행 (cmd /k 로 결과 유지)
-            launch_in_terminal(&result.item.path);
+            // 사용자 명령 → 새 터미널 창에서 실행 (결과가 화면에 유지됨)
+            if let Err(e) = builtin_shell::launch_in_terminal(&result.item.path) {
+                tracing::warn!("터미널 실행 실패: {e}");
+            }
             return iced::exit();
         }
 
