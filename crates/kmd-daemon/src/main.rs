@@ -63,6 +63,7 @@ fn send_status() -> Result<()> {
             index_items,
             pid,
             keymap_layers,
+            config_error,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
@@ -72,6 +73,10 @@ fn send_status() -> Result<()> {
                 println!("  레이어:     {layer}");
             }
             println!("  자동 시작:  {}", autostart_label());
+            if let Some(err) = &config_error {
+                println!("  ⚠ 설정:     {err}");
+                println!("              → 데몬이 기본 설정으로 동작 중입니다. config.toml을 고친 뒤 재시작하세요.");
+            }
         }
         Ok(other) => println!("응답: {other:?}"),
         Err(ipc::IpcError::Io(_)) => {

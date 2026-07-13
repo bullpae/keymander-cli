@@ -17,9 +17,8 @@ pub fn run() -> color_eyre::Result<()> {
     // Shutdown 요청 → 채널로 메인 스레드를 즉시 깨운다 (200ms 폴링 제거)
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
-    // 설정 로드
+    // 설정 로드 (성공/폴백 로그는 load_config 내부에서)
     let config = load_config();
-    tracing::info!("설정 로드 완료");
 
     // 키 바인딩 엔진 시작
     let mut kb_backend = keybind::create_backend();
@@ -162,6 +161,7 @@ fn process_request(
                 index_items: items,
                 pid: std::process::id(),
                 keymap_layers: KEYMAP_SUMMARY.lock().map(|g| g.clone()).unwrap_or_default(),
+                config_error: CONFIG_LOAD_ERROR.lock().map(|g| g.clone()).unwrap_or(None),
             }
         }
 
@@ -245,9 +245,31 @@ fn process_request(
     }
 }
 
+/// config.toml 로드 실패 메시지 — `kmd daemon status`로 노출한다.
+/// TOML 문법 오류(테이블 중복 정의 등)가 조용히 기본값 폴백되면 사용자는
+/// 설정이 반영된 줄 알게 되므로, 에러를 상태 조회에서 바로 볼 수 있어야 한다.
+static CONFIG_LOAD_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
 fn load_config() -> Config {
     let config_dir = Config::default_config_dir();
-    Config::load(&config_dir).unwrap_or_default()
+    match Config::load(&config_dir) {
+        Ok(config) => {
+            if let Ok(mut g) = CONFIG_LOAD_ERROR.lock() {
+                *g = None;
+            }
+            tracing::info!("설정 로드 완료: {}", config_dir.display());
+            config
+        }
+        Err(e) => {
+            // 데몬은 계속 떠 있어야 하므로 기본값으로 폴백하되 에러를 명확히 남긴다
+            let msg = format!("{} 로드 실패: {e}", config_dir.display());
+            tracing::error!("{msg} — 기본 설정으로 동작합니다");
+            if let Ok(mut g) = CONFIG_LOAD_ERROR.lock() {
+                *g = Some(msg);
+            }
+            Config::default()
+        }
+    }
 }
 
 /// config의 keymap 설정에 따라 KeybindConfig 결정.

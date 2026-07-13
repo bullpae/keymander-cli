@@ -59,6 +59,10 @@ pub enum Response {
         /// 실행 중인 키맵 레이어 요약 (구버전 데몬 응답에는 없음 → 기본 빈 목록)
         #[serde(default)]
         keymap_layers: Vec<String>,
+        /// config.toml 로드 실패 메시지 — 있으면 데몬이 기본값으로 동작 중이라는
+        /// 뜻이다 (구버전 데몬 응답에는 없음 → 기본 None)
+        #[serde(default)]
+        config_error: Option<String>,
     },
     /// 자동 시작 등록 상태
     AutostartStatus { installed: bool },
@@ -263,6 +267,7 @@ mod tests {
             index_items: 1000,
             pid: 12345,
             keymap_layers: vec!["nav: LAlt".into()],
+            config_error: None,
         };
         let encoded = encode_response(&res).unwrap();
         let decoded = decode_response(&encoded).unwrap();
@@ -272,6 +277,7 @@ mod tests {
                 index_items,
                 pid,
                 keymap_layers,
+                ..
             } => {
                 assert_eq!(uptime_secs, 42);
                 assert_eq!(index_items, 1000);
@@ -287,7 +293,14 @@ mod tests {
         // 구버전 데몬 응답(keymap_layers 없음)과의 하위 호환
         let old = r#"{"type":"Status","uptime_secs":1,"index_items":2,"pid":3}"#;
         match decode_response(old).unwrap() {
-            Response::Status { keymap_layers, .. } => assert!(keymap_layers.is_empty()),
+            Response::Status {
+                keymap_layers,
+                config_error,
+                ..
+            } => {
+                assert!(keymap_layers.is_empty());
+                assert!(config_error.is_none());
+            }
             _ => panic!("잘못된 타입"),
         }
     }
