@@ -9,7 +9,7 @@ use super::engine::{EngineState, KeyDecision};
 use super::{resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 // ── Core Graphics / Core Foundation FFI ──────────────────────────────────────
@@ -621,11 +621,48 @@ fn tick_ms() -> u32 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u32
 }
 
-/// 엔진 결정 실행 — 레이어 컨텍스트가 있으면 트리거 수정자 해제 경로 사용
+/// 엔진 결정 실행 — 레이어 컨텍스트가 있으면 트리거 수정자 해제 경로 사용.
+/// **워커 스레드에서만 호출** — 매크로 스텝 sleep 등이 포함되므로
+/// 탭 콜백에서 직접 부르면 kCGEventTapDisabledByTimeout 위험이 있다.
 fn run_action(action: &BindAction, layer_trigger: Option<VKey>) {
     match layer_trigger {
         Some(trigger) => execute_layer_action(action, trigger),
         None => execute_action(action),
+    }
+}
+
+// ── 액션 워커 ────────────────────────────────────────────────────────────────
+//
+// 탭 콜백은 큐잉만 하고 즉시 반환한다 (Windows 어댑터와 동일 구조).
+// 콜백이 느리면 macOS가 탭을 kCGEventTapDisabledByTimeout으로 꺼버리고,
+// 재활성화까지 키 이벤트가 가로채지지 않은 채 통과한다. 매크로 스텝 sleep
+// (5ms/스텝), 레이어 액션의 수정자 해제 지연(3ms) 등은 전부 워커에서 수행.
+
+/// 워커 스레드 작업 — 일회성 액션 또는 코드(chord) 모드 주입/해제
+enum WorkerJob {
+    Action {
+        action: BindAction,
+        layer_trigger: Option<VKey>,
+    },
+    /// 코드 진입: 트리거 down → 키 down 주입 (탭 재진입은 MAGIC_USER_DATA로 차단)
+    ChordEngage { trigger: VKey, key: VKey },
+    /// 코드 해제: 트리거 up 주입
+    ChordRelease { trigger: VKey },
+}
+
+/// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
+static ACTION_TX: Mutex<Option<mpsc::Sender<WorkerJob>>> = Mutex::new(None);
+
+/// 작업을 워커 스레드 큐에 넣는다 (탭 콜백에서 호출 — 블로킹 없음)
+fn queue_job(job: WorkerJob) {
+    let sender = ACTION_TX.lock().ok().and_then(|g| g.clone());
+    match sender {
+        Some(tx) => {
+            if tx.send(job).is_err() {
+                tracing::warn!("액션 워커가 종료되어 작업을 실행하지 못했습니다");
+            }
+        }
+        None => tracing::warn!("액션 워커 미시작 — 작업 무시"),
     }
 }
 
@@ -721,7 +758,10 @@ unsafe extern "C" fn event_tap_callback(
                 layer_trigger,
             } => {
                 drop(guard);
-                run_action(&action, layer_trigger);
+                queue_job(WorkerJob::Action {
+                    action,
+                    layer_trigger,
+                });
                 std::ptr::null_mut()
             }
             // 코드 진입 (flagsChanged 경로로는 실제 발생하지 않지만 대칭 구현)
@@ -729,19 +769,23 @@ unsafe extern "C" fn event_tap_callback(
                 drop(guard);
                 // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
                 tracing::debug!("chord engage: {trigger:?}+미매핑 키");
-                send_chord_engage(trigger, key);
+                queue_job(WorkerJob::ChordEngage { trigger, key });
                 std::ptr::null_mut()
             }
-            // 코드 해제: 물리 트리거 up(flagsChanged)을 억제하고 주입 up으로 대체
+            // 코드 해제: 물리 트리거 up(flagsChanged)을 억제하고 주입 up으로 대체.
+            // 지연 Launch는 해제 뒤에 실행 (FIFO 큐가 순서 보장)
             KeyDecision::ReleaseChord {
                 trigger,
                 deferred_action,
             } => {
                 drop(guard);
                 tracing::debug!("chord release: {trigger:?}");
-                send_key_event(vkey_to_cg(trigger), false, 0);
+                queue_job(WorkerJob::ChordRelease { trigger });
                 if let Some(action) = deferred_action {
-                    run_action(&action, None);
+                    queue_job(WorkerJob::Action {
+                        action,
+                        layer_trigger: None,
+                    });
                 }
                 std::ptr::null_mut()
             }
@@ -767,7 +811,10 @@ unsafe extern "C" fn event_tap_callback(
             layer_trigger,
         } => {
             drop(guard);
-            run_action(&action, layer_trigger);
+            queue_job(WorkerJob::Action {
+                action,
+                layer_trigger,
+            });
             std::ptr::null_mut()
         }
         // 코드 진입: 물리 키 down을 억제하고 트리거 down + 키 down을 주입.
@@ -777,7 +824,7 @@ unsafe extern "C" fn event_tap_callback(
             drop(guard);
             // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
             tracing::debug!("chord engage: {trigger:?}+미매핑 키");
-            send_chord_engage(trigger, key);
+            queue_job(WorkerJob::ChordEngage { trigger, key });
             std::ptr::null_mut()
         }
         // 코드 해제 (keymap 토글이 코드 모드를 끊는 경우 이 경로로도 온다)
@@ -787,9 +834,12 @@ unsafe extern "C" fn event_tap_callback(
         } => {
             drop(guard);
             tracing::debug!("chord release: {trigger:?}");
-            send_key_event(vkey_to_cg(trigger), false, 0);
+            queue_job(WorkerJob::ChordRelease { trigger });
             if let Some(action) = deferred_action {
-                run_action(&action, None);
+                queue_job(WorkerJob::Action {
+                    action,
+                    layer_trigger: None,
+                });
             }
             std::ptr::null_mut()
         }
@@ -807,6 +857,7 @@ unsafe impl Sync for SendPtr {}
 pub struct MacOSKeyboardBackend {
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    action_worker: Option<std::thread::JoinHandle<()>>,
     run_loop: Arc<Mutex<Option<SendPtr>>>,
 }
 
@@ -815,6 +866,7 @@ impl MacOSKeyboardBackend {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             thread: None,
+            action_worker: None,
             run_loop: Arc::new(Mutex::new(None)),
         }
     }
@@ -876,6 +928,28 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         } else {
             let _ = HOOK_STATE.set(Arc::new(Mutex::new(new_state)));
         }
+
+        // 액션 워커 시작 — 탭 콜백은 큐잉만 하고 실행은 이 스레드가 담당
+        let (action_tx, action_rx) = mpsc::channel::<WorkerJob>();
+        match ACTION_TX.lock() {
+            Ok(mut g) => *g = Some(action_tx),
+            Err(_) => return Err("액션 큐 잠금 실패".into()),
+        }
+        self.action_worker = Some(std::thread::spawn(move || {
+            for job in action_rx {
+                match job {
+                    WorkerJob::Action {
+                        action,
+                        layer_trigger,
+                    } => run_action(&action, layer_trigger),
+                    WorkerJob::ChordEngage { trigger, key } => send_chord_engage(trigger, key),
+                    WorkerJob::ChordRelease { trigger } => {
+                        send_key_event(vkey_to_cg(trigger), false, 0)
+                    }
+                }
+            }
+            tracing::debug!("액션 워커 종료");
+        }));
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
@@ -980,6 +1054,13 @@ impl KeyboardBackend for MacOSKeyboardBackend {
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        // 센더를 드롭하면 워커가 남은 큐를 소진한 뒤 recv 루프를 끝낸다
+        if let Ok(mut g) = ACTION_TX.lock() {
+            *g = None;
+        }
+        if let Some(worker) = self.action_worker.take() {
+            let _ = worker.join();
         }
         Ok(())
     }
