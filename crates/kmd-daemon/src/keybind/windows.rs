@@ -159,99 +159,17 @@ fn vkey_to_vk(key: VKey) -> u16 {
     }
 }
 
-/// Windows VK 코드 → VKey 변환
+/// Windows VK 코드 → VKey 역변환.
+///
+/// 정방향 [`vkey_to_vk`](컴파일러가 변형 누락을 잡는 exhaustive match)에서
+/// 자동 생성한다 — 거울상 match 두 벌을 손으로 유지하다 어긋나는 것 방지.
+/// 정합성은 왕복 테스트(`vk_왕복_변환_일치`)가 보장한다.
 fn vk_to_vkey(vk: u16) -> Option<VKey> {
-    match vk {
-        0x41 => Some(VKey::A),
-        0x42 => Some(VKey::B),
-        0x43 => Some(VKey::C),
-        0x44 => Some(VKey::D),
-        0x45 => Some(VKey::E),
-        0x46 => Some(VKey::F),
-        0x47 => Some(VKey::G),
-        0x48 => Some(VKey::H),
-        0x49 => Some(VKey::I),
-        0x4A => Some(VKey::J),
-        0x4B => Some(VKey::K),
-        0x4C => Some(VKey::L),
-        0x4D => Some(VKey::M),
-        0x4E => Some(VKey::N),
-        0x4F => Some(VKey::O),
-        0x50 => Some(VKey::P),
-        0x51 => Some(VKey::Q),
-        0x52 => Some(VKey::R),
-        0x53 => Some(VKey::S),
-        0x54 => Some(VKey::T),
-        0x55 => Some(VKey::U),
-        0x56 => Some(VKey::V),
-        0x57 => Some(VKey::W),
-        0x58 => Some(VKey::X),
-        0x59 => Some(VKey::Y),
-        0x5A => Some(VKey::Z),
-        0x30 => Some(VKey::Num0),
-        0x31 => Some(VKey::Num1),
-        0x32 => Some(VKey::Num2),
-        0x33 => Some(VKey::Num3),
-        0x34 => Some(VKey::Num4),
-        0x35 => Some(VKey::Num5),
-        0x36 => Some(VKey::Num6),
-        0x37 => Some(VKey::Num7),
-        0x38 => Some(VKey::Num8),
-        0x39 => Some(VKey::Num9),
-        v if v == VK_F1 => Some(VKey::F1),
-        v if v == VK_F2 => Some(VKey::F2),
-        v if v == VK_F3 => Some(VKey::F3),
-        v if v == VK_F4 => Some(VKey::F4),
-        v if v == VK_F5 => Some(VKey::F5),
-        v if v == VK_F6 => Some(VKey::F6),
-        v if v == VK_F7 => Some(VKey::F7),
-        v if v == VK_F8 => Some(VKey::F8),
-        v if v == VK_F9 => Some(VKey::F9),
-        v if v == VK_F10 => Some(VKey::F10),
-        v if v == VK_F11 => Some(VKey::F11),
-        v if v == VK_F12 => Some(VKey::F12),
-        v if v == VK_ESCAPE => Some(VKey::Escape),
-        v if v == VK_TAB => Some(VKey::Tab),
-        v if v == VK_CAPITAL => Some(VKey::CapsLock),
-        v if v == VK_SPACE => Some(VKey::Space),
-        v if v == VK_RETURN => Some(VKey::Enter),
-        v if v == VK_BACK => Some(VKey::Backspace),
-        v if v == VK_DELETE => Some(VKey::Delete),
-        v if v == VK_LEFT => Some(VKey::Left),
-        v if v == VK_RIGHT => Some(VKey::Right),
-        v if v == VK_UP => Some(VKey::Up),
-        v if v == VK_DOWN => Some(VKey::Down),
-        v if v == VK_HOME => Some(VKey::Home),
-        v if v == VK_END => Some(VKey::End),
-        v if v == VK_PRIOR => Some(VKey::PageUp),
-        v if v == VK_NEXT => Some(VKey::PageDown),
-        v if v == VK_INSERT => Some(VKey::Insert),
-        v if v == VK_SNAPSHOT => Some(VKey::PrintScreen),
-        v if v == VK_SCROLL => Some(VKey::ScrollLock),
-        v if v == VK_PAUSE => Some(VKey::Pause),
-        v if v == VK_LSHIFT => Some(VKey::LShift),
-        v if v == VK_RSHIFT => Some(VKey::RShift),
-        v if v == VK_LCONTROL => Some(VKey::LCtrl),
-        v if v == VK_RCONTROL => Some(VKey::RCtrl),
-        v if v == VK_LMENU => Some(VKey::LAlt),
-        v if v == VK_RMENU => Some(VKey::RAlt),
-        v if v == VK_LWIN => Some(VKey::LWin),
-        v if v == VK_RWIN => Some(VKey::RWin),
-        v if v == VK_OEM_1 => Some(VKey::Semicolon),
-        v if v == VK_OEM_7 => Some(VKey::Quote),
-        v if v == VK_OEM_COMMA => Some(VKey::Comma),
-        v if v == VK_OEM_PERIOD => Some(VKey::Period),
-        v if v == VK_OEM_2 => Some(VKey::Slash),
-        v if v == VK_OEM_5 => Some(VKey::Backslash),
-        v if v == VK_OEM_4 => Some(VKey::LBracket),
-        v if v == VK_OEM_6 => Some(VKey::RBracket),
-        v if v == VK_OEM_MINUS => Some(VKey::Minus),
-        v if v == VK_OEM_PLUS => Some(VKey::Equal),
-        v if v == VK_OEM_3 => Some(VKey::Grave),
-        0x15 => Some(VKey::Hangul),
-        0x19 => Some(VKey::Hanja),
-        _ => None,
-    }
+    static REVERSE: OnceLock<std::collections::HashMap<u16, VKey>> = OnceLock::new();
+    REVERSE
+        .get_or_init(|| VKey::ALL.iter().map(|&k| (vkey_to_vk(k), k)).collect())
+        .get(&vk)
+        .copied()
 }
 
 // ── SendInput 헬퍼 ──────────────────────────────────────────────────────────
@@ -610,5 +528,19 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 자동 생성 역변환의 정합성: 모든 VKey가 왕복 변환에서 자기 자신으로
+    /// 돌아와야 한다. VK 코드가 겹치면(비단사) 여기서 즉시 실패한다.
+    #[test]
+    fn vk_왕복_변환_일치() {
+        for &k in VKey::ALL {
+            assert_eq!(vk_to_vkey(vkey_to_vk(k)), Some(k), "{k:?} 왕복 불일치");
+        }
     }
 }
