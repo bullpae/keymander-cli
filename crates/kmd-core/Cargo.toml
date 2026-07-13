@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "kmd-core"
 version = "0.9.5"
 edition = "2021"
