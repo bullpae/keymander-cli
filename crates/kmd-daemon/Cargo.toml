@@ -1,8 +1,8 @@
-[package]
+﻿[package]
 name = "kmd-daemon"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
-description = "keymander Daemon — background service with IPC, global hotkey, key bindings"
+description = "keymander Daemon ??background service with IPC, global hotkey, key bindings"
 
 [[bin]]
 name = "kmd-daemon"

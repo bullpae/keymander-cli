@@ -219,11 +219,13 @@ impl EngineState {
         let is_up = !is_down;
 
         // ── 1. 수정자 키 물리 상태 추적 ──
+        // (mods_used_while_held와 modifiers_held는 서로 다른 필드라 동시 차용
+        // 가능 — 키 이벤트마다 도는 훅 경로이므로 중간 Vec 할당 없이 복사)
         if is_modifier_key(&vkey) {
             if is_down {
                 // 새 수정자가 합류하면 기존 홀드 중 수정자들은 "사용됨"으로 표시
-                let held: Vec<VKey> = self.modifiers_held.iter().copied().collect();
-                self.mods_used_while_held.extend(held);
+                self.mods_used_while_held
+                    .extend(self.modifiers_held.iter().copied());
                 self.modifiers_held.insert(vkey);
                 // 새로 눌린 키 자신은 깨끗한 탭 후보로 시작
                 self.mods_used_while_held.remove(&vkey);
@@ -233,8 +235,8 @@ impl EngineState {
         } else if is_down {
             // 일반 키 down과 함께 홀드 중인 수정자는 전부 "사용됨" — 이후 keyup이
             // 더블탭의 탭으로 기록되지 않게 한다 (콤보로 소비되기 전에 마킹)
-            let held: Vec<VKey> = self.modifiers_held.iter().copied().collect();
-            self.mods_used_while_held.extend(held);
+            self.mods_used_while_held
+                .extend(self.modifiers_held.iter().copied());
         }
 
         // ── keymap on/off 토글 ──
