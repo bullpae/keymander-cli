@@ -398,8 +398,9 @@ fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
 }
 
 fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
-    let data_dir = Config::default_data_dir();
-    std::fs::create_dir_all(&data_dir)?;
+    // 런타임 파일은 포터블 모드와 무관하게 OS 표준 사용자 디렉터리에 둔다
+    // (토큰 노출 방지 — ipc::runtime_dir 문서 참조)
+    std::fs::create_dir_all(ipc::runtime_dir())?;
 
     // daemon.port: line1=port, line2=token (동일 사용자만 읽도록 Unix 0600).
     // 쓰기 후 chmod 하면 그 사이에 다른 사용자가 읽을 수 있으므로

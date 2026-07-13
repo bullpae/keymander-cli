@@ -45,7 +45,13 @@ restart_daemon() {
 
     info "데몬 시작 중..."
     mkdir -p "$DEPLOY_DIR/kmd-data"
-    nohup "$DEPLOY_DIR/kmd-daemon" > "$DEPLOY_DIR/kmd-data/daemon.log" 2>&1 &
+    # 로그는 런타임 디렉터리(OS 표준)로 — kmd daemon status가 보여주는 경로와 일치
+    case "$(uname -s)" in
+        Darwin) RUNTIME_DIR="$HOME/Library/Application Support/kmd" ;;
+        *)      RUNTIME_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kmd" ;;
+    esac
+    mkdir -p "$RUNTIME_DIR"
+    nohup "$DEPLOY_DIR/kmd-daemon" > "$RUNTIME_DIR/daemon.log" 2>&1 &
     sleep 1
 
     if pgrep -f kmd-daemon > /dev/null; then

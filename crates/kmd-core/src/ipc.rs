@@ -86,18 +86,34 @@ pub struct SearchHit {
 
 // ── 경로 헬퍼 ────────────────────────────────────────────────────────────────
 
+/// 데몬 런타임 파일 디렉터리.
+///
+/// 포터블 모드(kmd-data/)와 무관하게 **항상 OS 표준 사용자 데이터 디렉터리**를
+/// 쓴다. daemon.port에는 인증 토큰이 들어 있는데, 포터블 설치 위치(USB,
+/// C:\ 아래 공용 폴더 등)는 다른 로컬 계정이 읽을 수 있어 토큰이 노출된다.
+/// 런타임 파일은 재부팅/재시작마다 새로 만드는 일회성이므로 호스트에 두어도
+/// 포터블 설치의 이동성(설정·데이터는 kmd-data/ 유지)을 해치지 않는다.
+pub fn runtime_dir() -> PathBuf {
+    crate::Config::system_data_dir()
+}
+
 /// 데몬 런타임 파일 경로. 형식:
 /// ```text
 /// <port>
 /// <token-hex>
 /// ```
 pub fn port_file_path() -> PathBuf {
-    crate::Config::default_data_dir().join("daemon.port")
+    runtime_dir().join("daemon.port")
 }
 
 /// 데몬 PID 파일 경로
 pub fn pid_file_path() -> PathBuf {
-    crate::Config::default_data_dir().join("daemon.pid")
+    runtime_dir().join("daemon.pid")
+}
+
+/// 데몬 로그 파일 경로 (시작마다 새로 씀)
+pub fn log_file_path() -> PathBuf {
+    runtime_dir().join("daemon.log")
 }
 
 // ── 인증 토큰 ────────────────────────────────────────────────────────────────

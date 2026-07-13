@@ -22,9 +22,9 @@ pub fn run(action: Action) -> Result<()> {
     }
 }
 
-/// 데몬 로그 파일 경로 (데이터 디렉터리 아래, 시작마다 새로 씀)
+/// 데몬 로그 파일 경로 (런타임 디렉터리 아래, 시작마다 새로 씀)
 fn daemon_log_path() -> std::path::PathBuf {
-    kmd_core::config::Config::default_data_dir().join("daemon.log")
+    ipc::log_file_path()
 }
 
 /// 데몬 stdout/stderr 리다이렉트 대상. 로그 파일 생성 실패 시 null 폴백.
