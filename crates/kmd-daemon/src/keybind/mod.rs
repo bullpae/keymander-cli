@@ -209,122 +209,6 @@ impl VKey {
     }
 }
 
-// ── 플랫폼별 키 헬퍼 (프리셋 생성 시 사용) ──────────────────────────────────
-
-/// 복사/붙여넣기에 사용할 수정자 (macOS: Cmd, Windows/Linux: Ctrl)
-#[cfg(target_os = "macos")]
-fn platform_copy_modifier() -> VKey {
-    VKey::LWin
-}
-#[cfg(not(target_os = "macos"))]
-fn platform_copy_modifier() -> VKey {
-    VKey::LCtrl
-}
-
-/// 단어 이동에 사용할 수정자 (macOS: Option, Windows/Linux: Ctrl)
-#[cfg(target_os = "macos")]
-fn platform_word_modifier() -> VKey {
-    VKey::LAlt
-}
-#[cfg(not(target_os = "macos"))]
-fn platform_word_modifier() -> VKey {
-    VKey::LCtrl
-}
-
-/// 줄 시작 액션 (macOS: Cmd+Left — 한글 IME에서도 안정 동작, Windows/Linux: Home)
-#[cfg(target_os = "macos")]
-fn platform_home_action() -> BindAction {
-    BindAction::SendCombo {
-        modifiers: vec![VKey::LWin],
-        key: VKey::Left,
-    }
-}
-#[cfg(not(target_os = "macos"))]
-fn platform_home_action() -> BindAction {
-    BindAction::SendKey(VKey::Home)
-}
-
-/// 줄 끝 액션 (macOS: Cmd+Right — 한글 IME에서도 안정 동작, Windows/Linux: End)
-#[cfg(target_os = "macos")]
-fn platform_end_action() -> BindAction {
-    BindAction::SendCombo {
-        modifiers: vec![VKey::LWin],
-        key: VKey::Right,
-    }
-}
-#[cfg(not(target_os = "macos"))]
-fn platform_end_action() -> BindAction {
-    BindAction::SendKey(VKey::End)
-}
-
-/// 줄 전체 복사 매크로 스텝 (줄 시작 → 줄 끝까지 선택 → 복사)
-/// macOS: Cmd+Left → Shift+Cmd+Right → Cmd+C (한글 IME 안정)
-/// Windows/Linux: Home → Shift+End → Ctrl+C
-#[cfg(target_os = "macos")]
-fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
-    vec![
-        MacroStep::Combo {
-            modifiers: vec![VKey::LWin],
-            key: VKey::Left,
-        },
-        MacroStep::Combo {
-            modifiers: vec![VKey::LShift, VKey::LWin],
-            key: VKey::Right,
-        },
-        MacroStep::Combo {
-            modifiers: vec![copy_mod],
-            key: VKey::C,
-        },
-    ]
-}
-
-/// 줄 전체 삭제 액션
-/// macOS: Cmd+Left → Shift+Cmd+Right → Delete (한글 IME 안정)
-/// Windows/Linux: Home → Shift+End → Delete
-#[cfg(target_os = "macos")]
-fn platform_line_delete_action() -> BindAction {
-    BindAction::Macro(vec![
-        MacroStep::Combo {
-            modifiers: vec![VKey::LWin],
-            key: VKey::Left,
-        },
-        MacroStep::Combo {
-            modifiers: vec![VKey::LShift, VKey::LWin],
-            key: VKey::Right,
-        },
-        MacroStep::KeyPress(VKey::Delete),
-        MacroStep::KeyRelease(VKey::Delete),
-    ])
-}
-#[cfg(not(target_os = "macos"))]
-fn platform_line_delete_action() -> BindAction {
-    BindAction::Macro(vec![
-        MacroStep::KeyPress(VKey::Home),
-        MacroStep::KeyRelease(VKey::Home),
-        MacroStep::Combo {
-            modifiers: vec![VKey::LShift],
-            key: VKey::End,
-        },
-        MacroStep::KeyPress(VKey::Delete),
-        MacroStep::KeyRelease(VKey::Delete),
-    ])
-}
-#[cfg(not(target_os = "macos"))]
-fn line_copy_steps(copy_mod: VKey) -> Vec<MacroStep> {
-    vec![
-        MacroStep::KeyPress(VKey::Home),
-        MacroStep::KeyRelease(VKey::Home),
-        MacroStep::Combo {
-            modifiers: vec![VKey::LShift],
-            key: VKey::End,
-        },
-        MacroStep::Combo {
-            modifiers: vec![copy_mod],
-            key: VKey::C,
-        },
-    ]
-}
-
 // ── Launch 커맨드 경로 해석 ──────────────────────────────────────────────────
 
 /// `launch:name` 액션에서 실행 경로를 결정한다.
@@ -507,190 +391,13 @@ impl KeybindConfig {
         }
     }
 
-    /// vim-nav 프리셋: Alt(Option) 홀드 → Vim 네비게이션
-    ///
-    /// macOS/Windows 차이:
-    /// - 단어 이동: macOS=Option+화살표, Windows=Ctrl+화살표
-    /// - 복사/붙여넣기: macOS=Cmd+C/V, Windows=Ctrl+C/V
-    /// - 줄 시작/끝: macOS=Cmd+화살표, Windows=Home/End
-    pub fn vim_nav_preset() -> Self {
-        let copy_mod = platform_copy_modifier();
-        let word_mod = platform_word_modifier();
-
-        let mut mappings = HashMap::new();
-        mappings.insert(VKey::H, BindAction::SendKey(VKey::Left));
-        mappings.insert(VKey::J, BindAction::SendKey(VKey::Down));
-        mappings.insert(VKey::K, BindAction::SendKey(VKey::Up));
-        mappings.insert(VKey::L, BindAction::SendKey(VKey::Right));
-        mappings.insert(VKey::N, BindAction::SendKey(VKey::PageUp));
-        mappings.insert(VKey::M, BindAction::SendKey(VKey::PageDown));
-        mappings.insert(VKey::Period, BindAction::SendKey(VKey::Backspace));
-        mappings.insert(VKey::Space, BindAction::Launch("kmd-desktop".into()));
-        // y → 줄 복사
-        mappings.insert(VKey::Y, BindAction::Macro(line_copy_steps(copy_mod)));
-        // p → 붙여넣기
-        mappings.insert(
-            VKey::P,
-            BindAction::SendCombo {
-                modifiers: vec![copy_mod],
-                key: VKey::V,
-            },
-        );
-        let mut double_tap_mappings = HashMap::new();
-        // I: 탭 → 단어 왼쪽, 더블탭 → 줄 시작
-        double_tap_mappings.insert(
-            VKey::I,
-            LayerDoubleTap {
-                single_action: BindAction::SendCombo {
-                    modifiers: vec![word_mod],
-                    key: VKey::Left,
-                },
-                double_action: platform_home_action(),
-                timeout_ms: 300,
-            },
-        );
-        // O: 탭 → 단어 오른쪽, 더블탭 → 줄 끝
-        double_tap_mappings.insert(
-            VKey::O,
-            LayerDoubleTap {
-                single_action: BindAction::SendCombo {
-                    modifiers: vec![word_mod],
-                    key: VKey::Right,
-                },
-                double_action: platform_end_action(),
-                timeout_ms: 300,
-            },
-        );
-        // /: 탭 → Delete, 더블탭 → 현재 줄 삭제
-        double_tap_mappings.insert(
-            VKey::Slash,
-            LayerDoubleTap {
-                single_action: BindAction::SendKey(VKey::Delete),
-                double_action: platform_line_delete_action(),
-                timeout_ms: 300,
-            },
-        );
-
-        Self {
-            remaps: HashMap::new(),
-            layers: vec![Layer {
-                name: "nav".into(),
-                trigger: VKey::LAlt,
-                tap_action: Some(VKey::Escape),
-                tap_hold_ms: 200,
-                unmapped: UnmappedBehavior::default(),
-                mappings,
-                double_tap_mappings,
-            }],
-            combos: default_hangul_combos(),
-            double_taps: default_hangul_double_taps(),
-            toggle_keymap: None,
-        }
-    }
-
-    /// minimal 프리셋: CapsLock → Escape
-    pub fn minimal_preset() -> Self {
-        let mut remaps = HashMap::new();
-        remaps.insert(VKey::CapsLock, BindAction::SendKey(VKey::Escape));
-        Self {
-            remaps,
-            layers: vec![],
-            combos: default_hangul_combos(),
-            double_taps: default_hangul_double_taps(),
-            toggle_keymap: None,
-        }
-    }
-
-    /// base(프리셋)에 custom(사용자 config)을 deep merge.
-    /// - remaps/combos/double_taps: custom이 base를 덮어씀
-    /// - layers: 같은 name → 키 단위 병합 (custom이 우선), 새 name → 추가
-    pub fn merge(mut self, custom: Self) -> Self {
-        for (k, v) in custom.remaps {
-            self.remaps.insert(k, v);
-        }
-
-        for custom_layer in custom.layers {
-            if let Some(pos) = self
-                .layers
-                .iter()
-                .position(|layer| layer.name == custom_layer.name)
-            {
-                let bl = &mut self.layers[pos];
-                bl.trigger = custom_layer.trigger;
-                if custom_layer.tap_action.is_some() {
-                    bl.tap_action = custom_layer.tap_action;
-                }
-                bl.tap_hold_ms = custom_layer.tap_hold_ms;
-                bl.unmapped = custom_layer.unmapped;
-                for (k, v) in custom_layer.mappings {
-                    bl.mappings.insert(k, v);
-                }
-                for (k, v) in custom_layer.double_tap_mappings {
-                    bl.double_tap_mappings.insert(k, v);
-                }
-            } else {
-                self.layers.push(custom_layer);
-            }
-        }
-
-        for (trigger, action) in custom.combos {
-            if let Some(pos) = self
-                .combos
-                .iter()
-                .position(|(t, _)| t.key == trigger.key && t.modifiers == trigger.modifiers)
-            {
-                self.combos[pos] = (trigger, action);
-            } else {
-                self.combos.push((trigger, action));
-            }
-        }
-
-        for dt in custom.double_taps {
-            if let Some(pos) = self.double_taps.iter().position(|x| x.key == dt.key) {
-                self.double_taps[pos] = dt;
-            } else {
-                self.double_taps.push(dt);
-            }
-        }
-
-        if custom.toggle_keymap.is_some() {
-            self.toggle_keymap = custom.toggle_keymap;
-        }
-
-        self
-    }
-}
-
-/// 한/영 전환 콤보 기본값 — 전 플랫폼 공통 Shift+Space.
-///
-/// Windows는 VKey::Hangul(0x15)을 직접 전송하고, macOS는 execute_action에서
-/// TIS API(toggle_input_source)로 입력 소스를 전환한다. 어느 쪽이든 물리적
-/// 한/영 키가 없는 60% 키보드에서 동일한 제스처(Shift+Space)를 제공한다.
-fn default_hangul_combos() -> Vec<(ComboTrigger, BindAction)> {
-    vec![(
-        ComboTrigger {
-            modifiers: vec![Modifier::Shift],
-            key: VKey::Space,
-        },
-        BindAction::SendKey(VKey::Hangul),
-    )]
-}
-
-#[cfg(target_os = "windows")]
-fn default_hangul_double_taps() -> Vec<DoubleTapBinding> {
-    vec![DoubleTapBinding {
-        key: VKey::RShift,
-        action: BindAction::SendKey(VKey::Hangul),
-        timeout_ms: 300,
-    }]
-}
-
-#[cfg(not(target_os = "windows"))]
-fn default_hangul_double_taps() -> Vec<DoubleTapBinding> {
-    Vec::new()
 }
 
 // ── TOML 설정 → KeybindConfig 변환 ───────────────────────────────────────────
+//
+// 프리셋 기본값(vim-nav/minimal)과 사용자 config 병합은 kmd-core의
+// keymap::effective_keymap이 단일 소스로 수행한다. 이 모듈은 병합이 끝난
+// TOML 설정을 런타임 타입으로 변환만 한다.
 
 impl KeybindConfig {
     /// kmd-core의 TOML 설정을 런타임 KeybindConfig로 변환
@@ -1007,9 +714,17 @@ mod tests {
         assert_eq!(VKey::from_name("unknown"), None);
     }
 
+    /// kmd-core effective_keymap(단일 소스) 경유로 프리셋 → 엔진 설정 변환
+    fn preset_config(profile: &str) -> Option<KeybindConfig> {
+        let mut keymap = kmd_core::config::KeymapConfig::default();
+        keymap.active_profile = profile.to_string();
+        let effective = kmd_core::keymap::effective_keymap(&keymap);
+        KeybindConfig::from_config(&effective)
+    }
+
     #[test]
     fn test_vim_nav_preset() {
-        let config = KeybindConfig::vim_nav_preset();
+        let config = preset_config("vim-nav").expect("vim-nav 프리셋은 항상 레이어를 가진다");
         assert_eq!(config.layers.len(), 1);
         let layer = &config.layers[0];
         assert_eq!(layer.trigger, VKey::LAlt);
@@ -1062,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_minimal_preset() {
-        let config = KeybindConfig::minimal_preset();
+        let config = preset_config("minimal").expect("minimal 프리셋은 remap을 가진다");
         assert!(config.remaps.contains_key(&VKey::CapsLock));
         assert!(config.layers.is_empty());
         #[cfg(target_os = "windows")]

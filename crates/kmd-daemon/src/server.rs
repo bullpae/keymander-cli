@@ -272,14 +272,6 @@ fn load_config() -> Config {
     }
 }
 
-/// config의 keymap 설정에 따라 KeybindConfig 결정.
-///
-/// - "vim-nav": config 파일에 커스텀 설정이 있으면 그 값을 사용, 없으면 하드코딩 프리셋
-/// - "minimal": config 파일 → 없으면 minimal 프리셋
-/// - "none": 키 바인딩 비활성화 (global_hotkey만 동작)
-/// - 기타: TOML 커스텀 설정 시도 → 없으면 vim-nav 프리셋 폴백
-///
-/// `keybindings.global_hotkey`는 프로필과 무관하게 항상 적용됨.
 /// 실행 중인 키맵 레이어 요약 — `kmd daemon status`로 노출해 원격 진단에 쓴다
 /// (어떤 config가 실제 엔진에 적용됐는지 로그 없이 확인 가능).
 static KEYMAP_SUMMARY: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -301,26 +293,10 @@ fn keymap_layer_summaries(kb: &KeybindConfig) -> Vec<String> {
 }
 
 fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
-    let profile = &config.launcher.keymap.active_profile;
-    let keymap_disabled = profile.contains("none");
-
-    let base = if keymap_disabled {
-        KeybindConfig::empty()
-    } else if profile.contains("minimal") {
-        KeybindConfig::minimal_preset()
-    } else {
-        KeybindConfig::vim_nav_preset()
-    };
-
-    let mut kb = if let Some(custom) = KeybindConfig::from_config(&config.launcher.keymap) {
-        merge_keybind_config(base, custom)
-    } else {
-        base
-    };
-
-    if !keymap_disabled {
-        ensure_hangul_fallback(&mut kb);
-    }
+    // 프리셋 기본값·사용자 병합·한/영 폴백은 전부 kmd-core의
+    // effective_keymap(단일 소스)에서 수행된다 — 치트시트와 항상 동일 결과.
+    let effective = kmd_core::keymap::effective_keymap(&config.launcher.keymap);
+    let mut kb = KeybindConfig::from_config(&effective).unwrap_or_else(KeybindConfig::empty);
 
     // global_hotkey → kmd-desktop 실행 콤보 (프로필과 무관하게 항상 등록)
     let hotkey = &config.keybindings.global_hotkey;
@@ -351,50 +327,6 @@ fn resolve_keybind_preset(config: &Config) -> KeybindConfig {
     }
 
     kb
-}
-
-/// 프리셋(base) + 사용자 TOML(custom) 병합. KeybindConfig::merge 위임.
-fn merge_keybind_config(base: KeybindConfig, custom: KeybindConfig) -> KeybindConfig {
-    base.merge(custom)
-}
-
-/// 한/영 전환 기본 제스처를 보장한다.
-///
-/// - Shift+Space → 한/영: 전 플랫폼 공통. macOS는 execute_action에서 TIS API로
-///   입력 소스를 전환하므로, 물리적 한/영 키가 없는 60% 키보드에서도 Windows와
-///   동일한 제스처를 제공한다.
-/// - RShift 더블탭 → 한/영: Windows 전용 보조 제스처.
-fn ensure_hangul_fallback(kb: &mut KeybindConfig) {
-    let has_shift_space = kb.combos.iter().any(|(trigger, _)| {
-        trigger.key == keybind::VKey::Space
-            && trigger.modifiers.len() == 1
-            && trigger.modifiers[0] == keybind::Modifier::Shift
-    });
-
-    if !has_shift_space {
-        kb.combos.push((
-            keybind::ComboTrigger {
-                modifiers: vec![keybind::Modifier::Shift],
-                key: keybind::VKey::Space,
-            },
-            keybind::BindAction::SendKey(keybind::VKey::Hangul),
-        ));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let has_rshift_dt = kb
-            .double_taps
-            .iter()
-            .any(|dt| dt.key == keybind::VKey::RShift);
-        if !has_rshift_dt {
-            kb.double_taps.push(keybind::DoubleTapBinding {
-                key: keybind::VKey::RShift,
-                action: keybind::BindAction::SendKey(keybind::VKey::Hangul),
-                timeout_ms: 300,
-            });
-        }
-    }
 }
 
 fn write_runtime_files(port: u16, token: &str) -> color_eyre::Result<()> {
@@ -432,208 +364,50 @@ fn cleanup_runtime_files() {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn merge_keybind_keeps_base_combos_when_custom_has_none() {
-        let base = KeybindConfig::minimal_preset();
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![],
-            combos: vec![],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
+    // 프리셋·병합 시맨틱 테스트는 단일 소스인 kmd-core::keymap
+    // (effective_keymap)의 테스트로 이동했다. 여기서는 daemon 고유 경로인
+    // "effective → KeybindConfig 변환 + 프로필 비활성"만 확인한다.
 
-        let merged = merge_keybind_config(base, custom);
-        assert!(
-            !merged.combos.is_empty(),
-            "Windows: custom 설정이 비어있어도 base 콤보(Hangul)는 유지되어야 함"
-        );
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn merge_keybind_keeps_base_combos_on_non_windows() {
-        let base = KeybindConfig::minimal_preset();
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![],
-            combos: vec![],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
-
-        let merged = merge_keybind_config(base, custom);
-        assert!(
-            !merged.combos.is_empty(),
-            "macOS/Linux: base의 Shift+Space 한/영 콤보는 유지되어야 함 (크로스플랫폼 통일)"
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn merge_keybind_overrides_same_combo_trigger() {
-        let base = KeybindConfig::minimal_preset();
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![],
-            combos: vec![(
-                keybind::ComboTrigger {
-                    modifiers: vec![keybind::Modifier::Shift],
-                    key: keybind::VKey::Space,
-                },
-                keybind::BindAction::SendKey(keybind::VKey::Hanja),
-            )],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
-
-        let merged = merge_keybind_config(base, custom);
-        let mut matched = false;
-        for (trigger, action) in merged.combos {
-            if trigger.key == keybind::VKey::Space
-                && trigger.modifiers.len() == 1
-                && trigger.modifiers[0] == keybind::Modifier::Shift
-            {
-                matched = matches!(action, keybind::BindAction::SendKey(keybind::VKey::Hanja));
-            }
-        }
-        assert!(matched, "동일 트리거 콤보는 custom 액션으로 덮어써야 함");
+    fn resolve_with_profile(profile: &str) -> KeybindConfig {
+        let mut config = Config::default();
+        config.launcher.keymap.active_profile = profile.to_string();
+        config.keybindings.global_hotkey = String::new();
+        config.keybindings.toggle_keymap = String::new();
+        resolve_keybind_preset(&config)
     }
 
     #[test]
-    fn merge_layer_deep_보존_base_매핑() {
-        let base = KeybindConfig::vim_nav_preset();
-        let base_h = base.layers[0].mappings.contains_key(&keybind::VKey::H);
-        let base_period = base.layers[0].mappings.contains_key(&keybind::VKey::Period);
-        let base_dt_i = base.layers[0]
-            .double_tap_mappings
-            .contains_key(&keybind::VKey::I);
-        assert!(base_h && base_period && base_dt_i, "프리셋 확인");
-
-        // custom은 H만 재정의 → Period, double-tap I 등 base 매핑은 유지
-        let mut custom_mappings = std::collections::HashMap::new();
-        custom_mappings.insert(
-            keybind::VKey::H,
-            keybind::BindAction::SendKey(keybind::VKey::Right),
-        );
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![keybind::Layer {
-                name: "nav".into(),
-                trigger: keybind::VKey::LAlt,
-                tap_action: Some(keybind::VKey::Escape),
-                tap_hold_ms: 200,
-                unmapped: keybind::UnmappedBehavior::default(),
-                mappings: custom_mappings,
-                double_tap_mappings: std::collections::HashMap::new(),
-            }],
-            combos: vec![],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
-
-        let merged = merge_keybind_config(base, custom);
-        assert_eq!(merged.layers.len(), 1);
-        let layer = &merged.layers[0];
-
-        // H는 custom으로 덮어씀
-        assert!(
-            matches!(
-                layer.mappings.get(&keybind::VKey::H),
-                Some(keybind::BindAction::SendKey(keybind::VKey::Right))
-            ),
-            "H는 custom 값(Right)이어야 함"
-        );
-
-        // Period는 base에서 보존
-        assert!(
-            layer.mappings.contains_key(&keybind::VKey::Period),
-            "Period는 base에서 보존되어야 함 (deep merge)"
-        );
-
-        // double-tap I는 base에서 보존
-        assert!(
-            layer.double_tap_mappings.contains_key(&keybind::VKey::I),
-            "double-tap I는 base에서 보존되어야 함"
-        );
-
-        // Space(launch:kmd-desktop)도 base에서 보존
-        assert!(
-            layer.mappings.contains_key(&keybind::VKey::Space),
-            "Space는 base에서 보존되어야 함"
-        );
+    fn resolve_vim_nav_기본_레이어() {
+        let kb = resolve_with_profile("vim-nav");
+        assert_eq!(kb.layers.len(), 1);
+        assert_eq!(kb.layers[0].trigger, keybind::VKey::LAlt);
+        assert!(!kb.combos.is_empty(), "한/영 Shift+Space 콤보 포함");
     }
 
     #[test]
-    fn merge_layer_deep_custom_double_tap_덮어쓰기() {
-        let base = KeybindConfig::vim_nav_preset();
-        let custom_dt = keybind::LayerDoubleTap {
-            single_action: keybind::BindAction::SendKey(keybind::VKey::Home),
-            double_action: keybind::BindAction::SendKey(keybind::VKey::End),
-            timeout_ms: 500,
-        };
-        let mut dt_map = std::collections::HashMap::new();
-        dt_map.insert(keybind::VKey::I, custom_dt);
-
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![keybind::Layer {
-                name: "nav".into(),
-                trigger: keybind::VKey::LAlt,
-                tap_action: None,
-                tap_hold_ms: 200,
-                unmapped: keybind::UnmappedBehavior::default(),
-                mappings: std::collections::HashMap::new(),
-                double_tap_mappings: dt_map,
-            }],
-            combos: vec![],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
-
-        let merged = merge_keybind_config(base, custom);
-        let layer = &merged.layers[0];
-
-        // custom의 double-tap I가 base를 덮어씀
-        let dt = layer.double_tap_mappings.get(&keybind::VKey::I).unwrap();
-        assert_eq!(dt.timeout_ms, 500, "custom timeout_ms 적용");
-
-        // tap_action은 None이면 base 값 유지 (Escape)
-        assert_eq!(
-            layer.tap_action,
-            Some(keybind::VKey::Escape),
-            "custom tap_action이 None이면 base 유지"
-        );
+    fn resolve_확장자_붙은_프로필도_vim_nav() {
+        // 과거 치트시트는 완전 일치("vim-nav")만 프리셋으로 인식해
+        // "vim-nav.kbd"에서 daemon과 표시가 어긋났다 — 회귀 방지
+        let kb = resolve_with_profile("vim-nav.kbd");
+        assert_eq!(kb.layers.len(), 1);
     }
 
     #[test]
-    fn merge_새_레이어_추가() {
-        let base = KeybindConfig::vim_nav_preset();
-        let mut mappings = std::collections::HashMap::new();
-        mappings.insert(
-            keybind::VKey::A,
-            keybind::BindAction::SendKey(keybind::VKey::B),
-        );
-        let custom = KeybindConfig {
-            remaps: std::collections::HashMap::new(),
-            layers: vec![keybind::Layer {
-                name: "custom-layer".into(),
-                trigger: keybind::VKey::RAlt,
-                tap_action: None,
-                tap_hold_ms: 150,
-                unmapped: keybind::UnmappedBehavior::default(),
-                mappings,
-                double_tap_mappings: std::collections::HashMap::new(),
-            }],
-            combos: vec![],
-            double_taps: vec![],
-            toggle_keymap: None,
-        };
+    fn resolve_none_프로필은_키맵_비활성() {
+        let kb = resolve_with_profile("none");
+        assert!(kb.layers.is_empty());
+        assert!(kb.remaps.is_empty());
+        assert!(kb.combos.is_empty(), "비활성 시 한/영 콤보도 없음");
+    }
 
-        let merged = merge_keybind_config(base, custom);
-        assert_eq!(merged.layers.len(), 2, "새 레이어가 추가되어야 함");
-        assert_eq!(merged.layers[1].name, "custom-layer");
+    #[test]
+    fn resolve_global_hotkey는_프로필과_무관() {
+        let mut config = Config::default();
+        config.launcher.keymap.active_profile = "none".to_string();
+        config.keybindings.global_hotkey = "alt+space".to_string();
+        config.keybindings.toggle_keymap = String::new();
+        let kb = resolve_keybind_preset(&config);
+        assert_eq!(kb.combos.len(), 1, "none 프로필에서도 글로벌 핫키는 등록");
     }
 
     #[test]

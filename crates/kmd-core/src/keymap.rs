@@ -526,10 +526,8 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
     }
 }
 
-/// vim-nav 프리셋의 TOML 기본 바인딩.
-/// daemon(kmd-daemon)이 프리셋+사용자 config을 deep merge하여 사용하는데,
-/// desktop은 daemon에 의존하지 않으므로 치트시트 표시용으로 TOML 수준의
-/// 기본값을 여기서 제공한다.
+/// vim-nav 프리셋의 TOML 기본 바인딩 — **기본 레이어 정의의 단일 소스**.
+/// daemon 엔진과 치트시트 모두 [`effective_keymap`]을 거쳐 이 값을 쓴다.
 fn vim_nav_default_layer() -> crate::config::LayerToml {
     use crate::config::{LayerDoubleTapToml, LayerToml};
     let mut mappings = std::collections::HashMap::new();
@@ -620,50 +618,108 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     }
 }
 
-/// active_profile 기반으로 프리셋 기본값을 사용자 config에 병합한 effective keymap 반환
-fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapConfig {
+/// active_profile 문자열이 가리키는 프리셋 종류.
+///
+/// daemon과 치트시트가 각자 다른 규칙(contains vs 완전 일치)으로 판별하던 것을
+/// 통일한 단일 판별 함수. "vim-nav.kbd"처럼 확장자가 붙은 값도 vim-nav로 본다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileKind {
+    /// 키맵 비활성 ("none")
+    Disabled,
+    /// CapsLock → Escape만 ("minimal")
+    Minimal,
+    /// vim-nav 레이어 프리셋 (기본)
+    VimNav,
+}
+
+pub fn profile_kind(profile: &str) -> ProfileKind {
+    let p = profile.to_ascii_lowercase();
+    if p.contains("none") {
+        ProfileKind::Disabled
+    } else if p.contains("minimal") {
+        ProfileKind::Minimal
+    } else {
+        ProfileKind::VimNav
+    }
+}
+
+/// active_profile 기반으로 프리셋 기본값을 사용자 config에 병합한 effective keymap.
+///
+/// **키맵 기본값·병합의 단일 소스.** daemon은 이 결과를
+/// `KeybindConfig::from_config`로 변환해 엔진에 넣고, 치트시트는 그대로
+/// 표시한다 — 두 경로가 항상 같은 병합 결과를 본다.
+///
+/// 병합은 TOML(Option) 수준에서 수행하므로 "사용자가 생략한 필드"와
+/// "명시적으로 기본값을 적은 필드"가 구분된다 (생략 시 프리셋 값 유지).
+pub fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapConfig {
     let mut merged = km.clone();
-    if km.active_profile.eq_ignore_ascii_case("vim-nav") {
-        let base_layer = vim_nav_default_layer();
-        let user_nav = merged.layers.get("nav").cloned();
-        if let Some(user) = user_nav {
-            let mut effective = base_layer;
-            effective.trigger = user.trigger;
-            if user.tap_action.is_some() {
-                effective.tap_action = user.tap_action;
-            }
-            if user.tap_hold_ms.is_some() {
-                effective.tap_hold_ms = user.tap_hold_ms;
-            }
-            if user.unmapped.is_some() {
-                effective.unmapped = user.unmapped;
-            }
-            for (k, v) in user.mappings {
-                effective.mappings.insert(k, v);
-            }
-            for (k, v) in user.double_taps {
-                effective.double_taps.insert(k, v);
-            }
-            merged.layers.insert("nav".into(), effective);
-        } else {
-            merged.layers.insert("nav".into(), base_layer);
+    match profile_kind(&km.active_profile) {
+        ProfileKind::Disabled => {
+            // 비활성: 사용자 정의가 있어도 키맵 전체를 끈다 (global_hotkey는
+            // daemon이 프로필과 무관하게 별도 등록)
+            merged.remaps.clear();
+            merged.layers.clear();
+            merged.combos.clear();
+            merged.double_taps.clear();
+            return merged;
         }
+        ProfileKind::Minimal => {
+            let has_capslock = merged
+                .remaps
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("capslock") || k.eq_ignore_ascii_case("caps"));
+            if !has_capslock {
+                merged.remaps.insert("CapsLock".into(), "Escape".into());
+            }
+        }
+        ProfileKind::VimNav => {
+            let base_layer = vim_nav_default_layer();
+            let user_nav = merged.layers.get("nav").cloned();
+            if let Some(user) = user_nav {
+                let mut effective = base_layer;
+                effective.trigger = user.trigger;
+                if user.tap_action.is_some() {
+                    effective.tap_action = user.tap_action;
+                }
+                if user.tap_hold_ms.is_some() {
+                    effective.tap_hold_ms = user.tap_hold_ms;
+                }
+                if user.unmapped.is_some() {
+                    effective.unmapped = user.unmapped;
+                }
+                for (k, v) in user.mappings {
+                    effective.mappings.insert(k, v);
+                }
+                for (k, v) in user.double_taps {
+                    effective.double_taps.insert(k, v);
+                }
+                merged.layers.insert("nav".into(), effective);
+            } else {
+                merged.layers.insert("nav".into(), base_layer);
+            }
+        }
+    }
 
-        // 한/영: Shift+Space는 전 플랫폼 공통, RShift 더블탭은 Windows 기본
-        // (daemon의 ensure_hangul_fallback과 동일한 정책)
-        let has_shift_space = merged
-            .combos
+    // 한/영 전환 기본 제스처 (minimal/vim-nav 공통):
+    // Shift+Space는 전 플랫폼, RShift 더블탭은 Windows 전용
+    let has_shift_space = merged
+        .combos
+        .iter()
+        .any(|c| c.trigger.eq_ignore_ascii_case("shift+space"));
+    if !has_shift_space {
+        merged.combos.push(crate::config::ComboToml {
+            trigger: "Shift+Space".into(),
+            action: "Hangul".into(),
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let has_rshift_dt = merged
+            .double_taps
             .iter()
-            .any(|c| c.trigger.eq_ignore_ascii_case("shift+space"));
-        if !has_shift_space {
-            merged.combos.push(crate::config::ComboToml {
-                trigger: "Shift+Space".into(),
-                action: "Hangul".into(),
-            });
-        }
-
-        #[cfg(target_os = "windows")]
-        if merged.double_taps.is_empty() {
+            .any(|dt| dt.key.eq_ignore_ascii_case("rshift"));
+        if !has_rshift_dt {
             merged.double_taps.push(crate::config::DoubleTapToml {
                 key: "RShift".into(),
                 action: "Hangul".into(),
@@ -671,6 +727,7 @@ fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::KeymapCo
             });
         }
     }
+
     merged
 }
 
@@ -990,3 +1047,153 @@ pub fn execute_keymap_action(config: &mut Config, keywords: &str) -> Option<Stri
     }
     None
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ComboToml, KeymapConfig, LayerToml};
+
+    #[test]
+    fn profile_kind_판별() {
+        assert_eq!(profile_kind("vim-nav"), ProfileKind::VimNav);
+        assert_eq!(profile_kind("vim-nav.kbd"), ProfileKind::VimNav);
+        assert_eq!(profile_kind("custom"), ProfileKind::VimNav);
+        assert_eq!(profile_kind("minimal"), ProfileKind::Minimal);
+        assert_eq!(profile_kind("minimal.kbd"), ProfileKind::Minimal);
+        assert_eq!(profile_kind("none"), ProfileKind::Disabled);
+        assert_eq!(profile_kind("NONE"), ProfileKind::Disabled);
+    }
+
+    fn keymap_with_profile(profile: &str) -> KeymapConfig {
+        let mut km = KeymapConfig::default();
+        km.active_profile = profile.to_string();
+        km
+    }
+
+    #[test]
+    fn vim_nav_기본_레이어와_한영_폴백() {
+        let e = effective_keymap(&keymap_with_profile("vim-nav"));
+        let nav = e.layers.get("nav").expect("nav 레이어");
+        assert_eq!(nav.trigger, "LAlt");
+        assert_eq!(nav.tap_action.as_deref(), Some("Escape"));
+        assert!(nav.mappings.contains_key("H"));
+        assert!(nav.double_taps.contains_key("I"));
+        assert!(e
+            .combos
+            .iter()
+            .any(|c| c.trigger.eq_ignore_ascii_case("shift+space")));
+        #[cfg(target_os = "windows")]
+        assert!(e
+            .double_taps
+            .iter()
+            .any(|dt| dt.key.eq_ignore_ascii_case("rshift")));
+    }
+
+    #[test]
+    fn 사용자_매핑은_기본을_보존하며_덮어쓴다() {
+        let mut km = keymap_with_profile("vim-nav");
+        let mut layer = LayerToml::default();
+        layer.trigger = "LAlt".into();
+        layer.mappings.insert("H".into(), "Right".into());
+        km.layers.insert("nav".into(), layer);
+
+        let e = effective_keymap(&km);
+        let nav = &e.layers["nav"];
+        assert_eq!(nav.mappings["H"], "Right", "H는 사용자 값으로 덮어씀");
+        assert!(nav.mappings.contains_key("."), "미지정 키는 기본 보존");
+        assert!(nav.mappings.contains_key("Space"), "미지정 키는 기본 보존");
+        assert!(nav.double_taps.contains_key("I"), "더블탭 기본 보존");
+    }
+
+    /// 회귀 방지: 과거 daemon 병합은 파싱 시점에 Option이 소실되어
+    /// "생략"과 "명시적 기본값"을 구분하지 못했다 (unmapped/tap_hold_ms가
+    /// 프리셋 기본값과 다를 때 조용히 되돌아가는 잠복 버그).
+    #[test]
+    fn 생략된_필드는_기본값을_유지한다() {
+        let mut km = keymap_with_profile("vim-nav");
+        let mut layer = LayerToml::default();
+        layer.trigger = "LAlt".into();
+        // tap_action / tap_hold_ms / unmapped 전부 생략
+        km.layers.insert("nav".into(), layer);
+
+        let e = effective_keymap(&km);
+        let nav = &e.layers["nav"];
+        assert_eq!(nav.tap_action.as_deref(), Some("Escape"), "기본 유지");
+        assert_eq!(nav.tap_hold_ms, Some(200), "기본 유지");
+
+        // 명시하면 반영
+        let mut km2 = keymap_with_profile("vim-nav");
+        let mut layer2 = LayerToml::default();
+        layer2.trigger = "LAlt".into();
+        layer2.unmapped = Some("passthrough".into());
+        layer2.tap_hold_ms = Some(300);
+        km2.layers.insert("nav".into(), layer2);
+
+        let e2 = effective_keymap(&km2);
+        let nav2 = &e2.layers["nav"];
+        assert_eq!(nav2.unmapped.as_deref(), Some("passthrough"));
+        assert_eq!(nav2.tap_hold_ms, Some(300));
+    }
+
+    #[test]
+    fn 사용자_한영_콤보가_있으면_중복_추가하지_않는다() {
+        let mut km = keymap_with_profile("vim-nav");
+        km.combos.push(ComboToml {
+            trigger: "shift+space".into(),
+            action: "Hanja".into(),
+        });
+        let e = effective_keymap(&km);
+        let shift_space: Vec<_> = e
+            .combos
+            .iter()
+            .filter(|c| c.trigger.eq_ignore_ascii_case("shift+space"))
+            .collect();
+        assert_eq!(shift_space.len(), 1);
+        assert_eq!(shift_space[0].action, "Hanja", "사용자 액션 유지");
+    }
+
+    #[test]
+    fn minimal은_capslock_리맵만() {
+        let e = effective_keymap(&keymap_with_profile("minimal"));
+        assert_eq!(e.remaps.get("CapsLock").map(String::as_str), Some("Escape"));
+        assert!(e.layers.is_empty());
+
+        // 사용자가 CapsLock을 재정의하면 존중
+        let mut km = keymap_with_profile("minimal");
+        km.remaps.insert("capslock".into(), "Tab".into());
+        let e2 = effective_keymap(&km);
+        assert_eq!(e2.remaps.len(), 1);
+        assert_eq!(e2.remaps["capslock"], "Tab");
+    }
+
+    #[test]
+    fn none은_사용자_정의까지_전부_비활성() {
+        let mut km = keymap_with_profile("none");
+        let mut layer = LayerToml::default();
+        layer.trigger = "LAlt".into();
+        km.layers.insert("nav".into(), layer);
+        km.remaps.insert("CapsLock".into(), "Escape".into());
+
+        let e = effective_keymap(&km);
+        assert!(e.layers.is_empty());
+        assert!(e.remaps.is_empty());
+        assert!(e.combos.is_empty());
+        assert!(e.double_taps.is_empty());
+    }
+
+    #[test]
+    fn 새_레이어_추가() {
+        let mut km = keymap_with_profile("vim-nav");
+        let mut layer = LayerToml::default();
+        layer.trigger = "RAlt".into();
+        layer.mappings.insert("A".into(), "B".into());
+        km.layers.insert("sym".into(), layer);
+
+        let e = effective_keymap(&km);
+        assert_eq!(e.layers.len(), 2, "nav(프리셋) + sym(사용자)");
+        assert!(e.layers.contains_key("sym"));
+    }
+}
+
