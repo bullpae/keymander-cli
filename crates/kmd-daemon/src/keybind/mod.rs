@@ -485,7 +485,6 @@ impl KeybindConfig {
             toggle_keymap: None,
         }
     }
-
 }
 
 // ── TOML 설정 → KeybindConfig 변환 ───────────────────────────────────────────
