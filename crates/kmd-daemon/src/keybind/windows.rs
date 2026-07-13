@@ -447,7 +447,9 @@ unsafe extern "system" fn keyboard_hook_proc(
         // 트리거가 눌려 있으므로 Alt+Tab 등 조합이 그대로 동작한다.
         KeyDecision::EngageChord { trigger, key } => {
             drop(guard);
-            tracing::debug!("chord engage: {trigger:?}+{key:?}");
+            // 어떤 키인지는 로그하지 않는다 — 훅 프로그램의 로그에 실제 타이핑
+            // 내용이 남으면 안 된다 (트리거는 config에 있는 값이라 무방)
+            tracing::debug!("chord engage: {trigger:?}+미매핑 키");
             queue_job(WorkerJob::ChordEngage {
                 trigger_vk: vkey_to_vk(trigger),
                 key_vk: vkey_to_vk(key),

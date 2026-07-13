@@ -665,7 +665,8 @@ unsafe extern "C" fn event_tap_callback(
     let state = match HOOK_STATE.get() {
         Some(s) => s,
         None => {
-            tracing::warn!("HOOK_STATE 미초기화 — 이벤트 패스스루 (keycode={keycode:#x})");
+            // keycode는 실제 타이핑 내용이므로 로그에 남기지 않는다
+            tracing::warn!("HOOK_STATE 미초기화 — 이벤트 패스스루");
             return event;
         }
     };
@@ -716,7 +717,8 @@ unsafe extern "C" fn event_tap_callback(
             // 코드 진입 (flagsChanged 경로로는 실제 발생하지 않지만 대칭 구현)
             KeyDecision::EngageChord { trigger, key } => {
                 drop(guard);
-                tracing::debug!("chord engage: {trigger:?}+{key:?}");
+                // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
+                tracing::debug!("chord engage: {trigger:?}+미매핑 키");
                 send_chord_engage(trigger, key);
                 std::ptr::null_mut()
             }
@@ -763,7 +765,8 @@ unsafe extern "C" fn event_tap_callback(
         // 트리거가 있으므로 트리거 조합으로 인식된다.
         KeyDecision::EngageChord { trigger, key } => {
             drop(guard);
-            tracing::debug!("chord engage: {trigger:?}+{key:?}");
+            // 어떤 키인지는 로그하지 않는다 — 실제 타이핑 내용 비기록 정책
+            tracing::debug!("chord engage: {trigger:?}+미매핑 키");
             send_chord_engage(trigger, key);
             std::ptr::null_mut()
         }
