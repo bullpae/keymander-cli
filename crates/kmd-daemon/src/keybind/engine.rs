@@ -24,8 +24,10 @@ pub enum KeyDecision {
     /// `layer_trigger`는 활성 레이어 매핑에서 발동된 경우 그 레이어의
     /// 트리거 키다. macOS는 물리적으로 눌린 트리거 수정자(Alt 등)의 잔여
     /// 플래그가 합성 이벤트에 간섭하므로, 실행 전에 해제해야 한다.
+    /// Windows는 SendInput이 modifier 간섭을 받지 않아 소비하지 않는다.
     Execute {
         action: BindAction,
+        #[allow(dead_code)] // macOS 어댑터에서만 소비
         layer_trigger: Option<VKey>,
     },
     /// 코드(chord) 모드 진입 — 레이어 패스쓰루에서 미매핑 키가 눌렸다.

@@ -100,11 +100,13 @@ try {
     Write-Ok "빌드 완료"
 
     # [2] 테스트
+    # release 프로필로 실행해 [1] 산출물을 재사용한다.
+    # debug 재빌드는 target 용량·PDB(LNK1318) 부담이 커서 Windows 로컬에서 자주 실패한다.
     if ($SkipTest) {
         Write-Warn "[2/4] 테스트 생략 (-SkipTest)"
     } else {
-        Write-Info "[2/4] 테스트 실행..."
-        cargo test --workspace
+        Write-Info "[2/4] 테스트 실행 (release)..."
+        cargo test --workspace --release
         if ($LASTEXITCODE -ne 0) { Write-Fail "테스트 실패 — 배포 중단" }
         Write-Ok "모든 테스트 통과"
     }
