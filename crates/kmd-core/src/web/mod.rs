@@ -12,22 +12,24 @@ pub mod services;
 // ── re-export — 기존 `web::*` 임포트를 깨뜨리지 않도록 ──────────────────────
 
 pub use items::{
-    build_search_url, build_translate_url, extract_batch_urls, extract_multi_llm_urls,
-    extract_multi_web_urls, extract_spell_urls, extract_translate_urls, list_services_as_items,
-    multi_llm_result_items, multi_web_result_items, search_result_item, spell_result_items,
-    translate_result_items, url_encode, web_browse_hint_seed,
+    build_llm_launch_plan, build_search_url, build_translate_url, extract_batch_urls,
+    extract_multi_llm_urls, extract_multi_web_urls, extract_spell_urls, extract_translate_urls,
+    list_services_as_items, llm_plan_all_urls, multi_llm_result_items, multi_web_result_items,
+    search_result_item, spell_result_items, translate_result_items, url_encode,
+    web_browse_hint_seed, LlmLaunchPlan,
 };
 
 pub use parsers::{
-    classify_web_query, parse_multi_llm_query, parse_multi_llm_query_with_prefixes,
-    parse_multi_web_query, parse_multi_web_query_with_prefixes, parse_spell_query_with_prefixes,
+    classify_web_query, parse_llm_followup, parse_multi_llm_query,
+    parse_multi_llm_query_with_prefixes, parse_multi_web_query,
+    parse_multi_web_query_with_prefixes, parse_spell_query_with_prefixes,
     parse_translate_query_with_prefixes, parse_web_query, WebQueryConfig, WebQueryResult,
 };
 
 pub use services::{
     is_llm_id, is_multi_web_id, is_spell_id, is_translate_id, selected_llm_services,
     selected_multi_web_services, selected_spell_services, selected_translate_services, HasId,
-    SpellService, TranslateDirection, TranslateService, WebService, SPELL_SERVICES,
+    LlmAutomation, SpellService, TranslateDirection, TranslateService, WebService, SPELL_SERVICES,
     TRANSLATE_SERVICES, WEB_SERVICES,
 };
 
@@ -145,13 +147,25 @@ mod tests {
 
     #[test]
     fn test_multi_llm_item_urls_roundtrip() {
-        let selected = vec!["chatgpt".to_string(), "gemini".to_string()];
+        // chatgpt(프리필 URL) + grok(프리필 URL) — 둘 다 쿼리를 URL에 담는다.
+        // (gemini는 URL 파라미터를 무시하므로 프리필 없이 앱만 여는 것으로 바뀜)
+        let selected = vec!["chatgpt".to_string(), "grok".to_string()];
         let items = multi_llm_result_items("rust lifetimes", &selected, false);
         assert!(!items.is_empty());
         let urls = extract_multi_llm_urls(&items[0]).unwrap();
         assert_eq!(urls.len(), 2);
         assert!(urls[0].contains("rust+lifetimes"));
         assert!(urls[1].contains("rust+lifetimes"));
+    }
+
+    #[test]
+    fn test_gemini_multi_url_has_no_query() {
+        // gemini는 URL 파라미터 미지원 → 프리필 없이 앱만 (프롬프트는 클립보드/주입)
+        let selected = vec!["gemini".to_string()];
+        let items = multi_llm_result_items("rust lifetimes", &selected, false);
+        let urls = extract_multi_llm_urls(&items[0]).unwrap();
+        assert_eq!(urls.len(), 1);
+        assert!(!urls[0].contains("rust"), "gemini URL에 쿼리가 없어야 함");
     }
 
     #[test]
@@ -195,6 +209,45 @@ mod tests {
         let items = multi_llm_result_items("test", &selected, false);
         let urls = extract_batch_urls(&items[0]).unwrap();
         assert_eq!(urls.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_llm_followup() {
+        assert_eq!(parse_llm_followup("@@ 그럼 요약해줘"), Some("그럼 요약해줘".into()));
+        assert_eq!(parse_llm_followup("@@   trimmed  "), Some("trimmed".into()));
+        assert!(parse_llm_followup("@@").is_none(), "빈 후속은 None");
+        assert!(parse_llm_followup("@gpt hi").is_none(), "다른 프리픽스 무시");
+        assert!(parse_llm_followup("no prefix").is_none());
+    }
+
+    #[test]
+    fn test_build_llm_launch_plan_splits_automation() {
+        // chatgpt(자동화), gemini(자동화), perplexity(plain)
+        let services = selected_llm_services(&[
+            "chatgpt".to_string(),
+            "gemini".to_string(),
+            "perplexity".to_string(),
+        ]);
+        let plan = build_llm_launch_plan(&services, "why rust");
+
+        // 자동화 잡: chatgpt(EnterOnly), gemini(PasteEnter)
+        assert_eq!(plan.jobs.len(), 2);
+        let gpt = plan.jobs.iter().find(|j| j.service_id == "chatgpt").unwrap();
+        assert_eq!(gpt.method, crate::ipc::LlmInject::EnterOnly);
+        assert!(gpt.url.contains("why+rust"), "gpt는 프리필 URL");
+        assert_eq!(gpt.title_markers, vec!["ChatGPT".to_string()]);
+
+        let gem = plan.jobs.iter().find(|j| j.service_id == "gemini").unwrap();
+        assert_eq!(gem.method, crate::ipc::LlmInject::PasteEnter);
+        assert!(!gem.url.contains("why"), "gemini는 프리필 없이 앱만 연다");
+        assert_eq!(gem.prompt, "why rust", "붙여넣기용 원문 보존");
+
+        // plain: perplexity
+        assert_eq!(plan.plain_urls.len(), 1);
+        assert!(plan.plain_urls[0].contains("perplexity"));
+
+        // 폴백: 전부 URL로 환원
+        assert_eq!(llm_plan_all_urls(&plan).len(), 3);
     }
 
     #[test]

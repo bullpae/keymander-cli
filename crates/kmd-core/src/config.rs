@@ -94,6 +94,11 @@ pub struct LauncherConfig {
     /// Supported: chatgpt, gemini, claude, grok, perplexity
     #[serde(default = "default_multi_llm_providers")]
     pub multi_llm_providers: Vec<String>,
+    /// LLM 오토파일럿 — URL로 자동 실행이 안 되는 서비스(chatgpt/claude/gemini)에
+    /// 데몬이 전경창 검증 후 키(Enter/Ctrl+V)를 주입해 자동 제출한다.
+    /// 기본 off (자동 키 주입은 opt-in). 데몬 실행 + Windows에서만 동작 (docs/09).
+    #[serde(default)]
+    pub llm_autopilot: bool,
     /// Command aliases for multi-LLM compare.
     /// Example: @llm, @ll, @cmp
     #[serde(default = "default_multi_llm_prefixes")]
@@ -197,6 +202,7 @@ impl Default for LauncherConfig {
             web_services: vec![],
             multi_llm_providers: default_multi_llm_providers(),
             multi_llm_prefixes: default_multi_llm_prefixes(),
+            llm_autopilot: false,
             multi_web_providers: default_multi_web_providers(),
             multi_web_prefixes: default_multi_web_prefixes(),
             spell_providers: default_spell_providers(),
@@ -574,6 +580,7 @@ impl Config {
             "launcher.kind_weights.web_search" => get!(self.launcher.kind_weights.web_search),
             "launcher.multi_llm_providers" => Some(self.launcher.multi_llm_providers.join(",")),
             "launcher.multi_llm_prefixes" => Some(self.launcher.multi_llm_prefixes.join(",")),
+            "launcher.llm_autopilot" => Some(self.launcher.llm_autopilot.to_string()),
             "launcher.multi_web_providers" => Some(self.launcher.multi_web_providers.join(",")),
             "launcher.multi_web_prefixes" => Some(self.launcher.multi_web_prefixes.join(",")),
             "launcher.spell_providers" => Some(self.launcher.spell_providers.join(",")),
@@ -729,6 +736,12 @@ impl Config {
                         }
                     })
                     .collect();
+            }
+            "launcher.llm_autopilot" => {
+                self.launcher.llm_autopilot = matches!(
+                    value.trim().to_lowercase().as_str(),
+                    "true" | "1" | "on" | "yes"
+                );
             }
             "launcher.multi_web_providers" => {
                 self.launcher.multi_web_providers = value

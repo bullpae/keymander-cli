@@ -88,6 +88,21 @@ pub fn parse_multi_llm_query(
     parse_multi_llm_query_with_prefixes(input, selected_ids, &[])
 }
 
+/// 이어서 질문 파서 — `@@ <프롬프트>` → 후속 프롬프트 텍스트.
+///
+/// 직전에 오토파일럿으로 연 LLM 창들에 이어서 같은 질문을 보낸다 (docs/09).
+/// 프롬프트가 비어 있으면 None (브라우징 힌트로 처리되게).
+pub fn parse_llm_followup(input: &str) -> Option<String> {
+    let (prefix, query) = split_prefix_query(input)?;
+    if prefix != "@@" {
+        return None;
+    }
+    if query.trim().is_empty() {
+        return None;
+    }
+    Some(query)
+}
+
 /// 멀티 LLM 쿼리 파서 (사용자 별칭 지원)
 pub fn parse_multi_llm_query_with_prefixes(
     input: &str,

@@ -1,5 +1,16 @@
 //! 서비스 정의 — 웹/맞춤법/번역 provider 상수
 
+use crate::ipc::LlmInject;
+
+/// LLM 오토파일럿 메타 — URL만으로 자동 실행이 안 되는 서비스에 대해
+/// 데몬이 전경창 검증 후 키를 주입하는 방식을 정의한다 (docs/09).
+pub struct LlmAutomation {
+    /// 주입 방식 (Enter만 / 붙여넣기+Enter)
+    pub method: LlmInject,
+    /// 전경창 타이틀 검증 마커 (하나라도 포함되면 매치)
+    pub title_markers: &'static [&'static str],
+}
+
 /// 웹 검색 서비스 정의
 pub struct WebService {
     pub id: &'static str,
@@ -11,6 +22,9 @@ pub struct WebService {
     pub emoji_icon: &'static str,
     pub url_template: &'static str,
     pub description: &'static str,
+    /// LLM 오토파일럿 메타 — None이면 URL만으로 동작(perplexity/grok) 또는
+    /// LLM이 아닌 일반 검색 서비스.
+    pub automation: Option<LlmAutomation>,
 }
 
 /// 맞춤법 검사 서비스 정의
@@ -52,6 +66,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F50D}", // 🔍
         url_template: "https://google.com/search?q={query}",
         description: "Search Google",
+        automation: None,
     },
     WebService {
         id: "youtube",
@@ -61,6 +76,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{25B6}\u{FE0F}", // ▶️
         url_template: "https://youtube.com/results?search_query={query}",
         description: "Search YouTube",
+        automation: None,
     },
     WebService {
         id: "github",
@@ -70,6 +86,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F431}", // 🐱
         url_template: "https://github.com/search?q={query}",
         description: "Search GitHub",
+        automation: None,
     },
     WebService {
         id: "stackoverflow",
@@ -79,6 +96,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4DA}", // 📚
         url_template: "https://stackoverflow.com/search?q={query}",
         description: "Search StackOverflow",
+        automation: None,
     },
     WebService {
         id: "npm",
@@ -88,6 +106,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4E6}", // 📦
         url_template: "https://www.npmjs.com/search?q={query}",
         description: "Search npm packages",
+        automation: None,
     },
     WebService {
         id: "crates",
@@ -97,6 +116,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4E6}", // 📦
         url_template: "https://crates.io/search?q={query}",
         description: "Search Rust crates",
+        automation: None,
     },
     WebService {
         id: "wikipedia",
@@ -106,6 +126,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4D6}", // 📖
         url_template: "https://en.wikipedia.org/wiki/Special:Search/{query}",
         description: "Search Wikipedia",
+        automation: None,
     },
     WebService {
         id: "x",
@@ -115,6 +136,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1D54F}", // 𝕏
         url_template: "https://x.com/search?q={query}",
         description: "Search X (Twitter)",
+        automation: None,
     },
     WebService {
         id: "maps",
@@ -124,6 +146,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F5FA}", // 🗺
         url_template: "https://maps.google.com/maps?q={query}",
         description: "Search Google Maps",
+        automation: None,
     },
     WebService {
         id: "naver_search",
@@ -133,6 +156,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F1F0}\u{1F1F7}", // 🇰🇷
         url_template: "https://search.naver.com/search.naver?query={query}",
         description: "Search Naver",
+        automation: None,
     },
     WebService {
         id: "daum",
@@ -142,6 +166,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F310}", // 🌐
         url_template: "https://search.daum.net/search?w=tot&q={query}",
         description: "Search Daum",
+        automation: None,
     },
     WebService {
         id: "naver_dict",
@@ -151,8 +176,10 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4D7}", // 📗
         url_template: "https://dict.naver.com/search?query={query}",
         description: "Search Naver Dictionary",
+        automation: None,
     },
     // AI 서비스
+    // perplexity/grok: URL ?q= 만으로 자동 실행됨 → automation 불필요
     WebService {
         id: "perplexity",
         name: "Perplexity",
@@ -161,7 +188,10 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F916}", // 🤖
         url_template: "https://www.perplexity.ai/search?q={query}",
         description: "Ask Perplexity AI",
+        automation: None,
     },
+    // chatgpt/claude: URL이 프롬프트를 프리필하지만 외부 네비게이션은 자동
+    // 제출을 막음 → Enter 주입 필요
     WebService {
         id: "chatgpt",
         name: "ChatGPT",
@@ -170,6 +200,10 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F4AC}", // 💬
         url_template: "https://chatgpt.com/?q={query}",
         description: "Ask ChatGPT",
+        automation: Some(LlmAutomation {
+            method: LlmInject::EnterOnly,
+            title_markers: &["ChatGPT"],
+        }),
     },
     WebService {
         id: "claude",
@@ -179,15 +213,24 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{2728}", // ✨
         url_template: "https://claude.ai/new?q={query}",
         description: "Ask Claude AI",
+        automation: Some(LlmAutomation {
+            method: LlmInject::EnterOnly,
+            title_markers: &["Claude"],
+        }),
     },
+    // gemini: URL 파라미터 미지원 → 클립보드 붙여넣기 + Enter 주입
     WebService {
         id: "gemini",
         name: "Gemini",
         prefixes: &["@gemini"],
         icon: "Gm",
         emoji_icon: "\u{264A}", // ♊
-        url_template: "https://gemini.google.com/app?q={query}",
+        url_template: "https://gemini.google.com/app",
         description: "Ask Google Gemini",
+        automation: Some(LlmAutomation {
+            method: LlmInject::PasteEnter,
+            title_markers: &["Gemini"],
+        }),
     },
     WebService {
         id: "grok",
@@ -197,6 +240,7 @@ pub const WEB_SERVICES: &[WebService] = &[
         emoji_icon: "\u{1F680}", // 🚀
         url_template: "https://grok.com/?q={query}",
         description: "Ask xAI Grok",
+        automation: None,
     },
 ];
 

@@ -38,10 +38,40 @@ pub enum Request {
     Shutdown,
     /// 연결 확인
     Ping,
+    /// LLM 오토파일럿 — URL 열기 + 전경창 검증 후 키 주입으로 자동 제출.
+    /// 자동화 대상(chatgpt/claude/gemini)만 잡으로 오며, 데몬은 각 잡을
+    /// 순차 처리하고 성공한 창을 세션 레지스트리에 기억한다 (docs/09).
+    LlmAutopilot { jobs: Vec<LlmJob> },
+    /// 이어서 질문 — 레지스트리에 기억된 LLM 창들에 후속 프롬프트 전달.
+    LlmFollowup { prompt: String },
 }
 
 fn default_limit() -> usize {
     20
+}
+
+/// LLM 오토파일럿 주입 방식
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LlmInject {
+    /// URL이 프롬프트를 프리필함 — Enter만 주입 (ChatGPT, Claude)
+    EnterOnly,
+    /// 입력창에 붙여넣고 실행 — Ctrl+V → Enter (Gemini)
+    PasteEnter,
+}
+
+/// LLM 오토파일럿 잡 한 건 (서비스 하나)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmJob {
+    /// 서비스 식별자 — 세션 레지스트리 키 ("chatgpt" 등)
+    pub service_id: String,
+    /// 열 URL (프리필 포함)
+    pub url: String,
+    /// 원문 프롬프트 — PasteEnter 주입 및 폴백용
+    pub prompt: String,
+    /// 주입 방식
+    pub method: LlmInject,
+    /// 전경창 검증용 타이틀 마커 (하나라도 포함되면 매치)
+    pub title_markers: Vec<String>,
 }
 
 // ── 응답 ─────────────────────────────────────────────────────────────────────

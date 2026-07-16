@@ -79,6 +79,48 @@ pub fn build_search_url(service: &WebService, query: &str) -> String {
     service.url_template.replace("{query}", &encoded)
 }
 
+/// LLM 실행 계획 — 데몬 오토파일럿에 보낼 잡과, 그냥 URL로 열 서비스 분리.
+pub struct LlmLaunchPlan {
+    /// 자동화 대상(chatgpt/claude/gemini) — 데몬 키 주입으로 자동 제출
+    pub jobs: Vec<crate::ipc::LlmJob>,
+    /// 자동화 불필요(perplexity/grok) — URL만으로 실행되므로 바로 연다
+    pub plain_urls: Vec<String>,
+}
+
+/// 선택된 LLM 서비스 + 프롬프트로 실행 계획을 만든다.
+///
+/// `automation` 메타가 있는 서비스는 [`crate::ipc::LlmJob`]으로, 없는 서비스는
+/// 프리필 URL로 분류한다. 프런트엔드는 데몬 오토파일럿이 가능하면 jobs를 IPC로
+/// 보내고, 불가하면 jobs의 URL도 plain처럼 열어 폴백한다 (docs/09).
+pub fn build_llm_launch_plan(services: &[&WebService], query: &str) -> LlmLaunchPlan {
+    let mut jobs = Vec::new();
+    let mut plain_urls = Vec::new();
+    for svc in services {
+        let url = build_search_url(svc, query);
+        match &svc.automation {
+            Some(auto) => jobs.push(crate::ipc::LlmJob {
+                service_id: svc.id.to_string(),
+                url,
+                prompt: query.to_string(),
+                method: auto.method,
+                title_markers: auto.title_markers.iter().map(|s| s.to_string()).collect(),
+            }),
+            None => plain_urls.push(url),
+        }
+    }
+    LlmLaunchPlan { jobs, plain_urls }
+}
+
+/// 오토파일럿이 불가능할 때(데몬 미실행/기능 off) jobs를 URL 리스트로 환원.
+/// 프리필 URL을 그냥 여는 현행 폴백 동작.
+pub fn llm_plan_all_urls(plan: &LlmLaunchPlan) -> Vec<String> {
+    plan.jobs
+        .iter()
+        .map(|j| j.url.clone())
+        .chain(plan.plain_urls.iter().cloned())
+        .collect()
+}
+
 /// 번역 서비스 URL 생성
 pub fn build_translate_url(
     service: &TranslateService,
