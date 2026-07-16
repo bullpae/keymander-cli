@@ -77,6 +77,11 @@ impl App {
     }
 
     pub(super) fn launch_selected(&mut self) -> Task<Message> {
+        // 이어서 질문: `@@ <프롬프트>` → 데몬이 기억한 LLM 창들에 전달 (열 URL 없음)
+        if let Some(followup) = web::parse_llm_followup(&self.query) {
+            return self.send_llm_followup(&followup);
+        }
+
         let Some(result) = self.results.get(self.selected).cloned() else {
             return Task::none();
         };
@@ -168,13 +173,16 @@ impl App {
             }
         }
 
-        // 웹 검색 결과 — extract_batch_urls 통합 추출
+        // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
+        if result.item.kind == ItemKind::WebSearch {
+            if let Some(task) = self.try_llm_launch() {
+                return task;
+            }
+        }
+
+        // 웹 검색 결과 — extract_batch_urls 통합 추출 (LLM 외 msearch/spell/translate)
         if result.item.kind == ItemKind::WebSearch {
             if let Some(urls) = web::extract_batch_urls(&result.item) {
-                // LLM 멀티 프롬프트인 경우 클립보드에 프롬프트 복사
-                if web::extract_multi_llm_urls(&result.item).is_some() {
-                    self.copy_multi_llm_prompt_to_clipboard();
-                }
                 for url in urls {
                     if let kmd_core::action::ActionResult::Error(e) =
                         kmd_core::action::open_url(&url)

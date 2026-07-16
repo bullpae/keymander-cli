@@ -5,25 +5,88 @@ use super::*;
 use super::{items_to_results, save_config};
 
 impl App {
-    pub(super) fn copy_multi_llm_prompt_to_clipboard(&self) {
-        if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
+    fn set_clipboard(text: &str) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if let Err(e) = clipboard.set_text(text.to_string()) {
+                tracing::warn!("클립보드 쓰기 실패: {e}");
+            }
+        }
+    }
+
+    /// LLM 실행(@gpt/@llm) 라우팅. LLM 쿼리가 아니면 None을 반환해 일반 경로에 맡긴다.
+    ///
+    /// - 오토파일럿 켜짐 + 데몬에 잡 전송 성공: 자동화 서비스는 데몬이 키 주입,
+    ///   나머지(perplexity/grok)는 여기서 URL로 연다.
+    /// - 아니면 폴백: 전 서비스 URL을 열고, 붙여넣기형(gemini)이 있으면 프롬프트를
+    ///   클립보드에 담아 수동 붙여넣기를 돕는다 (현행 동작).
+    pub(super) fn try_llm_launch(&self) -> Option<Task<Message>> {
+        let (services, prompt) = web::parse_any_llm_query(
             &self.query,
             &self.selected_llm_providers,
             &self.multi_llm_prefixes,
-        ) {
-            if !prompt.is_empty() {
-                // load_config() 재호출 대신 이미 메모리에 있는 runtime_config 사용
-                let final_prompt = kmd_core::prompt::apply_template(
-                    &self.runtime_config.launcher.prompt_templates,
-                    &prompt,
-                );
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(final_prompt) {
-                        tracing::warn!("클립보드 쓰기 실패: {e}");
+        )?;
+        if services.is_empty() {
+            return None;
+        }
+
+        let final_prompt = kmd_core::prompt::apply_template(
+            &self.runtime_config.launcher.prompt_templates,
+            &prompt,
+        );
+        let plan = web::build_llm_launch_plan(&services, &final_prompt);
+
+        let has_paste = plan
+            .jobs
+            .iter()
+            .any(|j| matches!(j.method, kmd_core::ipc::LlmInject::PasteEnter));
+
+        // 오토파일럿 시도 (opt-in + 데몬 실행 필요)
+        if self.runtime_config.launcher.llm_autopilot && !plan.jobs.is_empty() {
+            let req = kmd_core::ipc::Request::LlmAutopilot {
+                jobs: plan.jobs.clone(),
+            };
+            match kmd_core::ipc::send_request_result(&req) {
+                Ok(_) => {
+                    // 자동화 불필요 서비스만 여기서 직접 연다
+                    for url in &plan.plain_urls {
+                        let _ = kmd_core::action::open_url(url);
                     }
+                    tracing::info!("LLM 오토파일럿 위임: {}개 잡", plan.jobs.len());
+                    return Some(iced::exit());
+                }
+                Err(e) => {
+                    tracing::warn!("오토파일럿 IPC 실패 — URL 폴백: {e}");
                 }
             }
         }
+
+        // 폴백: 전 서비스 URL 열기 + (붙여넣기형 있으면) 클립보드
+        if has_paste && !final_prompt.is_empty() {
+            Self::set_clipboard(&final_prompt);
+        }
+        for url in web::llm_plan_all_urls(&plan) {
+            let _ = kmd_core::action::open_url(&url);
+        }
+        Some(iced::exit())
+    }
+
+    /// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임. 열 URL이 없으므로 데몬
+    /// 미실행/세션 없음 시엔 안내 로그만 남기고 종료(폴백 불가).
+    pub(super) fn send_llm_followup(&self, prompt: &str) -> Task<Message> {
+        let final_prompt = kmd_core::prompt::apply_template(
+            &self.runtime_config.launcher.prompt_templates,
+            prompt,
+        );
+        let req = kmd_core::ipc::Request::LlmFollowup {
+            prompt: final_prompt,
+        };
+        match kmd_core::ipc::send_request_result(&req) {
+            Ok(kmd_core::ipc::Response::Ok { message }) => tracing::info!("{message}"),
+            Ok(kmd_core::ipc::Response::Error { message }) => tracing::warn!("{message}"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("이어서 질문 실패(데몬 미실행?): {e}"),
+        }
+        iced::exit()
     }
 
     pub(super) fn handle_keymap_action(

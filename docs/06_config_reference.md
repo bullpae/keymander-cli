@@ -110,6 +110,9 @@ toggle_preview = "ctrl+p"
 | scan_drives | bool | false | 드라이브 루트 자동 스캔 |
 | drive_scan_depth | usize | 2 | 드라이브 루트 스캔 깊이 |
 | web_services | Vec\<WebService\> | [] | 커스텀 웹 서비스 |
+| multi_llm_providers | Vec\<String\> | chatgpt,claude,… | `@llm` 대상 LLM |
+| multi_llm_prefixes | Vec\<String\> | @llm,@ll,… | `@llm` 별칭 |
+| llm_autopilot | bool | false | LLM 자동 제출(데몬 키 주입, Windows). `@gpt`/`@claude`는 Enter, `@gemini`는 붙여넣기+Enter를 전경창 검증 후 주입. `@@ <질문>`으로 이어서 질문. 자동 키 주입이라 opt-in (docs/09) |
 
 ### 4.3 [launcher.kind_weights]
 

@@ -20,7 +20,7 @@ pub use items::{
 };
 
 pub use parsers::{
-    classify_web_query, parse_llm_followup, parse_multi_llm_query,
+    classify_web_query, parse_any_llm_query, parse_llm_followup, parse_multi_llm_query,
     parse_multi_llm_query_with_prefixes, parse_multi_web_query,
     parse_multi_web_query_with_prefixes, parse_spell_query_with_prefixes,
     parse_translate_query_with_prefixes, parse_web_query, WebQueryConfig, WebQueryResult,
@@ -213,10 +213,16 @@ mod tests {
 
     #[test]
     fn test_parse_llm_followup() {
-        assert_eq!(parse_llm_followup("@@ 그럼 요약해줘"), Some("그럼 요약해줘".into()));
+        assert_eq!(
+            parse_llm_followup("@@ 그럼 요약해줘"),
+            Some("그럼 요약해줘".into())
+        );
         assert_eq!(parse_llm_followup("@@   trimmed  "), Some("trimmed".into()));
         assert!(parse_llm_followup("@@").is_none(), "빈 후속은 None");
-        assert!(parse_llm_followup("@gpt hi").is_none(), "다른 프리픽스 무시");
+        assert!(
+            parse_llm_followup("@gpt hi").is_none(),
+            "다른 프리픽스 무시"
+        );
         assert!(parse_llm_followup("no prefix").is_none());
     }
 
@@ -232,7 +238,11 @@ mod tests {
 
         // 자동화 잡: chatgpt(EnterOnly), gemini(PasteEnter)
         assert_eq!(plan.jobs.len(), 2);
-        let gpt = plan.jobs.iter().find(|j| j.service_id == "chatgpt").unwrap();
+        let gpt = plan
+            .jobs
+            .iter()
+            .find(|j| j.service_id == "chatgpt")
+            .unwrap();
         assert_eq!(gpt.method, crate::ipc::LlmInject::EnterOnly);
         assert!(gpt.url.contains("why+rust"), "gpt는 프리필 URL");
         assert_eq!(gpt.title_markers, vec!["ChatGPT".to_string()]);

@@ -297,6 +297,29 @@ Recommended `@` commands:
 - `@grok suggest edge cases for this feature`
 - `@ai find latest docs and sources for this topic` (Perplexity)
 
+#### LLM Autopilot (opt-in, Windows + daemon)
+
+By default, ChatGPT/Claude only *prefill* the prompt (they no longer auto-submit
+from an external link), and Gemini ignores URL parameters entirely — so you have
+to paste/press Enter yourself. With the daemon running you can enable **autopilot**:
+
+```toml
+[launcher]
+llm_autopilot = true
+```
+
+The daemon then opens the LLM, waits until the **foreground window is that browser
+with the expected title**, and injects Enter (ChatGPT/Claude) or Ctrl+V→Enter
+(Gemini) so the prompt actually runs. It only injects when the window check
+passes — if you click away it silently skips, leaving the prefilled/clipboard
+text for you to finish manually. No browser extension required.
+
+- **Follow-up to all open LLMs**: after an autopilot launch, type `@@ your next
+  question` to send a follow-up to every LLM window it opened this session.
+
+Autopilot is off by default (auto key injection is opt-in) and currently
+Windows-only. Without it, LLM prompts fall back to the prefill/clipboard behavior.
+
 ### Multi Web Search
 
 `@m` (or `@mw`, `@msearch`, `@multisearch`, `@searchall`, `@krsearch`) opens one query on multiple engines in parallel tabs.

@@ -88,6 +88,30 @@ pub fn parse_multi_llm_query(
     parse_multi_llm_query_with_prefixes(input, selected_ids, &[])
 }
 
+/// 단일(`@gpt`) 또는 멀티(`@llm`) LLM 쿼리를 통합 파싱 → (LLM 서비스들, 프롬프트).
+///
+/// 프런트엔드가 오토파일럿 실행 계획을 세우기 위한 진입점. LLM이 아닌 쿼리
+/// (일반 웹검색 `@g` 등)는 None.
+pub fn parse_any_llm_query(
+    input: &str,
+    selected_ids: &[String],
+    multi_prefixes: &[String],
+) -> Option<(Vec<&'static WebService>, String)> {
+    // 멀티 우선
+    if let Some((svcs, q)) =
+        parse_multi_llm_query_with_prefixes(input, selected_ids, multi_prefixes)
+    {
+        return Some((svcs, q));
+    }
+    // 단일 — LLM 서비스일 때만
+    let (svc, q) = parse_web_query(input)?;
+    if is_llm_id(svc.id) {
+        Some((vec![svc], q))
+    } else {
+        None
+    }
+}
+
 /// 이어서 질문 파서 — `@@ <프롬프트>` → 후속 프롬프트 텍스트.
 ///
 /// 직전에 오토파일럿으로 연 LLM 창들에 이어서 같은 질문을 보낸다 (docs/09).

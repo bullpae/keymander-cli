@@ -97,6 +97,8 @@ pub struct AppState {
     pub selected_llm_providers: Vec<String>,
     /// Command aliases used for multi LLM query.
     pub multi_llm_prefixes: Vec<String>,
+    /// LLM 오토파일럿(데몬 키 주입 자동 제출) opt-in 여부.
+    pub llm_autopilot: bool,
     /// Selected search engines used by @msearch multi web.
     pub selected_multi_web_providers: Vec<String>,
     /// Command aliases used for multi web query.
@@ -219,6 +221,7 @@ pub fn run_app(
         use_emoji: config.general.emoji_icons,
         selected_llm_providers: config.launcher.multi_llm_providers.clone(),
         multi_llm_prefixes: config.launcher.multi_llm_prefixes.clone(),
+        llm_autopilot: config.launcher.llm_autopilot,
         selected_multi_web_providers: config.launcher.multi_web_providers.clone(),
         multi_web_prefixes: config.launcher.multi_web_prefixes.clone(),
         spell_providers: config.launcher.spell_providers.clone(),
@@ -367,6 +370,7 @@ fn handle_settings_key_event(
             state.quit_on_launch = config.launcher.quit_on_launch;
             state.selected_llm_providers = config.launcher.multi_llm_providers.clone();
             state.multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
+            state.llm_autopilot = config.launcher.llm_autopilot;
             state.selected_multi_web_providers = config.launcher.multi_web_providers.clone();
             state.multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
             state.spell_providers = config.launcher.spell_providers.clone();
@@ -619,13 +623,96 @@ fn open_urls_and_quit(state: &mut AppState, urls: &[String]) {
     }
 }
 
+/// LLM 실행(@gpt/@llm) 라우팅. LLM 쿼리를 처리했으면 true.
+/// 오토파일럿 켜짐 + 데몬 위임 성공 시 자동 제출, 아니면 URL/클립보드 폴백.
+fn tui_try_llm_launch(state: &mut AppState) -> bool {
+    let Some((services, prompt)) = web::parse_any_llm_query(
+        &state.query,
+        &state.selected_llm_providers,
+        &state.multi_llm_prefixes,
+    ) else {
+        return false;
+    };
+    if services.is_empty() {
+        return false;
+    }
+
+    let config = crate::cmd::load_config().unwrap_or_default();
+    let final_prompt = kmd_core::prompt::apply_template(&config.launcher.prompt_templates, &prompt);
+    let plan = web::build_llm_launch_plan(&services, &final_prompt);
+    let has_paste = plan
+        .jobs
+        .iter()
+        .any(|j| matches!(j.method, kmd_core::ipc::LlmInject::PasteEnter));
+
+    if state.llm_autopilot && !plan.jobs.is_empty() {
+        let req = kmd_core::ipc::Request::LlmAutopilot {
+            jobs: plan.jobs.clone(),
+        };
+        if kmd_core::ipc::send_request_result(&req).is_ok() {
+            for url in &plan.plain_urls {
+                let _ = action::open_url(url);
+            }
+            state.status_message =
+                Some("🤖 LLM 오토파일럿에 위임했습니다 (데몬이 자동 제출)".to_string());
+            return true;
+        }
+    }
+
+    // 폴백: 전 서비스 URL + (붙여넣기형 있으면) 클립보드
+    if has_paste && !final_prompt.is_empty() {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(&final_prompt);
+        }
+        state.status_message = Some(
+            "✅ 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)".to_string(),
+        );
+    }
+    for url in web::llm_plan_all_urls(&plan) {
+        let _ = action::open_url(&url);
+    }
+    true
+}
+
+/// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임 (열 URL 없음).
+fn tui_send_llm_followup(state: &mut AppState, prompt: &str) {
+    let config = crate::cmd::load_config().unwrap_or_default();
+    let final_prompt = kmd_core::prompt::apply_template(&config.launcher.prompt_templates, prompt);
+    let req = kmd_core::ipc::Request::LlmFollowup {
+        prompt: final_prompt,
+    };
+    match kmd_core::ipc::send_request_result(&req) {
+        Ok(kmd_core::ipc::Response::Ok { .. }) => {
+            state.status_message = Some("🤖 이어서 질문을 전달했습니다".to_string());
+        }
+        Ok(kmd_core::ipc::Response::Error { message }) => {
+            state.status_message = Some(format!("⚠ {message}"));
+        }
+        Ok(_) => {}
+        Err(_) => {
+            state.status_message =
+                Some("⚠ 데몬이 실행 중이 아니어서 이어서 질문할 수 없습니다".to_string());
+        }
+    }
+}
+
 /// Execute the currently selected item
 fn execute_selected(
     state: &mut AppState,
     engine: &mut SearchEngine,
     db: Option<&kmd_core::Database>,
 ) {
-    let Some(result) = state.results.get(state.selected_index) else {
+    // 이어서 질문: `@@ <프롬프트>` → 데몬이 기억한 LLM 창들에 전달 (열 결과 없음)
+    if let Some(followup) = web::parse_llm_followup(&state.query) {
+        tui_send_llm_followup(state, &followup);
+        if state.quit_on_launch {
+            state.should_quit = true;
+        }
+        return;
+    }
+
+    // result를 소유값으로 복제 — 이후 state를 가변 대여해도 대여 충돌이 없다
+    let Some(result) = state.results.get(state.selected_index).cloned() else {
         return;
     };
 
@@ -740,33 +827,17 @@ fn execute_selected(
         return;
     }
 
-    // 웹 검색 결과 — extract_batch_urls 통합 추출
+    // LLM 실행(@gpt/@llm) — 오토파일럿 또는 URL 폴백으로 라우팅
+    if result.item.kind == ItemKind::WebSearch && tui_try_llm_launch(state) {
+        if state.quit_on_launch {
+            state.should_quit = true;
+        }
+        return;
+    }
+
+    // 웹 검색 결과 — extract_batch_urls 통합 (LLM 외 msearch/spell/translate)
     if result.item.kind == ItemKind::WebSearch {
         if let Some(urls) = web::extract_batch_urls(&result.item) {
-            // LLM 멀티 프롬프트인 경우 클립보드에 프롬프트 복사 (템플릿 적용 포함)
-            if web::extract_multi_llm_urls(&result.item).is_some() {
-                if let Some((_services, prompt)) = web::parse_multi_llm_query_with_prefixes(
-                    &state.query,
-                    &state.selected_llm_providers,
-                    &state.multi_llm_prefixes,
-                ) {
-                    if !prompt.is_empty() {
-                        // 템플릿 적용: `:name query` → template body + query
-                        let config = crate::cmd::load_config().unwrap_or_default();
-                        let final_prompt = kmd_core::prompt::apply_template(
-                            &config.launcher.prompt_templates,
-                            &prompt,
-                        );
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(&final_prompt);
-                        }
-                        state.status_message = Some(
-                            "✅ @llm 프롬프트를 클립보드에 복사했습니다 (일부 서비스는 붙여넣기/Enter 필요)"
-                                .to_string(),
-                        );
-                    }
-                }
-            }
             open_urls_and_quit(state, &urls);
             return;
         }
@@ -832,7 +903,7 @@ fn execute_selected(
     }
 
     // Normal execution
-    match action::execute(result) {
+    match action::execute(&result) {
         action::ActionResult::Launched => {
             if let Some(db) = db {
                 kmd_core::history::record_launch(

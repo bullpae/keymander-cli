@@ -254,7 +254,8 @@ fn process_request(
         Request::LlmFollowup { prompt } => {
             if !crate::autopilot::has_session() {
                 return Response::Error {
-                    message: "이어서 질문할 LLM 창이 없습니다. 먼저 @gpt/@llm 등으로 여세요.".into(),
+                    message: "이어서 질문할 LLM 창이 없습니다. 먼저 @gpt/@llm 등으로 여세요."
+                        .into(),
                 };
             }
             crate::autopilot::run_followup(prompt);
