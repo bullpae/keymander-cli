@@ -242,6 +242,26 @@ fn process_request(
                 message: "데몬을 종료합니다.".into(),
             }
         }
+
+        Request::LlmAutopilot { jobs } => {
+            let n = jobs.len();
+            crate::autopilot::run_autopilot(jobs);
+            Response::Ok {
+                message: format!("LLM 오토파일럿 시작 ({n}개)"),
+            }
+        }
+
+        Request::LlmFollowup { prompt } => {
+            if !crate::autopilot::has_session() {
+                return Response::Error {
+                    message: "이어서 질문할 LLM 창이 없습니다. 먼저 @gpt/@llm 등으로 여세요.".into(),
+                };
+            }
+            crate::autopilot::run_followup(prompt);
+            Response::Ok {
+                message: "이어서 질문 전달 중".into(),
+            }
+        }
     }
 }
 

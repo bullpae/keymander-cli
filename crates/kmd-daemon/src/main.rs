@@ -3,6 +3,7 @@
 //! TCP localhost IPC 서버로 검색 엔진을 메모리에 상주시키고,
 //! 글로벌 핫키와 키 바인딩을 관리한다.
 
+mod autopilot;
 mod autostart;
 mod keybind;
 mod server;
