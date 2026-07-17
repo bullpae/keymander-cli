@@ -56,10 +56,18 @@ pub struct UiScale {
     pub font: f32,
     pub visible_rows: usize,
     pub pill_height: f32,
+    /// drag_strip + pill (레이아웃 문서화 겸 테스트 검증용)
+    #[allow(dead_code)]
     pub search_bar_height: f32,
     pub row_height: f32,
     pub status_bar_height: f32,
     pub full_window_height: f32,
+    /// 결과가 없을 때의 창 높이 — 검색바 pill + 카드 패딩만.
+    /// 투명 합성이 안 되는 환경(가상 GPU, 소프트웨어 렌더러)에서 빈 영역이
+    /// 검게 칠해지는 문제를 피하기 위해 결과 유무에 따라 창 자체를 리사이즈한다.
+    pub collapsed_window_height: f32,
+    /// "No results found" 힌트 영역의 고정 높이 (창 높이 계산과 일치해야 함).
+    pub hint_area_height: f32,
     pub result_icon: f32,
     pub title_font: f32,
     pub subtitle_font: f32,
@@ -86,6 +94,10 @@ impl UiScale {
         let status_bar_height = (f * 1.75).round(); // 16→28
         let full_window_height =
             search_bar_height + 1.0 + (visible_rows as f32 * row_height) + 1.0 + status_bar_height;
+        // 카드 외곽 container 의 padding(2) 상하 = 4.0 (view.rs 의 card 구조와 일치)
+        let collapsed_window_height = search_bar_height + 4.0;
+        let no_results_font = (f * 0.8125).round(); // 16→13
+        let hint_area_height = (no_results_font * 1.4).ceil() + 16.0;
         Self {
             font: f,
             visible_rows,
@@ -94,6 +106,8 @@ impl UiScale {
             row_height,
             status_bar_height,
             full_window_height,
+            collapsed_window_height,
+            hint_area_height,
             result_icon: (f * 2.0).round(),            // 16→32
             title_font: (f * 1.0).round(),             // 16→16
             subtitle_font: (f * 0.8125).round(),       // 16→13
@@ -107,7 +121,7 @@ impl UiScale {
             action_icon_font: (f * 0.8125).round(),    // 16→13
             action_label_font: (f * 0.75).round(),     // 16→12
             action_shortcut_font: (f * 0.625).round(), // 16→10
-            no_results_font: (f * 0.8125).round(),     // 16→13
+            no_results_font,
         }
     }
 }
@@ -115,6 +129,11 @@ impl UiScale {
 /// 주어진 font_size, visible_rows로 전체 창 높이를 계산 (main.rs 에서 사용).
 pub fn full_window_height(font_size: f32, visible_rows: usize) -> f32 {
     UiScale::new(font_size, visible_rows).full_window_height
+}
+
+/// 결과가 없을 때(검색바만)의 창 높이 (main.rs 에서 사용).
+pub fn collapsed_window_height(font_size: f32, visible_rows: usize) -> f32 {
+    UiScale::new(font_size, visible_rows).collapsed_window_height
 }
 
 const QUIT_POLL_MS: u64 = 300;
@@ -176,6 +195,8 @@ pub struct App {
 
     // ── Window geometry ───────────────────────────────────────────────
     window_width: f32,
+    /// 현재 적용된(또는 적용 요청한) 창 높이 — 결과 유무에 따라 collapsed↔full 전환
+    window_height: f32,
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
@@ -551,6 +572,7 @@ impl App {
             db,
             _guard: guard,
             window_width,
+            window_height: ui.collapsed_window_height,
             window_state,
             state_dirty: false,
             window_focused: true,
@@ -674,6 +696,43 @@ impl App {
             || self.should_limit_reorder_for_ime()
     }
 
+    // ─── Window height sync ───────────────────────────────────────────────
+
+    /// 현재 상태에 맞는 창 높이.
+    ///
+    /// 결과가 없을 때 창을 pill 높이로 접는 이유: 빈 영역을 투명 픽셀로 채우는
+    /// 방식은 창 투명 합성이 안 되는 환경(VM 가상 GPU, 소프트웨어 렌더러 폴백 등
+    /// — 특히 Windows on ARM VM)에서 거대한 검은 사각형으로 렌더링된다.
+    /// 창 자체를 콘텐츠 크기로 유지하면 렌더러와 무관하게 문제가 없다.
+    fn desired_window_height(&self) -> f32 {
+        let u = &self.ui;
+        if !self.results.is_empty() {
+            u.full_window_height
+        } else if !self.query.trim().is_empty() {
+            u.collapsed_window_height + u.hint_area_height
+        } else {
+            u.collapsed_window_height
+        }
+    }
+
+    /// 창 높이가 상태와 어긋나면 리사이즈 태스크를 반환 (일치하면 no-op).
+    fn sync_window_height(&mut self) -> Task<Message> {
+        let desired = self.desired_window_height();
+        if (desired - self.window_height).abs() < 0.5 {
+            return Task::none();
+        }
+        self.window_height = desired;
+        // window::Settings 의 min/max 폭과 동일한 범위로 클램프
+        let width = self.window_width.clamp(420.0, 1600.0);
+        match self.window_id {
+            Some(id) => window::resize(id, Size::new(width, desired)),
+            None => window::oldest().then(move |maybe_id| match maybe_id {
+                Some(id) => window::resize(id, Size::new(width, desired)),
+                None => Task::none(),
+            }),
+        }
+    }
+
     // ─── Update ───────────────────────────────────────────────────────────
 
     /// 포커스 가드: UI 상태(query/results)가 변경되면 자동으로 포커스를 복원한다.
@@ -694,7 +753,9 @@ impl App {
         let old_query_len = self.query.len();
         let old_results_len = self.results.len();
 
-        let task = self.update_inner(message);
+        let inner_task = self.update_inner(message);
+        // 결과 유무가 바뀌면 창 높이를 동기화 — 어떤 메시지 경로에서 바뀌었든 보장
+        let task = Task::batch([inner_task, self.sync_window_height()]);
 
         if skip_focus_guard || !self.window_focused || self.is_boot_settled() {
             return task;
@@ -1160,6 +1221,28 @@ mod tests {
             "full_window_height({}) != 계산값({expected})",
             u.full_window_height
         );
+    }
+
+    #[test]
+    fn 접힌_창높이_일관성() {
+        for fs in [12.0, 16.0, 20.0, 24.0, 32.0] {
+            let u = UiScale::new(fs, 8);
+            // view.rs 카드 구조: drag_strip + pill + 카드 padding(2×2)
+            let expected = u.search_bar_height + 4.0;
+            assert!(
+                (u.collapsed_window_height - expected).abs() < f32::EPSILON,
+                "font_size={fs}: collapsed({}) != 계산값({expected})",
+                u.collapsed_window_height
+            );
+            assert!(
+                u.collapsed_window_height < u.full_window_height,
+                "접힌 높이는 항상 full 보다 작아야 함"
+            );
+            assert!(
+                u.hint_area_height > u.no_results_font,
+                "힌트 영역은 힌트 폰트보다 커야 함"
+            );
+        }
     }
 
     #[test]

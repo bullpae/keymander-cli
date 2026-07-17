@@ -21,7 +21,7 @@ use iced::{window, Color, Point, Size};
 use std::fs::{self, OpenOptions};
 use std::sync::Mutex;
 
-use crate::app::{full_window_height, DEFAULT_WIDTH};
+use crate::app::{collapsed_window_height, full_window_height, DEFAULT_WIDTH};
 use crate::window_state::WindowState;
 
 fn should_print_version() -> bool {
@@ -124,7 +124,11 @@ fn main() -> iced::Result {
         .unwrap_or(DEFAULT_WIDTH)
         .clamp(420.0, 1200.0);
     let win_height = full_window_height(config.general.font_size, config.general.visible_rows);
-    let initial_size = Size::new(base_width, win_height);
+    // 부팅 시 쿼리가 비어 있으므로 검색바만 보이는 접힌 높이로 시작.
+    // 결과가 생기면 앱이 창을 full 높이로 리사이즈한다 (app.rs sync_window_height).
+    let collapsed_height =
+        collapsed_window_height(config.general.font_size, config.general.visible_rows);
+    let initial_size = Size::new(base_width, collapsed_height);
 
     let position = match (window_state.x, window_state.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
@@ -155,7 +159,7 @@ fn main() -> iced::Result {
         resizable: true,
         visible: true,
         exit_on_close_request: true,
-        min_size: Some(Size::new(420.0, win_height)),
+        min_size: Some(Size::new(420.0, collapsed_height)),
         max_size: Some(Size::new(1600.0, win_height)),
         icon,
         ..Default::default()

@@ -205,6 +205,7 @@ impl App {
                 Length::Shrink
             });
 
+        // 고정 높이(u.hint_area_height) — 접힌 창 높이 계산과 일치해야 함 (app.rs)
         let hint_area: Element<'_, Message> = if !has_results && !self.query.trim().is_empty() {
             container(
                 text("No results found")
@@ -213,8 +214,8 @@ impl App {
                     .center(),
             )
             .width(Fill)
-            .padding(Padding::from([8, 0]))
             .center_x(Fill)
+            .center_y(u.hint_area_height)
             .into()
         } else {
             container(text("")).width(0).height(0).into()

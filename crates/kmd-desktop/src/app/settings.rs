@@ -383,9 +383,10 @@ impl App {
                 self.window_state = WindowState::default();
                 self.window_width = DEFAULT_WIDTH;
                 self.state_dirty = false;
-                let sb_height = self.ui.search_bar_height;
+                let collapsed = self.ui.collapsed_window_height;
+                self.window_height = collapsed;
                 let run_reset = move |id: window::Id| {
-                    let resize = window::resize(id, Size::new(DEFAULT_WIDTH, sb_height));
+                    let resize = window::resize(id, Size::new(DEFAULT_WIDTH, collapsed));
                     let move_task = window::monitor_size(id).then(move |maybe_size| {
                         if let Some(mon) = maybe_size {
                             let x = (mon.width - DEFAULT_WIDTH) / 2.0;
