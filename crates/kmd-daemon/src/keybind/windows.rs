@@ -4,7 +4,10 @@
 //! 바인딩 테이블에 따라 키를 리매핑하거나 억제한다.
 
 use super::engine::{EngineState, KeyDecision};
-use super::{resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
+use super::mouse::{MouseSink, MouseWorker};
+use super::{
+    resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
+};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -42,6 +45,12 @@ enum WorkerJob {
     ChordRelease {
         trigger_vk: u16,
     },
+    /// 마우스 바인딩 시작 — 이동/휠은 모션 워커, 버튼은 즉시 down 주입
+    MouseEngage(MouseBind),
+    /// 마우스 바인딩 정지 — 이동/휠 해제, 버튼 up 주입
+    MouseRelease(MouseBind),
+    /// 활성 마우스 바인딩 전체 정지 (stuck-mouse 방지)
+    MouseStopAll,
 }
 
 /// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
@@ -255,6 +264,64 @@ fn send_chord_engage(trigger_vk: u16, key_vk: u16) {
     }
 }
 
+// ── 마우스 주입 헬퍼 ────────────────────────────────────────────────────────
+
+/// 휠 1노치 델타 (WinUser.h WHEEL_DELTA)
+const WHEEL_DELTA_UNIT: i32 = 120;
+
+fn send_mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) {
+    unsafe {
+        let mut input: INPUT = std::mem::zeroed();
+        input.r#type = INPUT_MOUSE;
+        input.Anonymous.mi.dx = dx;
+        input.Anonymous.mi.dy = dy;
+        // DWORD 필드지만 휠 델타는 부호 있는 값 — 2의 보수 캐스팅
+        input.Anonymous.mi.mouseData = mouse_data as u32;
+        input.Anonymous.mi.dwFlags = flags;
+        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+fn send_mouse_move(dx: i32, dy: i32) {
+    send_mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE);
+}
+
+fn send_mouse_wheel(notches: i32) {
+    send_mouse_input(0, 0, notches * WHEEL_DELTA_UNIT, MOUSEEVENTF_WHEEL);
+}
+
+fn send_mouse_button(bind: MouseBind, down: bool) {
+    let flags = match (bind, down) {
+        (MouseBind::BtnLeft, true) => MOUSEEVENTF_LEFTDOWN,
+        (MouseBind::BtnLeft, false) => MOUSEEVENTF_LEFTUP,
+        (MouseBind::BtnRight, true) => MOUSEEVENTF_RIGHTDOWN,
+        (MouseBind::BtnRight, false) => MOUSEEVENTF_RIGHTUP,
+        (MouseBind::BtnMiddle, true) => MOUSEEVENTF_MIDDLEDOWN,
+        (MouseBind::BtnMiddle, false) => MOUSEEVENTF_MIDDLEUP,
+        _ => return,
+    };
+    send_mouse_input(0, 0, 0, flags);
+}
+
+fn is_mouse_button(bind: MouseBind) -> bool {
+    matches!(
+        bind,
+        MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle
+    )
+}
+
+/// SendInput 기반 [`MouseSink`] — 모션 워커가 틱마다 호출
+struct WinMouseSink;
+
+impl MouseSink for WinMouseSink {
+    fn move_rel(&mut self, dx: i32, dy: i32) {
+        send_mouse_move(dx, dy);
+    }
+    fn wheel(&mut self, notches: i32) {
+        send_mouse_wheel(notches);
+    }
+}
+
 fn send_combo(modifier_vks: &[u16], key_vk: u16) {
     for &m in modifier_vks {
         send_key_down(m);
@@ -304,6 +371,21 @@ fn execute_action(action: &BindAction) {
                 }
             });
         }
+        // 상태형 마우스 바인딩이 콤보/리맵/더블탭 등 일회성 경로로 온 경우 —
+        // 단발 동작으로 처리 (클릭 1회, 휠 1노치, 짧은 이동)
+        BindAction::Mouse(mb) => match mb {
+            MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle => {
+                send_mouse_button(*mb, true);
+                send_mouse_button(*mb, false);
+            }
+            MouseBind::WheelUp => send_mouse_wheel(1),
+            MouseBind::WheelDown => send_mouse_wheel(-1),
+            MouseBind::MoveUp => send_mouse_move(0, -25),
+            MouseBind::MoveDown => send_mouse_move(0, 25),
+            MouseBind::MoveLeft => send_mouse_move(-25, 0),
+            MouseBind::MoveRight => send_mouse_move(25, 0),
+            MouseBind::Slow => {}
+        },
     }
 }
 
@@ -390,6 +472,22 @@ unsafe extern "system" fn keyboard_hook_proc(
             }
             1
         }
+        // 마우스 바인딩 — 물리 키 이벤트를 억제하고 워커에 위임
+        KeyDecision::MouseEngage(mb) => {
+            drop(guard);
+            queue_job(WorkerJob::MouseEngage(mb));
+            1
+        }
+        KeyDecision::MouseRelease(mb) => {
+            drop(guard);
+            queue_job(WorkerJob::MouseRelease(mb));
+            1
+        }
+        KeyDecision::MouseStopAll => {
+            drop(guard);
+            queue_job(WorkerJob::MouseStopAll);
+            1
+        }
     }
 }
 
@@ -438,6 +536,10 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             Err(_) => return Err("액션 큐 잠금 실패".into()),
         }
         self.action_worker = Some(std::thread::spawn(move || {
+            // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 액션 워커가 소유한다
+            let motion = MouseWorker::start(WinMouseSink);
+            let mut pressed_buttons: Vec<MouseBind> = Vec::new();
+
             for job in action_rx {
                 match job {
                     WorkerJob::Action(action) => execute_action(&action),
@@ -445,7 +547,37 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                         send_chord_engage(trigger_vk, key_vk);
                     }
                     WorkerJob::ChordRelease { trigger_vk } => send_key_up(trigger_vk),
+                    WorkerJob::MouseEngage(mb) => {
+                        if is_mouse_button(mb) {
+                            if !pressed_buttons.contains(&mb) {
+                                pressed_buttons.push(mb);
+                                send_mouse_button(mb, true);
+                            }
+                        } else {
+                            motion.engage(mb);
+                        }
+                    }
+                    WorkerJob::MouseRelease(mb) => {
+                        if is_mouse_button(mb) {
+                            if let Some(pos) = pressed_buttons.iter().position(|&b| b == mb) {
+                                pressed_buttons.remove(pos);
+                                send_mouse_button(mb, false);
+                            }
+                        } else {
+                            motion.release(mb);
+                        }
+                    }
+                    WorkerJob::MouseStopAll => {
+                        motion.stop_all();
+                        for mb in pressed_buttons.drain(..) {
+                            send_mouse_button(mb, false);
+                        }
+                    }
                 }
+            }
+            // 종료 정리 — 눌린 버튼 해제 (모션은 MouseWorker Drop이 정지)
+            for mb in pressed_buttons.drain(..) {
+                send_mouse_button(mb, false);
             }
             tracing::debug!("액션 워커 종료");
         }));

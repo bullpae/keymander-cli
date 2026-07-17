@@ -6,9 +6,12 @@
 //! 필수: 시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 권한
 
 use super::engine::{EngineState, KeyDecision};
-use super::{resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, VKey};
+use super::mouse::{MouseSink, MouseWorker};
+use super::{
+    resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
+};
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -76,7 +79,51 @@ extern "C" {
     fn CGEventSetType(event: CGEventRef, type_: u32);
     /// 실제 HID 수정자 플래그 조회 (state_id=1: kCGEventSourceStateHIDSystemState)
     fn CGEventSourceFlagsState(state_id: i32) -> u64;
+    fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
+    fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
+    fn CGEventCreateMouseEvent(
+        source: CGEventSourceRef,
+        mouse_type: u32,
+        position: CGPoint,
+        button: u32,
+    ) -> CGEventRef;
+    /// C 가변 인자 함수 — wheel_count=1이면 wheel1만 읽는다
+    fn CGEventCreateScrollWheelEvent(
+        source: CGEventSourceRef,
+        units: u32,
+        wheel_count: u32,
+        wheel1: i32,
+        ...
+    ) -> CGEventRef;
 }
+
+/// Core Graphics 좌표 (좌상단 원점, 포인트 단위)
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+// ── 마우스 이벤트 타입/버튼 상수 ─────────────────────────────────────────────
+
+const CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
+const CG_EVENT_LEFT_MOUSE_UP: u32 = 2;
+const CG_EVENT_RIGHT_MOUSE_DOWN: u32 = 3;
+const CG_EVENT_RIGHT_MOUSE_UP: u32 = 4;
+const CG_EVENT_MOUSE_MOVED: u32 = 5;
+const CG_EVENT_LEFT_MOUSE_DRAGGED: u32 = 6;
+const CG_EVENT_RIGHT_MOUSE_DRAGGED: u32 = 7;
+const CG_EVENT_OTHER_MOUSE_DOWN: u32 = 25;
+const CG_EVENT_OTHER_MOUSE_UP: u32 = 26;
+const CG_EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
+
+const CG_MOUSE_BUTTON_LEFT: u32 = 0;
+const CG_MOUSE_BUTTON_RIGHT: u32 = 1;
+const CG_MOUSE_BUTTON_CENTER: u32 = 2;
+
+/// 스크롤 단위: 라인 (kCGScrollEventUnitLine)
+const CG_SCROLL_EVENT_UNIT_LINE: u32 = 1;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -525,6 +572,130 @@ unsafe fn tis_select_source_by_language(lang: &[u8]) -> bool {
     found
 }
 
+// ── 마우스 주입 ──────────────────────────────────────────────────────────────
+
+/// 현재 눌린 마우스 버튼 비트마스크 (bit0=좌, bit1=우, bit2=중).
+/// 이동 이벤트 타입 결정(드래그 vs 이동)과 종료 시 stuck-button 해제에 쓴다.
+static BUTTONS_HELD: AtomicU8 = AtomicU8::new(0);
+
+fn mouse_button_bit(mb: MouseBind) -> u8 {
+    match mb {
+        MouseBind::BtnLeft => 1,
+        MouseBind::BtnRight => 2,
+        MouseBind::BtnMiddle => 4,
+        _ => 0,
+    }
+}
+
+fn is_mouse_button(mb: MouseBind) -> bool {
+    mouse_button_bit(mb) != 0
+}
+
+/// 현재 포인터 위치 — 매 틱 fresh 조회.
+/// WindowServer가 화면 밖 좌표를 핀 고정하면 다음 조회에서 보정된 값이
+/// 돌아오므로 별도 클램프 없이도 자가 보정된다.
+fn current_mouse_pos() -> CGPoint {
+    unsafe {
+        let ev = CGEventCreate(std::ptr::null_mut());
+        if ev.is_null() {
+            return CGPoint::default();
+        }
+        let pos = CGEventGetLocation(ev);
+        CFRelease(ev);
+        pos
+    }
+}
+
+fn post_mouse_event(event_type: u32, pos: CGPoint, button: u32) {
+    unsafe {
+        let ev = CGEventCreateMouseEvent(std::ptr::null_mut(), event_type, pos, button);
+        if ev.is_null() {
+            return;
+        }
+        CGEventSetIntegerValueField(ev, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
+        CGEventPost(CG_SESSION_EVENT_TAP, ev);
+        CFRelease(ev);
+    }
+}
+
+fn send_mouse_button(mb: MouseBind, down: bool) {
+    let (dt, ut, button) = match mb {
+        MouseBind::BtnLeft => (
+            CG_EVENT_LEFT_MOUSE_DOWN,
+            CG_EVENT_LEFT_MOUSE_UP,
+            CG_MOUSE_BUTTON_LEFT,
+        ),
+        MouseBind::BtnRight => (
+            CG_EVENT_RIGHT_MOUSE_DOWN,
+            CG_EVENT_RIGHT_MOUSE_UP,
+            CG_MOUSE_BUTTON_RIGHT,
+        ),
+        MouseBind::BtnMiddle => (
+            CG_EVENT_OTHER_MOUSE_DOWN,
+            CG_EVENT_OTHER_MOUSE_UP,
+            CG_MOUSE_BUTTON_CENTER,
+        ),
+        _ => return,
+    };
+    let bit = mouse_button_bit(mb);
+    if down {
+        BUTTONS_HELD.fetch_or(bit, Ordering::Relaxed);
+    } else {
+        BUTTONS_HELD.fetch_and(!bit, Ordering::Relaxed);
+    }
+    post_mouse_event(if down { dt } else { ut }, current_mouse_pos(), button);
+}
+
+/// 상대 이동 — 버튼 홀드 중이면 드래그 이벤트로 보낸다
+/// (앱들은 mouseMoved가 아닌 *MouseDragged만 드래그로 인식)
+fn send_mouse_move_rel(dx: i32, dy: i32) {
+    let cur = current_mouse_pos();
+    let pos = CGPoint {
+        x: cur.x + dx as f64,
+        y: cur.y + dy as f64,
+    };
+    let held = BUTTONS_HELD.load(Ordering::Relaxed);
+    let (event_type, button) = if held & 1 != 0 {
+        (CG_EVENT_LEFT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_LEFT)
+    } else if held & 2 != 0 {
+        (CG_EVENT_RIGHT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_RIGHT)
+    } else if held & 4 != 0 {
+        (CG_EVENT_OTHER_MOUSE_DRAGGED, CG_MOUSE_BUTTON_CENTER)
+    } else {
+        (CG_EVENT_MOUSE_MOVED, CG_MOUSE_BUTTON_LEFT)
+    };
+    post_mouse_event(event_type, pos, button);
+}
+
+fn send_mouse_wheel(notches: i32) {
+    unsafe {
+        let ev = CGEventCreateScrollWheelEvent(
+            std::ptr::null_mut(),
+            CG_SCROLL_EVENT_UNIT_LINE,
+            1,
+            notches,
+        );
+        if ev.is_null() {
+            return;
+        }
+        CGEventSetIntegerValueField(ev, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
+        CGEventPost(CG_SESSION_EVENT_TAP, ev);
+        CFRelease(ev);
+    }
+}
+
+/// CGEvent 기반 [`MouseSink`] — 모션 워커가 틱마다 호출
+struct MacMouseSink;
+
+impl MouseSink for MacMouseSink {
+    fn move_rel(&mut self, dx: i32, dy: i32) {
+        send_mouse_move_rel(dx, dy);
+    }
+    fn wheel(&mut self, notches: i32) {
+        send_mouse_wheel(notches);
+    }
+}
+
 // ── 액션 실행 ────────────────────────────────────────────────────────────────
 
 fn execute_action(action: &BindAction) {
@@ -563,6 +734,21 @@ fn execute_action(action: &BindAction) {
                 }
             });
         }
+        // 상태형 마우스 바인딩이 콤보/리맵/더블탭 등 일회성 경로로 온 경우 —
+        // 단발 동작으로 처리 (클릭 1회, 휠 1노치, 짧은 이동)
+        BindAction::Mouse(mb) => match mb {
+            MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle => {
+                send_mouse_button(*mb, true);
+                send_mouse_button(*mb, false);
+            }
+            MouseBind::WheelUp => send_mouse_wheel(1),
+            MouseBind::WheelDown => send_mouse_wheel(-1),
+            MouseBind::MoveUp => send_mouse_move_rel(0, -25),
+            MouseBind::MoveDown => send_mouse_move_rel(0, 25),
+            MouseBind::MoveLeft => send_mouse_move_rel(-25, 0),
+            MouseBind::MoveRight => send_mouse_move_rel(25, 0),
+            MouseBind::Slow => {}
+        },
     }
 }
 
@@ -648,6 +834,12 @@ enum WorkerJob {
     ChordEngage { trigger: VKey, key: VKey },
     /// 코드 해제: 트리거 up 주입
     ChordRelease { trigger: VKey },
+    /// 마우스 바인딩 시작 — 이동/휠은 모션 워커, 버튼은 즉시 down 주입
+    MouseEngage(MouseBind),
+    /// 마우스 바인딩 정지 — 이동/휠 해제, 버튼 up 주입
+    MouseRelease(MouseBind),
+    /// 활성 마우스 바인딩 전체 정지 (stuck-mouse 방지)
+    MouseStopAll,
 }
 
 /// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
@@ -789,6 +981,22 @@ unsafe extern "C" fn event_tap_callback(
                 }
                 std::ptr::null_mut()
             }
+            // 마우스 바인딩 (flagsChanged 경로 — LShift 저속 모드 등 수정자 매핑)
+            KeyDecision::MouseEngage(mb) => {
+                drop(guard);
+                queue_job(WorkerJob::MouseEngage(mb));
+                std::ptr::null_mut()
+            }
+            KeyDecision::MouseRelease(mb) => {
+                drop(guard);
+                queue_job(WorkerJob::MouseRelease(mb));
+                std::ptr::null_mut()
+            }
+            KeyDecision::MouseStopAll => {
+                drop(guard);
+                queue_job(WorkerJob::MouseStopAll);
+                std::ptr::null_mut()
+            }
         };
     }
 
@@ -841,6 +1049,22 @@ unsafe extern "C" fn event_tap_callback(
                     layer_trigger: None,
                 });
             }
+            std::ptr::null_mut()
+        }
+        // 마우스 바인딩 — 물리 키 이벤트를 억제하고 워커에 위임
+        KeyDecision::MouseEngage(mb) => {
+            drop(guard);
+            queue_job(WorkerJob::MouseEngage(mb));
+            std::ptr::null_mut()
+        }
+        KeyDecision::MouseRelease(mb) => {
+            drop(guard);
+            queue_job(WorkerJob::MouseRelease(mb));
+            std::ptr::null_mut()
+        }
+        KeyDecision::MouseStopAll => {
+            drop(guard);
+            queue_job(WorkerJob::MouseStopAll);
             std::ptr::null_mut()
         }
     }
@@ -936,6 +1160,10 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             Err(_) => return Err("액션 큐 잠금 실패".into()),
         }
         self.action_worker = Some(std::thread::spawn(move || {
+            // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 액션 워커가 소유한다
+            let motion = MouseWorker::start(MacMouseSink);
+            let mut pressed_buttons: Vec<MouseBind> = Vec::new();
+
             for job in action_rx {
                 match job {
                     WorkerJob::Action {
@@ -946,7 +1174,37 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                     WorkerJob::ChordRelease { trigger } => {
                         send_key_event(vkey_to_cg(trigger), false, 0)
                     }
+                    WorkerJob::MouseEngage(mb) => {
+                        if is_mouse_button(mb) {
+                            if !pressed_buttons.contains(&mb) {
+                                pressed_buttons.push(mb);
+                                send_mouse_button(mb, true);
+                            }
+                        } else {
+                            motion.engage(mb);
+                        }
+                    }
+                    WorkerJob::MouseRelease(mb) => {
+                        if is_mouse_button(mb) {
+                            if let Some(pos) = pressed_buttons.iter().position(|&b| b == mb) {
+                                pressed_buttons.remove(pos);
+                                send_mouse_button(mb, false);
+                            }
+                        } else {
+                            motion.release(mb);
+                        }
+                    }
+                    WorkerJob::MouseStopAll => {
+                        motion.stop_all();
+                        for mb in pressed_buttons.drain(..) {
+                            send_mouse_button(mb, false);
+                        }
+                    }
                 }
+            }
+            // 종료 정리 — 눌린 버튼 해제 (모션은 MouseWorker Drop이 정지)
+            for mb in pressed_buttons.drain(..) {
+                send_mouse_button(mb, false);
             }
             tracing::debug!("액션 워커 종료");
         }));
