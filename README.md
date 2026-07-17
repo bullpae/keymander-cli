@@ -36,6 +36,8 @@ Both share the same **kmd-core** library — identical search, config, index, an
 - **Translate EN↔KO**: `@tr text`, `@trko text`, `@tren text`
 - **Keymap management**: Built-in Kanata profiles (vim-nav, minimal) with `kmd keymap init/use/start/stop`
   - `vim-nav` preset: Alt hold → Vim-style HJKL navigation + Alt+Space → launch kmd-desktop
+  - HHKB-style CapsLock mod-tap: tap → CapsLock, hold + key → Ctrl combo
+  - **Mouse layer**: RAlt hold → WASD pointer move (accelerated), Space left-click/drag, J/K/L clicks, LShift precision
   - Desktop: `:keymap` or `:km` for status, on/off, profile switching
 - **Prompt templates**: `:prompt add review "Review this code: {query}"` → `@ll :review code`
 - **Quick Transform**: `:t spell text`, `:t trko text` — clipboard → spell check / translate instantly
@@ -152,6 +154,8 @@ The `vim-nav` preset provides:
 - Alt hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
 - Alt + Space = launch kmd-desktop (via kanata `cmd`)
 - Alt tap (alone) = Esc
+- CapsLock mod-tap: tap = CapsLock, hold + key = Ctrl combo (HHKB-style)
+- RAlt hold = mouse layer: WASD pointer move, Space left-click/drag, J/K/L clicks, LShift precision
 
 Register kanata as an OS startup program for persistent keymap.
 

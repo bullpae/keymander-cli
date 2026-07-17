@@ -174,10 +174,48 @@ active_profile = "vim-nav"
 
 **내장 프리셋**:
 - `vim-nav` — Alt 홀드 → HJKL 네비게이션 + Alt+Space → kmd-desktop 실행
-- `minimal` — CapsLock → Esc
+  - CapsLock 모드탭: 짧게 탭 = CapsLock, 홀드 + 다른 키 = Ctrl (HHKB 스타일, Windows)
+  - RAlt 홀드 → 마우스 레이어 (아래 참조)
+- `minimal` — CapsLock 모드탭: 짧게 탭 = Esc, 홀드 = Ctrl (macOS는 CapsLock → Esc 리맵)
 
 프리셋 설치: `kmd keymap init vim-nav` (또는 `kmd keymap init minimal`)
 프리셋 목록: `kmd keymap list-presets`
+
+#### 마우스 레이어 (RAlt 홀드)
+
+홀드 손(오른엄지)과 조작 손(왼손)을 분리한 배치. 짧게 탭하면 한/영 전환이
+유지된다 (Windows 한국어 배열의 물리 오른쪽 Alt = 한/영 키).
+
+| 키 | 기능 |
+|----|------|
+| W / A / S / D | 포인터 ↑ ← ↓ → (시간 가속: 180→1300px/s) |
+| Space | 좌클릭 — 누르고 있으면 드래그 |
+| J / K / L | 좌 / 우 / 중 클릭 |
+| LShift 홀드 | 저속 정밀 모드 (×0.25) |
+| 그 외 | 차단 (오타 방지) |
+
+#### tap-hold(모드탭) 커스터마이징
+
+```toml
+[launcher.keymap.tap_holds.CapsLock]
+tap = "CapsLock"    # 짧게 탭했을 때 (생략 시 무동작)
+hold = "LCtrl"      # 홀드 중 다른 키와 조합할 수정자
+timeout_ms = 200    # tap 판정 시간
+```
+
+#### 마우스 레이어 커스터마이징
+
+`mouse:` 접두어 액션을 레이어 매핑에 쓸 수 있다:
+`mouse:up/down/left/right`(이동), `mouse:click/rclick/mclick`(버튼),
+`mouse:wheel-up/wheel-down`(휠), `mouse:slow`(저속 모드).
+
+```toml
+[launcher.keymap.layers.mouse]
+trigger = "RAlt"
+[launcher.keymap.layers.mouse.mappings]
+E = "mouse:wheel-up"    # 기본 배치 위에 병합된다
+C = "mouse:wheel-down"
+```
 
 ### 4.6 [keybindings]
 

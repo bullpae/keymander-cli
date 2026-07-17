@@ -2,6 +2,24 @@
 
 All notable changes to keymander are documented here.
 
+## [Unreleased]
+
+### Features
+- **HHKB 스타일 CapsLock 모드탭 (tap-hold)** — 짧게 탭 = CapsLock, 홀드 중
+  다른 키 = Ctrl 조합. 다른 키를 누르는 순간 즉시 hold로 판정되어
+  Ctrl+C 등이 타임아웃 대기 없이 동작한다. vim-nav 프리셋 기본값(Windows),
+  minimal 프리셋은 tap=Esc/hold=Ctrl로 진화. macOS는 OS 자체 tap(한영)/
+  hold(캡스락)와 충돌하므로 기본값에서 제외. kanata 프리셋에도 동일 반영
+  (`tap-hold-press`). `[launcher.keymap.tap_holds.<키>]`로 커스터마이징.
+- **마우스 레이어 (VIA 스타일 mouse keys)** — RAlt 홀드 → 왼손 마우스 조작.
+  홀드 손(오른엄지)과 조작 손(왼손)을 분리한 배치: WASD 포인터 이동
+  (180→1300px/s 시간 가속, 125Hz 워커), Space 좌클릭(홀드=드래그),
+  J/K/L 좌/우/중 클릭, LShift 저속 정밀 모드. 미매핑 키는 차단(오타 방지).
+  RAlt 짧게 탭 = 한/영 유지 (Windows 한국어 배열의 물리 RAlt=한/영 키 별칭
+  매칭 포함). Windows(SendInput)/macOS(CGEvent, 드래그 이벤트 합성) 네이티브
+  구현 + kanata 프리셋(`movemouse-accel-*`) 동일 배치. 레이어 트리거 해제·
+  keymap 토글 시 이동/버튼 전체 정지(stuck-mouse 방지).
+
 ## [0.9.5] — 2026-07-13
 
 리팩토링·보안 정비 릴리스 — 0.9.4 패스쓰루 진단 과정에서 드러난
