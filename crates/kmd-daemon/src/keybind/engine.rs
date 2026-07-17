@@ -8,8 +8,8 @@
 use std::collections::HashSet;
 
 use super::{
-    is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, UnmappedBehavior,
-    VKey,
+    is_modifier_key, modifier_satisfied, BindAction, ComboTrigger, KeybindConfig, MouseBind,
+    UnmappedBehavior, VKey,
 };
 
 /// 키 이벤트 처리 결정
@@ -44,6 +44,14 @@ pub enum KeyDecision {
         trigger: VKey,
         deferred_action: Option<BindAction>,
     },
+    /// 마우스 바인딩 키 down — 어댑터는 물리 이벤트를 억제하고
+    /// 이동/휠이면 마우스 워커를 시작, 버튼이면 button down을 주입한다.
+    MouseEngage(MouseBind),
+    /// 마우스 바인딩 키 up — 이동/휠 정지, 버튼 button up 주입.
+    MouseRelease(MouseBind),
+    /// 활성 마우스 바인딩 전체 정지 — 레이어 트리거 해제나 keymap 토글로
+    /// 이동 키의 keyup을 더 받을 수 없을 때 stuck-mouse를 방지한다.
+    MouseStopAll,
 }
 
 impl KeyDecision {
@@ -110,6 +118,14 @@ pub struct EngineState {
     /// true인 동안 모든 키는 OS 조합으로 통과하고, 트리거 up에서
     /// [`KeyDecision::ReleaseChord`]로 해제된다 (A안, docs/08 참조).
     chord_engaged: bool,
+    /// 활성 tap-hold(모드탭) 인덱스 — 키 down 후 tap/hold 판정 대기 중
+    active_tap_hold: Option<usize>,
+    /// tap-hold 키가 다운된 시각 (tick count)
+    tap_hold_down_tick: u32,
+    /// tap-hold의 hold 수정자가 OS에 주입된 상태 (chord)
+    tap_hold_engaged: bool,
+    /// 현재 눌려 있는 마우스 바인딩 키 — 레이어 트리거 해제 시 전체 정지용
+    mouse_keys_held: HashSet<VKey>,
 }
 
 impl EngineState {
@@ -130,6 +146,10 @@ impl EngineState {
             layer_dt_last_key: None,
             layer_dt_last_tick: 0,
             chord_engaged: false,
+            active_tap_hold: None,
+            tap_hold_down_tick: 0,
+            tap_hold_engaged: false,
+            mouse_keys_held: HashSet::new(),
         }
     }
 
@@ -144,17 +164,28 @@ impl EngineState {
         self.dt_consumed_key = None;
         self.layer_dt_last_key = None;
         self.chord_engaged = false;
+        self.active_tap_hold = None;
+        self.tap_hold_engaged = false;
+        self.mouse_keys_held.clear();
     }
 
-    /// 현재 코드 모드로 OS에 주입돼 있는 트리거 키.
-    /// 어댑터가 stop 시 stuck-modifier를 방지하기 위해 해제(up 주입)에 사용한다.
+    /// 현재 코드 모드로 OS에 주입돼 있는 트리거 키 (레이어 chord 또는
+    /// tap-hold의 hold 수정자). 어댑터가 stop 시 stuck-modifier를 방지하기
+    /// 위해 해제(up 주입)에 사용한다.
     pub fn engaged_chord_trigger(&self) -> Option<VKey> {
-        if !self.chord_engaged {
-            return None;
+        if self.chord_engaged {
+            return self
+                .active_layer
+                .and_then(|idx| self.config.layers.get(idx))
+                .map(|l| l.trigger);
         }
-        self.active_layer
-            .and_then(|idx| self.config.layers.get(idx))
-            .map(|l| l.trigger)
+        if self.tap_hold_engaged {
+            return self
+                .active_tap_hold
+                .and_then(|idx| self.config.tap_holds.get(idx))
+                .map(|t| t.hold);
+        }
+        None
     }
 
     /// 코드 모드가 걸린 상태에서 상태 초기화가 필요할 때, 주입된 트리거를
@@ -163,6 +194,7 @@ impl EngineState {
     fn take_engaged_chord_trigger(&mut self) -> Option<VKey> {
         let trigger = self.engaged_chord_trigger();
         self.chord_engaged = false;
+        self.tap_hold_engaged = false;
         trigger
     }
 
@@ -246,6 +278,7 @@ impl EngineState {
                     let enabled = !self.keymap_enabled;
                     // 코드 모드를 끊는 경우 주입된 트리거를 해제해야 한다
                     let chord_trigger = self.take_engaged_chord_trigger();
+                    let had_mouse = !self.mouse_keys_held.is_empty();
                     self.reset_runtime_state();
                     self.keymap_enabled = enabled;
                     self.combo_consumed_key = Some(vkey);
@@ -262,6 +295,9 @@ impl EngineState {
                             trigger,
                             deferred_action: None,
                         };
+                    }
+                    if had_mouse {
+                        return KeyDecision::MouseStopAll;
                     }
                     return KeyDecision::Suppress;
                 }
@@ -301,9 +337,79 @@ impl EngineState {
             return KeyDecision::PassThrough;
         }
 
+        // ── 2.5 tap-hold(모드탭) 처리 ──
+        // 짧게 탭 = tap 키, 홀드 중 다른 키 down = hold 수정자 chord (즉시 판정).
+        // 홀드만 하다 떼면(타임아웃 초과) 아무 동작 없음 — HHKB 동작과 동일.
+        if is_down {
+            if let Some(idx) = self.config.tap_holds.iter().position(|t| t.key == vkey) {
+                if self.active_tap_hold.is_none() {
+                    self.active_tap_hold = Some(idx);
+                    self.tap_hold_down_tick = tick;
+                    self.tap_hold_engaged = false;
+                    // 레이어 활성 중이면 "키 사용됨" — 레이어 tap 오발동 방지
+                    if self.active_layer.is_some() {
+                        self.layer_key_used = true;
+                    }
+                    return KeyDecision::Suppress;
+                }
+                if self.active_tap_hold == Some(idx) {
+                    // OS 오토리피트 — 억제 (down_tick은 최초 값 유지)
+                    return KeyDecision::Suppress;
+                }
+                // 다른 tap-hold가 활성 중 → 아래 '다른 키' 처리로 폴스루
+            }
+        } else if let Some(idx) = self.active_tap_hold {
+            if self.config.tap_holds[idx].key == vkey {
+                let th = self.config.tap_holds[idx].clone();
+                let engaged = self.tap_hold_engaged;
+                self.active_tap_hold = None;
+                self.tap_hold_engaged = false;
+
+                if engaged {
+                    // hold 수정자가 주입돼 있음 — up 주입으로 해제
+                    return KeyDecision::ReleaseChord {
+                        trigger: th.hold,
+                        deferred_action: None,
+                    };
+                }
+                let elapsed = tick.wrapping_sub(self.tap_hold_down_tick);
+                if elapsed < th.timeout_ms {
+                    if let Some(tap_key) = th.tap {
+                        return KeyDecision::execute(BindAction::SendKey(tap_key));
+                    }
+                }
+                return KeyDecision::Suppress;
+            }
+        }
+
+        // 활성 tap-hold 중 다른 키 처리
+        if let Some(th_idx) = self.active_tap_hold {
+            if self.tap_hold_engaged {
+                // hold 수정자가 주입된 상태 — 모든 키를 OS 조합으로 통과
+                return KeyDecision::PassThrough;
+            }
+            if is_down && !is_modifier_key(&vkey) {
+                // 다른 키 down → hold 확정. 수정자 down + 키 down을 원자
+                // 주입해 Ctrl+C 등이 타임아웃 대기 없이 즉시 동작한다.
+                let hold = self.config.tap_holds[th_idx].hold;
+                self.tap_hold_engaged = true;
+                return KeyDecision::EngageChord {
+                    trigger: hold,
+                    key: vkey,
+                };
+            }
+            // 수정자 down/키 up은 아래 일반 흐름으로 (물리 수정자는 통과 —
+            // 이후 키 down에서 hold와 함께 OS 조합이 된다: Caps+Shift+K 등)
+        }
+
         // ── 3. 레이어 트리거 키 처리 ──
         if is_down {
-            if let Some(idx) = self.config.layers.iter().position(|l| l.trigger == vkey) {
+            if let Some(idx) = self
+                .config
+                .layers
+                .iter()
+                .position(|l| l.matches_trigger(vkey))
+            {
                 if self.active_layer.is_none() {
                     tracing::debug!("레이어 활성: {}", self.config.layers[idx].name);
                     self.active_layer = Some(idx);
@@ -318,7 +424,7 @@ impl EngineState {
                 .config
                 .layers
                 .get(active_idx)
-                .map(|l| l.trigger == vkey)
+                .map(|l| l.matches_trigger(vkey))
                 .unwrap_or(false);
             if is_active_trigger {
                 // 코드 모드 종료 — 주입된 트리거 해제 (tap 판정 없음)
@@ -341,6 +447,13 @@ impl EngineState {
 
                 self.active_layer = None;
                 self.layer_key_used = false;
+
+                // 이동/버튼 키가 눌린 채 트리거를 뗐다 — 해당 키들의 keyup은
+                // 더 이상 레이어 매핑으로 오지 않으므로 여기서 전부 정지
+                if !self.mouse_keys_held.is_empty() {
+                    self.mouse_keys_held.clear();
+                    return KeyDecision::MouseStopAll;
+                }
 
                 if !was_used && elapsed < tap_hold_ms {
                     if let Some(tap_key) = tap_action {
@@ -395,6 +508,24 @@ impl EngineState {
             let action_opt = self.config.layers[layer_idx].mappings.get(&vkey).cloned();
 
             if let Some(action) = action_opt {
+                // 마우스 바인딩은 상태형 — down=시작/버튼다운, up=정지/버튼업
+                if let BindAction::Mouse(mb) = action {
+                    if is_down {
+                        if self.mouse_keys_held.contains(&vkey) {
+                            // OS 오토리피트 — 이미 활성
+                            return KeyDecision::Suppress;
+                        }
+                        self.layer_key_used = true;
+                        self.layer_dt_last_key = None;
+                        self.mouse_keys_held.insert(vkey);
+                        return KeyDecision::MouseEngage(mb);
+                    }
+                    if self.mouse_keys_held.remove(&vkey) {
+                        return KeyDecision::MouseRelease(mb);
+                    }
+                    // 레이어 활성 전부터 눌려 있던 키의 up — 통과 (stuck 방지)
+                    return KeyDecision::PassThrough;
+                }
                 if is_down {
                     self.layer_key_used = true;
                     self.layer_dt_last_key = None;
@@ -537,6 +668,7 @@ mod tests {
         cfg.layers.push(Layer {
             name: "nav".into(),
             trigger: VKey::LAlt,
+            trigger_aliases: Vec::new(),
             tap_action: Some(VKey::Escape),
             tap_hold_ms: 200,
             unmapped: UnmappedBehavior::Plain,
@@ -1156,6 +1288,338 @@ mod tests {
         e.process_key(VKey::LAlt, false, 600);
 
         assert_execute_sendkey(e.process_key(VKey::CapsLock, true, 700), VKey::Escape);
+    }
+
+    // ── tap-hold (모드탭) ──
+
+    use crate::keybind::{MouseBind, TapHoldBinding};
+
+    /// HHKB 스타일: CapsLock — tap=CapsLock, hold=LCtrl
+    fn tap_hold_config() -> KeybindConfig {
+        let mut cfg = empty_config();
+        cfg.tap_holds.push(TapHoldBinding {
+            key: VKey::CapsLock,
+            tap: Some(VKey::CapsLock),
+            hold: VKey::LCtrl,
+            timeout_ms: 200,
+        });
+        cfg
+    }
+
+    #[test]
+    fn tap_hold_quick_tap_sends_tap_key() {
+        let mut e = EngineState::new(tap_hold_config());
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, true, 1000),
+            KeyDecision::Suppress
+        ));
+        // 199ms 후 up, 다른 키 미사용 → tap(CapsLock 토글)
+        assert_execute_sendkey(e.process_key(VKey::CapsLock, false, 1199), VKey::CapsLock);
+    }
+
+    #[test]
+    fn tap_hold_long_hold_alone_does_nothing() {
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+        // 타임아웃 초과 단독 해제 → 무동작 (HHKB 동일)
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, false, 1300),
+            KeyDecision::Suppress
+        ));
+    }
+
+    #[test]
+    fn tap_hold_other_key_engages_hold_chord_instantly() {
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+
+        // 타임아웃 이내라도 다른 키 down → 즉시 hold 확정 (Ctrl+C 등)
+        match e.process_key(VKey::C, true, 1050) {
+            KeyDecision::EngageChord {
+                trigger: VKey::LCtrl,
+                key: VKey::C,
+            } => {}
+            other => panic!("EngageChord(LCtrl, C) 기대, 실제: {other:?}"),
+        }
+        // chord 중 후속 키는 전부 통과 (OS에 Ctrl이 주입돼 있음)
+        assert!(matches!(
+            e.process_key(VKey::C, false, 1080),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::V, true, 1120),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::V, false, 1150),
+            KeyDecision::PassThrough
+        ));
+        // 빠르게 뗐어도 chord였으므로 tap이 아니라 ReleaseChord(LCtrl)
+        match e.process_key(VKey::CapsLock, false, 1180) {
+            KeyDecision::ReleaseChord {
+                trigger: VKey::LCtrl,
+                deferred_action: None,
+            } => {}
+            other => panic!("ReleaseChord(LCtrl) 기대, 실제: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tap_hold_modifier_passes_through_then_key_engages() {
+        // Caps+Shift+K → OS는 Ctrl+Shift+K (Shift는 물리 통과, K에서 chord)
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::LShift, true, 1030),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::K, true, 1060),
+            KeyDecision::EngageChord {
+                trigger: VKey::LCtrl,
+                key: VKey::K,
+            }
+        ));
+    }
+
+    #[test]
+    fn tap_hold_autorepeat_suppressed_and_tap_window_preserved() {
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+        // OS 오토리피트 down — 억제, down_tick은 최초 값 유지
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, true, 1100),
+            KeyDecision::Suppress
+        ));
+        // 최초 down 기준 150ms → tap
+        assert_execute_sendkey(e.process_key(VKey::CapsLock, false, 1150), VKey::CapsLock);
+    }
+
+    #[test]
+    fn tap_hold_state_clean_after_release() {
+        let mut e = EngineState::new(tap_hold_config());
+        // chord 사이클
+        e.process_key(VKey::CapsLock, true, 1000);
+        e.process_key(VKey::C, true, 1050);
+        e.process_key(VKey::C, false, 1080);
+        e.process_key(VKey::CapsLock, false, 1100);
+        // 이후 일반 키는 정상 통과
+        assert!(matches!(
+            e.process_key(VKey::C, true, 1200),
+            KeyDecision::PassThrough
+        ));
+        // 새 tap 사이클도 정상
+        e.process_key(VKey::CapsLock, true, 1300);
+        assert_execute_sendkey(e.process_key(VKey::CapsLock, false, 1400), VKey::CapsLock);
+    }
+
+    #[test]
+    fn tap_hold_none_tap_suppresses_quick_release() {
+        let mut cfg = empty_config();
+        cfg.tap_holds.push(TapHoldBinding {
+            key: VKey::CapsLock,
+            tap: None,
+            hold: VKey::LCtrl,
+            timeout_ms: 200,
+        });
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, false, 1100),
+            KeyDecision::Suppress
+        ));
+    }
+
+    #[test]
+    fn tap_hold_wins_over_remap_on_same_key() {
+        // 사용자 misconfig: 같은 키에 리맵+tap-hold — tap-hold 우선
+        let mut cfg = tap_hold_config();
+        cfg.remaps
+            .insert(VKey::CapsLock, BindAction::SendKey(VKey::Escape));
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert_execute_sendkey(e.process_key(VKey::CapsLock, false, 1100), VKey::CapsLock);
+    }
+
+    #[test]
+    fn toggle_during_tap_hold_chord_releases_hold_modifier() {
+        let mut cfg = tap_hold_config();
+        cfg.toggle_keymap = Some(ComboTrigger {
+            modifiers: vec![],
+            key: VKey::F12,
+        });
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::CapsLock, true, 1000);
+        e.process_key(VKey::C, true, 1050); // EngageChord(LCtrl, C)
+        e.process_key(VKey::C, false, 1080);
+
+        // 토글이 chord를 끊으면 주입된 LCtrl을 해제해야 한다
+        // (chord 중 F12는 PassThrough — 토글 검사가 chord 통과보다 먼저다)
+        match e.process_key(VKey::F12, true, 1200) {
+            KeyDecision::ReleaseChord {
+                trigger: VKey::LCtrl,
+                deferred_action: None,
+            } => {}
+            other => panic!("ReleaseChord(LCtrl) 기대, 실제: {other:?}"),
+        }
+    }
+
+    // ── 마우스 레이어 ──
+
+    /// RAlt(별칭 Hangul) 홀드 → 마우스 레이어: W=위, Space=좌클릭, LShift=저속
+    fn mouse_layer_config() -> KeybindConfig {
+        let mut mappings = HashMap::new();
+        mappings.insert(VKey::W, BindAction::Mouse(MouseBind::MoveUp));
+        mappings.insert(VKey::D, BindAction::Mouse(MouseBind::MoveRight));
+        mappings.insert(VKey::Space, BindAction::Mouse(MouseBind::BtnLeft));
+        mappings.insert(VKey::LShift, BindAction::Mouse(MouseBind::Slow));
+
+        let mut cfg = empty_config();
+        cfg.layers.push(Layer {
+            name: "mouse".into(),
+            trigger: VKey::RAlt,
+            trigger_aliases: vec![VKey::Hangul],
+            tap_action: Some(VKey::Hangul),
+            tap_hold_ms: 200,
+            unmapped: UnmappedBehavior::Block,
+            mappings,
+            double_tap_mappings: HashMap::new(),
+        });
+        cfg
+    }
+
+    #[test]
+    fn mouse_move_engages_and_releases_with_key() {
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::MoveUp)
+        ));
+        // 오토리피트 down은 억제
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1500),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1600),
+            KeyDecision::MouseRelease(MouseBind::MoveUp)
+        ));
+        // 키를 다 뗀 뒤 트리거 해제 — 이동 잔여 없음 → tap 아님(사용됨), 억제
+        assert!(matches!(
+            e.process_key(VKey::RAlt, false, 1700),
+            KeyDecision::Suppress
+        ));
+    }
+
+    #[test]
+    fn mouse_button_follows_key_for_drag() {
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+        // Space 홀드 = 버튼 다운 유지 (드래그), W로 이동
+        assert!(matches!(
+            e.process_key(VKey::Space, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::BtnLeft)
+        ));
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1100),
+            KeyDecision::MouseEngage(MouseBind::MoveUp)
+        ));
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1300),
+            KeyDecision::MouseRelease(MouseBind::MoveUp)
+        ));
+        assert!(matches!(
+            e.process_key(VKey::Space, false, 1400),
+            KeyDecision::MouseRelease(MouseBind::BtnLeft)
+        ));
+    }
+
+    #[test]
+    fn trigger_release_with_held_mouse_keys_stops_all() {
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+        e.process_key(VKey::W, true, 1050);
+        e.process_key(VKey::Space, true, 1080);
+
+        // 이동/버튼 키가 눌린 채 트리거 해제 → 전체 정지
+        assert!(matches!(
+            e.process_key(VKey::RAlt, false, 1200),
+            KeyDecision::MouseStopAll
+        ));
+        // 이후 잔여 keyup은 레이어 밖 — 통과 (stuck 없음, 이미 정지됨)
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1250),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn slow_modifier_key_is_suppressed_and_stateful() {
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+        // LShift는 레이어 매핑(mouse:slow) — 물리 Shift는 OS로 안 나간다
+        assert!(matches!(
+            e.process_key(VKey::LShift, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::Slow)
+        ));
+        assert!(matches!(
+            e.process_key(VKey::LShift, false, 1200),
+            KeyDecision::MouseRelease(MouseBind::Slow)
+        ));
+    }
+
+    #[test]
+    fn hangul_alias_activates_mouse_layer_and_taps() {
+        let mut e = EngineState::new(mouse_layer_config());
+        // Windows 한국어 배열: 물리 RAlt = VK_HANGUL
+        assert!(matches!(
+            e.process_key(VKey::Hangul, true, 1000),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::D, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::MoveRight)
+        ));
+        e.process_key(VKey::D, false, 1080);
+        e.process_key(VKey::Hangul, false, 1100); // MouseStopAll 아님 — D 이미 뗌
+                                                  // 짧게 탭만 하면 한/영 전환 유지
+        e.process_key(VKey::Hangul, true, 2000);
+        assert_execute_sendkey(e.process_key(VKey::Hangul, false, 2100), VKey::Hangul);
+    }
+
+    #[test]
+    fn mouse_key_held_before_layer_activation_releases_clean() {
+        let mut e = EngineState::new(mouse_layer_config());
+        // W를 일반 타이핑으로 누른 상태에서 레이어 활성화
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1000),
+            KeyDecision::PassThrough
+        ));
+        e.process_key(VKey::RAlt, true, 1050);
+        // W up — 레이어 매핑이지만 우리가 잡은 down이 아님 → 통과 (stuck 방지)
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1100),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn toggle_with_held_mouse_keys_stops_all() {
+        let mut cfg = mouse_layer_config();
+        cfg.toggle_keymap = Some(ComboTrigger {
+            modifiers: vec![],
+            key: VKey::F12,
+        });
+        let mut e = EngineState::new(cfg);
+        e.process_key(VKey::RAlt, true, 1000);
+        e.process_key(VKey::W, true, 1050);
+
+        assert!(matches!(
+            e.process_key(VKey::F12, true, 1100),
+            KeyDecision::MouseStopAll
+        ));
     }
 
     // ── tick wrapping ──

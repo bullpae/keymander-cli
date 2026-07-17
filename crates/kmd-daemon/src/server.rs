@@ -400,9 +400,25 @@ mod tests {
     #[test]
     fn resolve_vim_nav_기본_레이어() {
         let kb = resolve_with_profile("vim-nav");
-        assert_eq!(kb.layers.len(), 1);
-        assert_eq!(kb.layers[0].trigger, keybind::VKey::LAlt);
+        assert_eq!(kb.layers.len(), 2, "nav + mouse 레이어");
+        assert!(kb.layers.iter().any(|l| l.trigger == keybind::VKey::LAlt));
+        let mouse = kb
+            .layers
+            .iter()
+            .find(|l| l.trigger == keybind::VKey::RAlt)
+            .expect("RAlt 마우스 레이어");
+        assert!(
+            mouse.trigger_aliases.contains(&keybind::VKey::Hangul),
+            "한국어 배열(RAlt=한/영) 별칭"
+        );
         assert!(!kb.combos.is_empty(), "한/영 Shift+Space 콤보 포함");
+        #[cfg(target_os = "windows")]
+        assert!(
+            kb.tap_holds
+                .iter()
+                .any(|t| t.key == keybind::VKey::CapsLock),
+            "CapsLock tap-hold 기본값"
+        );
     }
 
     #[test]
@@ -410,7 +426,7 @@ mod tests {
         // 과거 치트시트는 완전 일치("vim-nav")만 프리셋으로 인식해
         // "vim-nav.kbd"에서 daemon과 표시가 어긋났다 — 회귀 방지
         let kb = resolve_with_profile("vim-nav.kbd");
-        assert_eq!(kb.layers.len(), 1);
+        assert_eq!(kb.layers.len(), 2);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! Linux: evdev + uinput (향후)
 
 pub mod engine;
+pub mod mouse;
 
 #[cfg(windows)]
 pub mod windows;
@@ -369,6 +370,25 @@ pub enum BindAction {
     Macro(Vec<MacroStep>),
     /// 외부 프로그램 실행
     Launch(String),
+    /// 마우스 조작 — 키 down/up이 시작/정지에 대응하는 상태형 액션.
+    /// 엔진이 [`engine::KeyDecision::MouseEngage`]/`MouseRelease`로 변환한다.
+    Mouse(MouseBind),
+}
+
+/// 마우스 바인딩 종류
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseBind {
+    MoveUp,
+    MoveDown,
+    MoveLeft,
+    MoveRight,
+    BtnLeft,
+    BtnRight,
+    BtnMiddle,
+    WheelUp,
+    WheelDown,
+    /// 홀드 중 이동 속도를 낮추는 정밀 모드
+    Slow,
 }
 
 /// 매크로 한 스텝
@@ -438,6 +458,10 @@ pub struct Layer {
     pub name: String,
     /// 이 레이어를 활성화하는 트리거 키
     pub trigger: VKey,
+    /// 트리거로 함께 인정하는 별칭 키.
+    /// Windows 한국어 배열은 물리 오른쪽 Alt가 VK_HANGUL로 들어오므로
+    /// trigger=RAlt인 레이어는 Hangul도 트리거로 잡는다.
+    pub trigger_aliases: Vec<VKey>,
     /// 트리거 키를 짧게 탭했을 때 보낼 키 (tap-hold)
     pub tap_action: Option<VKey>,
     /// tap-hold 판정 시간 (밀리초)
@@ -448,6 +472,27 @@ pub struct Layer {
     pub mappings: HashMap<VKey, BindAction>,
     /// 레이어 내 더블탭 매핑: 첫 탭 → single_action, 두 번째 탭(timeout 이내) → double_action
     pub double_tap_mappings: HashMap<VKey, LayerDoubleTap>,
+}
+
+impl Layer {
+    /// 이 키가 레이어 트리거(별칭 포함)인지
+    pub fn matches_trigger(&self, vkey: VKey) -> bool {
+        self.trigger == vkey || self.trigger_aliases.contains(&vkey)
+    }
+}
+
+/// tap-hold(모드탭) 바인딩: 짧게 탭 = tap 키, 홀드 중 다른 키 = hold 수정자 조합.
+/// 예: CapsLock — tap=CapsLock, hold=LCtrl (HHKB 스타일)
+#[derive(Debug, Clone)]
+pub struct TapHoldBinding {
+    /// 물리 키
+    pub key: VKey,
+    /// 짧게 탭했을 때 보낼 키 (None이면 탭 무동작)
+    pub tap: Option<VKey>,
+    /// 홀드 중 다른 키와 조합할 수정자 키
+    pub hold: VKey,
+    /// tap 판정 시간 (밀리초)
+    pub timeout_ms: u32,
 }
 
 /// 레이어 내 더블탭 설정
@@ -471,6 +516,8 @@ pub struct KeybindConfig {
     pub combos: Vec<(ComboTrigger, BindAction)>,
     /// 더블탭 바인딩 (예: RShift 두 번 → 한영 전환)
     pub double_taps: Vec<DoubleTapBinding>,
+    /// tap-hold(모드탭) 바인딩 (예: CapsLock — 탭=CapsLock, 홀드=Ctrl)
+    pub tap_holds: Vec<TapHoldBinding>,
     /// Runtime toggle hotkey. When disabled, this and Launch combos still run.
     pub toggle_keymap: Option<ComboTrigger>,
 }
@@ -482,6 +529,7 @@ impl KeybindConfig {
             layers: Vec::new(),
             combos: Vec::new(),
             double_taps: Vec::new(),
+            tap_holds: Vec::new(),
             toggle_keymap: None,
         }
     }
@@ -499,7 +547,8 @@ impl KeybindConfig {
         let has_custom = !cfg.remaps.is_empty()
             || !cfg.layers.is_empty()
             || !cfg.combos.is_empty()
-            || !cfg.double_taps.is_empty();
+            || !cfg.double_taps.is_empty()
+            || !cfg.tap_holds.is_empty();
         if !has_custom {
             return None;
         }
@@ -573,9 +622,17 @@ impl KeybindConfig {
                 }),
             };
 
+            // Windows 한국어 배열: 물리 오른쪽 Alt = VK_HANGUL — 함께 트리거로 인정
+            let trigger_aliases = if trigger == VKey::RAlt {
+                vec![VKey::Hangul]
+            } else {
+                Vec::new()
+            };
+
             layers.push(Layer {
                 name: name.clone(),
                 trigger,
+                trigger_aliases,
                 tap_action,
                 tap_hold_ms: layer_cfg.tap_hold_ms.unwrap_or(200),
                 unmapped,
@@ -619,12 +676,48 @@ impl KeybindConfig {
             }
         }
 
+        let mut tap_holds = Vec::new();
+        for (key_str, th_cfg) in &cfg.tap_holds {
+            let Some(key) = VKey::from_name(key_str) else {
+                tracing::warn!("tap-hold 키 파싱 실패: {key_str}");
+                continue;
+            };
+            let Some(hold) = VKey::from_name(&th_cfg.hold) else {
+                tracing::warn!("tap-hold '{key_str}' hold 파싱 실패: {}", th_cfg.hold);
+                continue;
+            };
+            if !is_modifier_key(&hold) {
+                tracing::warn!(
+                    "tap-hold '{key_str}' hold는 수정자 키여야 함: {}",
+                    th_cfg.hold
+                );
+                continue;
+            }
+            let tap = match th_cfg.tap.as_deref() {
+                None => None,
+                Some(t) => match VKey::from_name(t) {
+                    Some(v) => Some(v),
+                    None => {
+                        tracing::warn!("tap-hold '{key_str}' tap 파싱 실패: {t}");
+                        continue;
+                    }
+                },
+            };
+            tap_holds.push(TapHoldBinding {
+                key,
+                tap,
+                hold,
+                timeout_ms: th_cfg.timeout_ms.unwrap_or(200),
+            });
+        }
+
         tracing::info!(
-            "커스텀 키 설정 로드: 리맵 {}개, 레이어 {}개, 콤보 {}개, 더블탭 {}개",
+            "커스텀 키 설정 로드: 리맵 {}개, 레이어 {}개, 콤보 {}개, 더블탭 {}개, 모드탭 {}개",
             remaps.len(),
             layers.len(),
             combos.len(),
-            double_taps.len()
+            double_taps.len(),
+            tap_holds.len()
         );
 
         Some(Self {
@@ -632,6 +725,7 @@ impl KeybindConfig {
             layers,
             combos,
             double_taps,
+            tap_holds,
             toggle_keymap: None,
         })
     }
@@ -645,6 +739,7 @@ impl KeybindConfig {
 /// - `"Ctrl+Shift+End"` → SendCombo { mods: [LCtrl, LShift], key: End }
 /// - `"launch:kmd-desktop"` → Launch("kmd-desktop")
 /// - `"macro:Home;Shift+End;Ctrl+C"` → Macro([...])
+/// - `"mouse:up"` / `"mouse:click"` / `"mouse:wheel-up"` / `"mouse:slow"` → Mouse(...)
 fn parse_action(s: &str) -> Option<BindAction> {
     let s = s.trim();
     if s.is_empty() {
@@ -657,6 +752,10 @@ fn parse_action(s: &str) -> Option<BindAction> {
 
     if let Some(macro_str) = s.strip_prefix("macro:") {
         return parse_macro(macro_str);
+    }
+
+    if let Some(mouse_str) = s.strip_prefix("mouse:") {
+        return parse_mouse_bind(mouse_str).map(BindAction::Mouse);
     }
 
     // 수정자+키 콤보 (예: "Ctrl+Left", "Ctrl+Shift+End")
@@ -673,6 +772,23 @@ fn parse_action(s: &str) -> Option<BindAction> {
     }
 
     VKey::from_name(s).map(BindAction::SendKey)
+}
+
+/// 마우스 바인딩 문자열 파서 (`mouse:` 접두어 이후 부분)
+fn parse_mouse_bind(s: &str) -> Option<MouseBind> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "up" => Some(MouseBind::MoveUp),
+        "down" => Some(MouseBind::MoveDown),
+        "left" => Some(MouseBind::MoveLeft),
+        "right" => Some(MouseBind::MoveRight),
+        "click" | "lclick" | "btn1" => Some(MouseBind::BtnLeft),
+        "rclick" | "btn2" => Some(MouseBind::BtnRight),
+        "mclick" | "btn3" => Some(MouseBind::BtnMiddle),
+        "wheel-up" | "wheelup" => Some(MouseBind::WheelUp),
+        "wheel-down" | "wheeldown" => Some(MouseBind::WheelDown),
+        "slow" => Some(MouseBind::Slow),
+        _ => None,
+    }
 }
 
 /// 수정자 이름 → VKey (액션 실행용, L/R 구분)
@@ -819,9 +935,39 @@ mod tests {
     #[test]
     fn test_vim_nav_preset() {
         let config = preset_config("vim-nav").expect("vim-nav 프리셋은 항상 레이어를 가진다");
-        assert_eq!(config.layers.len(), 1);
-        let layer = &config.layers[0];
-        assert_eq!(layer.trigger, VKey::LAlt);
+        assert_eq!(config.layers.len(), 2, "nav + mouse 레이어");
+
+        // ── 마우스 레이어 (RAlt 홀드, 왼손 WASD + Space/J/K/L 클릭) ──
+        let mouse = config
+            .layers
+            .iter()
+            .find(|l| l.trigger == VKey::RAlt)
+            .expect("RAlt 마우스 레이어");
+        assert!(mouse.trigger_aliases.contains(&VKey::Hangul), "한/영 별칭");
+        assert_eq!(mouse.unmapped, UnmappedBehavior::Block);
+        assert!(matches!(
+            mouse.mappings.get(&VKey::W),
+            Some(BindAction::Mouse(MouseBind::MoveUp))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::Space),
+            Some(BindAction::Mouse(MouseBind::BtnLeft))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::K),
+            Some(BindAction::Mouse(MouseBind::BtnRight))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::LShift),
+            Some(BindAction::Mouse(MouseBind::Slow))
+        ));
+
+        // ── 네비게이션 레이어 ──
+        let layer = config
+            .layers
+            .iter()
+            .find(|l| l.trigger == VKey::LAlt)
+            .expect("LAlt nav 레이어");
         assert_eq!(layer.tap_action, Some(VKey::Escape));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
@@ -871,7 +1017,20 @@ mod tests {
 
     #[test]
     fn test_minimal_preset() {
-        let config = preset_config("minimal").expect("minimal 프리셋은 remap을 가진다");
+        let config = preset_config("minimal").expect("minimal 프리셋은 CapsLock 기본을 가진다");
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: tap=Esc / hold=Ctrl 모드탭
+            let th = config
+                .tap_holds
+                .iter()
+                .find(|t| t.key == VKey::CapsLock)
+                .expect("CapsLock tap-hold");
+            assert_eq!(th.tap, Some(VKey::Escape));
+            assert_eq!(th.hold, VKey::LCtrl);
+            assert!(config.remaps.is_empty());
+        }
+        #[cfg(not(target_os = "windows"))]
         assert!(config.remaps.contains_key(&VKey::CapsLock));
         assert!(config.layers.is_empty());
         #[cfg(target_os = "windows")]
