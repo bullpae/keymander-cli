@@ -299,6 +299,10 @@ pub struct KeymapConfig {
     /// 글로벌 더블탭
     #[serde(default)]
     pub double_taps: Vec<DoubleTapToml>,
+    /// tap-hold(모드탭): 키이름 = { tap, hold, timeout_ms }
+    /// 짧게 탭 = tap 키, 홀드 중 다른 키 = hold 수정자 조합 (HHKB 스타일)
+    #[serde(default)]
+    pub tap_holds: HashMap<String, TapHoldToml>,
 }
 
 impl Default for KeymapConfig {
@@ -312,8 +316,22 @@ impl Default for KeymapConfig {
             layers: HashMap::new(),
             combos: Vec::new(),
             double_taps: Vec::new(),
+            tap_holds: HashMap::new(),
         }
     }
+}
+
+/// TOML tap-hold(모드탭) 설정.
+/// 짧게 탭하면 `tap` 키, 홀드 중 다른 키를 누르면 `hold` 수정자로 동작한다.
+/// 예: CapsLock = { tap = "CapsLock", hold = "LCtrl" } → HHKB 스타일 캡스락
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TapHoldToml {
+    /// 짧게 탭했을 때 보낼 키 (예: "CapsLock", "Escape"). 생략 시 탭 무동작
+    pub tap: Option<String>,
+    /// 홀드 중 다른 키와 조합할 수정자 키 (예: "LCtrl")
+    pub hold: String,
+    /// tap-hold 판정 시간 (ms, 기본 200)
+    pub timeout_ms: Option<u32>,
 }
 
 /// TOML 레이어 설정

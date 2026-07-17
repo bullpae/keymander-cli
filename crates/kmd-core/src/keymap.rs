@@ -20,12 +20,12 @@ pub struct BuiltinPreset {
 pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
     BuiltinPreset {
         name: "vim-nav",
-        description: "Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행",
+        description: "Alt 홀드 → Vim 네비게이션, RAlt 홀드 → 마우스, CapsLock tap/hold → Caps/Ctrl",
         content: VIM_NAV_KBD,
     },
     BuiltinPreset {
         name: "minimal",
-        description: "CapsLock → Esc 최소 맵핑",
+        description: "CapsLock → 탭 Esc / 홀드 Ctrl 최소 맵핑",
         content: MINIMAL_KBD,
     },
 ];
@@ -33,6 +33,8 @@ pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
 const VIM_NAV_KBD: &str = r#";; ============================================================
 ;; keymander vim-nav 프로파일
 ;; Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행
+;; CapsLock → 짧게 탭 = CapsLock, 홀드 = Ctrl (HHKB 스타일)
+;; RAlt 홀드 → 마우스 레이어 (WASD 이동 + Space/J/K/L 클릭)
 ;;
 ;; 의존: kanata (https://github.com/jtroo/kanata)
 ;; 생성: kmd keymap init vim-nav
@@ -46,12 +48,12 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 
 ;; ── 2. 물리 키 매핑 ──────────────────────────────────────────
 (defsrc
-  alt  spc  h    j    k    l    n    m    i    o    .    /    y    p
+  caps alt  ralt lsft spc  w    a    s    d    h    j    k    l    n    m    i    o    .    /    y    p
 )
 
 ;; ── 3. 기본 레이어 ──────────────────────────────────────────
 (deflayer default
-  @nav-mod  spc  h    j    k    l    n    m    i    o    .    /    y    p
+  @caps-th @nav-mod @mouse-mod lsft spc  w    a    s    d    h    j    k    l    n    m    i    o    .    /    y    p
 )
 
 ;; ── 4. 네비게이션 레이어 ────────────────────────────────────
@@ -64,10 +66,21 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;;    y        = 줄 복사        p = 붙여넣기
 ;;    Space    = kmd-desktop 실행 (Alt+Space)
 (deflayer navigation
-  _  @launch-kmd  left down up rght pgup pgdn @i-dt @o-dt bspc @sl-dt @y-cp @p-vt
+  _  _  _  _  @launch-kmd  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc @sl-dt @y-cp @p-vt
 )
 
-;; ── 5. 기능 정의 ────────────────────────────────────────────
+;; ── 5. 마우스 레이어 ────────────────────────────────────────
+;;    RAlt 홀드 상태 — 홀드 손(오른엄지)과 조작 손(왼손) 분리
+;;
+;;    w/a/s/d  = 포인터 ↑←↓→ (시간 가속)
+;;    Space    = 좌클릭 (홀드 = 드래그)
+;;    j/k/l    = 좌/우/중 클릭    LShift = 저속 정밀 모드
+;;    나머지 키는 차단 (오타 방지)
+(deflayer mouse
+  XX _  _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r XX mlft mrgt mmid XX XX XX XX XX XX XX XX
+)
+
+;; ── 6. 기능 정의 ────────────────────────────────────────────
 (defalias
   ;; --- keymander 실행 (Alt+Space) ---
   launch-kmd (cmd kmd-desktop)
@@ -86,12 +99,28 @@ const VIM_NAV_KBD: &str = r#";; ================================================
   ;; --- Alt 레이어 전환 ---
   ;; Alt 홀드 → navigation 레이어, Alt 짧게 탭 → ESC
   nav-mod (tap-hold 200 200 esc (layer-toggle navigation))
+
+  ;; --- CapsLock 모드탭 (HHKB 스타일) ---
+  ;; 짧게 탭 → CapsLock, 홀드 중 다른 키 → Ctrl 조합 (즉시 판정)
+  caps-th (tap-hold-press 200 200 caps lctl)
+
+  ;; --- RAlt 마우스 레이어 ---
+  ;; 짧게 탭 → RAlt(한영 배열 유지), 홀드 → 마우스 레이어
+  mouse-mod (tap-hold-press 200 200 ralt (layer-toggle mouse))
+
+  ;; --- 마우스 이동 (가속: 4ms 간격, 500ms에 걸쳐 1→6px) ---
+  ms-u (movemouse-accel-up 4 500 1 6)
+  ms-d (movemouse-accel-down 4 500 1 6)
+  ms-l (movemouse-accel-left 4 500 1 6)
+  ms-r (movemouse-accel-right 4 500 1 6)
+  ms-lclk mlft
+  ms-slow (movemouse-speed 25)
 )
 "#;
 
 const MINIMAL_KBD: &str = r#";; ============================================================
 ;; keymander minimal 프로파일
-;; CapsLock → Esc 최소 맵핑
+;; CapsLock → 짧게 탭 = Esc, 홀드 = Ctrl 최소 맵핑
 ;;
 ;; 생성: kmd keymap init minimal
 ;; ============================================================
@@ -105,7 +134,11 @@ const MINIMAL_KBD: &str = r#";; ================================================
 )
 
 (deflayer base
-  esc  a s d f j k l ;
+  @caps-th  a s d f j k l ;
+)
+
+(defalias
+  caps-th (tap-hold-press 200 200 esc lctl)
 )
 "#;
 
@@ -618,6 +651,80 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     }
 }
 
+/// vim-nav 프리셋의 마우스 레이어 기본값 — RAlt 홀드 + 왼손 조작.
+///
+/// 설계 원칙: 홀드 손(오른엄지)과 조작 손(왼손)을 분리한다.
+/// - WASD = 포인터 이동 (공간 조작은 게이밍 축, 텍스트는 vim 축으로 분리)
+/// - Space(왼엄지) = 좌클릭 — 이동하던 손이 자세를 안 바꾸고 확정
+/// - J/K/L = 좌/우/중 클릭 (마우스 파지 미러링 별칭)
+/// - LShift = 저속 정밀 모드
+fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
+    use crate::config::LayerToml;
+    let mut mappings = std::collections::HashMap::new();
+    mappings.insert("W".into(), "mouse:up".into());
+    mappings.insert("A".into(), "mouse:left".into());
+    mappings.insert("S".into(), "mouse:down".into());
+    mappings.insert("D".into(), "mouse:right".into());
+    mappings.insert("Space".into(), "mouse:click".into());
+    mappings.insert("J".into(), "mouse:click".into());
+    mappings.insert("K".into(), "mouse:rclick".into());
+    mappings.insert("L".into(), "mouse:mclick".into());
+    mappings.insert("LShift".into(), "mouse:slow".into());
+
+    // Windows 한국어 배열에서 물리 오른쪽 Alt는 한/영 키 — 짧게 탭하면
+    // 한/영 전환을 그대로 살린다 (홀드만 마우스 레이어).
+    // macOS는 Hangul 키코드가 없어 탭 무동작.
+    #[cfg(target_os = "windows")]
+    let tap_action = Some("Hangul".into());
+    #[cfg(not(target_os = "windows"))]
+    let tap_action = None;
+
+    LayerToml {
+        trigger: "RAlt".into(),
+        tap_action,
+        tap_hold_ms: Some(200),
+        // 마우스 조작 중 미매핑 키 오타가 텍스트로 입력되는 사고 방지
+        unmapped: Some("block".into()),
+        mappings,
+        double_taps: std::collections::HashMap::new(),
+    }
+}
+
+/// 프리셋 레이어 기본값 위에 사용자 정의 레이어를 병합.
+/// TOML(Option) 수준 병합이라 "생략"은 기본값 유지, "명시"는 덮어쓴다.
+fn merge_layer_with_base(
+    base: crate::config::LayerToml,
+    user: Option<crate::config::LayerToml>,
+) -> crate::config::LayerToml {
+    let Some(user) = user else { return base };
+    let mut effective = base;
+    if !user.trigger.is_empty() {
+        effective.trigger = user.trigger;
+    }
+    if user.tap_action.is_some() {
+        effective.tap_action = user.tap_action;
+    }
+    if user.tap_hold_ms.is_some() {
+        effective.tap_hold_ms = user.tap_hold_ms;
+    }
+    if user.unmapped.is_some() {
+        effective.unmapped = user.unmapped;
+    }
+    for (k, v) in user.mappings {
+        effective.mappings.insert(k, v);
+    }
+    for (k, v) in user.double_taps {
+        effective.double_taps.insert(k, v);
+    }
+    effective
+}
+
+/// 사용자가 CapsLock에 자체 정의(리맵 또는 tap-hold)를 갖고 있는지
+fn user_defined_capslock(km: &crate::config::KeymapConfig) -> bool {
+    let is_caps = |k: &str| k.eq_ignore_ascii_case("capslock") || k.eq_ignore_ascii_case("caps");
+    km.remaps.keys().any(|k| is_caps(k)) || km.tap_holds.keys().any(|k| is_caps(k))
+}
+
 /// active_profile 문자열이 가리키는 프리셋 종류.
 ///
 /// daemon과 치트시트가 각자 다른 규칙(contains vs 완전 일치)으로 판별하던 것을
@@ -661,41 +768,52 @@ pub fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::Keym
             merged.layers.clear();
             merged.combos.clear();
             merged.double_taps.clear();
+            merged.tap_holds.clear();
             return merged;
         }
         ProfileKind::Minimal => {
-            let has_capslock = merged
-                .remaps
-                .keys()
-                .any(|k| k.eq_ignore_ascii_case("capslock") || k.eq_ignore_ascii_case("caps"));
-            if !has_capslock {
+            if !user_defined_capslock(&merged) {
+                // Windows: tap=Esc / hold=Ctrl 모드탭.
+                // macOS: CapsLock 합성 주입이 불안정하고 OS가 자체
+                // tap(한영)/hold(캡스락)를 제공하므로 기존 단순 리맵 유지.
+                #[cfg(target_os = "windows")]
+                merged.tap_holds.insert(
+                    "CapsLock".into(),
+                    crate::config::TapHoldToml {
+                        tap: Some("Escape".into()),
+                        hold: "LCtrl".into(),
+                        timeout_ms: Some(200),
+                    },
+                );
+                #[cfg(not(target_os = "windows"))]
                 merged.remaps.insert("CapsLock".into(), "Escape".into());
             }
         }
         ProfileKind::VimNav => {
-            let base_layer = vim_nav_default_layer();
             let user_nav = merged.layers.get("nav").cloned();
-            if let Some(user) = user_nav {
-                let mut effective = base_layer;
-                effective.trigger = user.trigger;
-                if user.tap_action.is_some() {
-                    effective.tap_action = user.tap_action;
-                }
-                if user.tap_hold_ms.is_some() {
-                    effective.tap_hold_ms = user.tap_hold_ms;
-                }
-                if user.unmapped.is_some() {
-                    effective.unmapped = user.unmapped;
-                }
-                for (k, v) in user.mappings {
-                    effective.mappings.insert(k, v);
-                }
-                for (k, v) in user.double_taps {
-                    effective.double_taps.insert(k, v);
-                }
-                merged.layers.insert("nav".into(), effective);
-            } else {
-                merged.layers.insert("nav".into(), base_layer);
+            merged.layers.insert(
+                "nav".into(),
+                merge_layer_with_base(vim_nav_default_layer(), user_nav),
+            );
+
+            let user_mouse = merged.layers.get("mouse").cloned();
+            merged.layers.insert(
+                "mouse".into(),
+                merge_layer_with_base(vim_nav_default_mouse_layer(), user_mouse),
+            );
+
+            // HHKB 스타일 CapsLock: 짧게 탭 = CapsLock, 홀드 = Ctrl.
+            // macOS는 OS 기본(한영/캡스락 tap-hold)과 충돌하므로 제외.
+            #[cfg(target_os = "windows")]
+            if !user_defined_capslock(&merged) {
+                merged.tap_holds.insert(
+                    "CapsLock".into(),
+                    crate::config::TapHoldToml {
+                        tap: Some("CapsLock".into()),
+                        hold: "LCtrl".into(),
+                        timeout_ms: Some(200),
+                    },
+                );
             }
         }
     }
@@ -944,6 +1062,22 @@ pub fn keybinding_cheatsheet(
         }
     }
 
+    // ── daemon keybindings: tap-holds (모드탭) ──
+    if !km.tap_holds.is_empty() {
+        section(&mut items, "Tap-Hold", if e { "\u{1F919}" } else { "[TH]" });
+        let mut tap_holds: Vec<_> = km.tap_holds.iter().collect();
+        tap_holds.sort_by_key(|(k, _)| k.to_lowercase());
+        for (key, th) in tap_holds {
+            let tap_desc = th.tap.as_deref().unwrap_or("-");
+            entry(
+                &mut items,
+                key,
+                &format!("\u{1F44B} tap: {tap_desc} / \u{270A} hold: {}", th.hold),
+                if e { "\u{1F918}" } else { "[>]" },
+            );
+        }
+    }
+
     // ── daemon keybindings: layers ──
     let mut layer_names: Vec<_> = km.layers.keys().collect();
     layer_names.sort();
@@ -1155,17 +1289,74 @@ mod tests {
     }
 
     #[test]
-    fn minimal은_capslock_리맵만() {
+    fn minimal은_capslock_기본만() {
         let e = effective_keymap(&keymap_with_profile("minimal"));
-        assert_eq!(e.remaps.get("CapsLock").map(String::as_str), Some("Escape"));
+        #[cfg(target_os = "windows")]
+        {
+            let th = e.tap_holds.get("CapsLock").expect("CapsLock tap-hold");
+            assert_eq!(th.tap.as_deref(), Some("Escape"));
+            assert_eq!(th.hold, "LCtrl");
+            assert!(e.remaps.is_empty());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(e.remaps.get("CapsLock").map(String::as_str), Some("Escape"));
+            assert!(e.tap_holds.is_empty());
+        }
         assert!(e.layers.is_empty());
 
-        // 사용자가 CapsLock을 재정의하면 존중
+        // 사용자가 CapsLock을 재정의하면 존중 (기본 tap-hold/리맵 미주입)
         let mut km = keymap_with_profile("minimal");
         km.remaps.insert("capslock".into(), "Tab".into());
         let e2 = effective_keymap(&km);
         assert_eq!(e2.remaps.len(), 1);
         assert_eq!(e2.remaps["capslock"], "Tab");
+        assert!(e2.tap_holds.is_empty());
+    }
+
+    #[test]
+    fn vim_nav_마우스_레이어_기본값() {
+        let e = effective_keymap(&keymap_with_profile("vim-nav"));
+        let mouse = e.layers.get("mouse").expect("mouse 레이어");
+        assert_eq!(mouse.trigger, "RAlt");
+        assert_eq!(mouse.unmapped.as_deref(), Some("block"));
+        assert_eq!(mouse.mappings["W"], "mouse:up");
+        assert_eq!(mouse.mappings["Space"], "mouse:click");
+        assert_eq!(mouse.mappings["LShift"], "mouse:slow");
+
+        // 사용자 정의는 기본 위에 병합
+        let mut km = keymap_with_profile("vim-nav");
+        let mut layer = LayerToml::default();
+        layer.mappings.insert("W".into(), "mouse:wheel-up".into());
+        km.layers.insert("mouse".into(), layer);
+        let e2 = effective_keymap(&km);
+        let mouse2 = &e2.layers["mouse"];
+        assert_eq!(mouse2.trigger, "RAlt", "trigger 생략 시 기본 유지");
+        assert_eq!(mouse2.mappings["W"], "mouse:wheel-up");
+        assert_eq!(mouse2.mappings["A"], "mouse:left", "미지정 키 기본 보존");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn vim_nav_capslock_tap_hold_기본값() {
+        let e = effective_keymap(&keymap_with_profile("vim-nav"));
+        let th = e.tap_holds.get("CapsLock").expect("CapsLock tap-hold");
+        assert_eq!(th.tap.as_deref(), Some("CapsLock"));
+        assert_eq!(th.hold, "LCtrl");
+
+        // 사용자 자체 tap-hold 정의 존중
+        let mut km = keymap_with_profile("vim-nav");
+        km.tap_holds.insert(
+            "caps".into(),
+            crate::config::TapHoldToml {
+                tap: Some("Escape".into()),
+                hold: "LWin".into(),
+                timeout_ms: None,
+            },
+        );
+        let e2 = effective_keymap(&km);
+        assert_eq!(e2.tap_holds.len(), 1);
+        assert_eq!(e2.tap_holds["caps"].hold, "LWin");
     }
 
     #[test]
@@ -1175,12 +1366,21 @@ mod tests {
         layer.trigger = "LAlt".into();
         km.layers.insert("nav".into(), layer);
         km.remaps.insert("CapsLock".into(), "Escape".into());
+        km.tap_holds.insert(
+            "caps".into(),
+            crate::config::TapHoldToml {
+                tap: None,
+                hold: "LCtrl".into(),
+                timeout_ms: None,
+            },
+        );
 
         let e = effective_keymap(&km);
         assert!(e.layers.is_empty());
         assert!(e.remaps.is_empty());
         assert!(e.combos.is_empty());
         assert!(e.double_taps.is_empty());
+        assert!(e.tap_holds.is_empty());
     }
 
     #[test]
@@ -1192,7 +1392,7 @@ mod tests {
         km.layers.insert("sym".into(), layer);
 
         let e = effective_keymap(&km);
-        assert_eq!(e.layers.len(), 2, "nav(프리셋) + sym(사용자)");
+        assert_eq!(e.layers.len(), 3, "nav+mouse(프리셋) + sym(사용자)");
         assert!(e.layers.contains_key("sym"));
     }
 }
