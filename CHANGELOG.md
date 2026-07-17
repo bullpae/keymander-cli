@@ -2,7 +2,10 @@
 
 All notable changes to keymander are documented here.
 
-## [Unreleased]
+## [0.10.0] — 2026-07-17
+
+tap-hold(모드탭)·마우스 레이어 릴리스 — HHKB 스타일 CapsLock 모드탭과
+RAlt 홀드 마우스 레이어 추가.
 
 ### Features
 - **HHKB 스타일 CapsLock 모드탭 (tap-hold)** — 짧게 탭 = CapsLock, 홀드 중
