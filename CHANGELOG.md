@@ -2,6 +2,18 @@
 
 All notable changes to keymander are documented here.
 
+## [Unreleased]
+
+### Docs
+- **README 전면 개편 — 이야기 → 체험 → 습득 구조** — 프로젝트 동기(세 가지
+  "이탈")와 철학 3원칙("홀드 손 ≠ 조작 손" 포함)을 서두에, "첫 60초" 최소
+  경로와 미션 시나리오 5개(소환·vim-nav·모드탭·마우스 레이어·크로스 OS)를
+  체험 코스로 추가. 기존 레퍼런스 표는 뒤로 재배치, v0.3.x 이력은
+  CHANGELOG로 이관. 한국어판 `README.ko.md` 신설.
+- **`kmd dojo` 계획 문서** (`docs/10_dojo_plan.md`) — 미션을 점수·콤보가
+  있는 TUI 연습 게임으로 만드는 인터랙티브 트레이너 설계: 매핑 결과 판정
+  아키텍처, 레벨 5종, 마일스톤 M1~M4.
+
 ## [0.10.1] — 2026-07-17
 
 데스크톱 런처 검은 화면 핫픽스 — 투명 합성이 안 되는 환경(Windows on ARM
