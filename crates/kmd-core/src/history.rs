@@ -14,16 +14,28 @@ const HISTORY_BOOST_LIMIT: usize = 500;
 /// Frecency 부스트 상한 — search_score(최대 ~200)와 균형 유지
 const FRECENCY_BOOST_CAP: u32 = 200;
 
-/// Frecency 기반으로 검색 결과 점수를 부스트하고 재정렬
-pub fn boost_results(results: &mut [SearchResult], db: &Database) {
-    let history = db.query_history(HISTORY_BOOST_LIMIT);
+/// value → (frequency, executed_at) — `load_boost_map`으로 만들어 재사용하는 캐시.
+///
+/// 데스크톱 런처는 키 입력마다 검색을 수행하므로, 매번 DB를 조회하는 대신
+/// 부팅 시 한 번 로드한 맵으로 부스트한다 (`boost_results_with_map`).
+pub type FrecencyMap = HashMap<String, (u32, String)>;
 
-    // value → (frequency, executed_at) 맵 구축
-    let freq_map: HashMap<String, (u32, String)> = history
+/// DB에서 부스트용 frecency 맵을 로드한다.
+pub fn load_boost_map(db: &Database) -> FrecencyMap {
+    db.query_history(HISTORY_BOOST_LIMIT)
         .into_iter()
         .map(|h| (h.value, (h.frequency, h.executed_at)))
-        .collect();
+        .collect()
+}
 
+/// Frecency 기반으로 검색 결과 점수를 부스트하고 재정렬 (매 호출마다 DB 조회)
+pub fn boost_results(results: &mut [SearchResult], db: &Database) {
+    let freq_map = load_boost_map(db);
+    boost_results_with_map(results, &freq_map);
+}
+
+/// 미리 로드한 frecency 맵으로 부스트 — 검색 핫패스에서 DB 조회를 피한다.
+pub fn boost_results_with_map(results: &mut [SearchResult], freq_map: &FrecencyMap) {
     for result in results.iter_mut() {
         if let Some((freq, executed_at)) = freq_map.get(&result.item.path) {
             let boost = frecency_score(*freq, executed_at).min(FRECENCY_BOOST_CAP);
@@ -158,6 +170,27 @@ mod tests {
         let mut results = vec![make_result("a", 500), make_result("b", 100)];
         boost_results(&mut results, &db);
         assert_eq!(results[0].item.path, "a", "CAP이 Score Pollution을 방지");
+    }
+
+    #[test]
+    fn test_boost_results_with_map_equals_db_variant() {
+        // 데스크톱 핫패스용 맵 기반 부스트가 DB 직조회 버전과 동일하게 동작
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        for _ in 0..5 {
+            record_launch(&db, "file", "b", None);
+        }
+
+        let map = load_boost_map(&db);
+        let mut via_map = vec![make_result("a", 100), make_result("b", 100)];
+        boost_results_with_map(&mut via_map, &map);
+
+        let mut via_db = vec![make_result("a", 100), make_result("b", 100)];
+        boost_results(&mut via_db, &db);
+
+        assert_eq!(via_map[0].item.path, "b", "이력 있는 b가 부스트되어 1등");
+        assert_eq!(via_map[0].item.path, via_db[0].item.path);
+        assert_eq!(via_map[0].score, via_db[0].score);
     }
 
     #[test]

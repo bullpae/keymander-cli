@@ -44,6 +44,10 @@ pub struct GeneralConfig {
     pub font_size: f32,
     /// Desktop launcher visible result rows. Range: 4–20, default: 8.
     pub visible_rows: usize,
+    /// Desktop launcher renderer: "auto" (GPU → software fallback),
+    /// "software" (tiny-skia — VM/원격 데스크톱처럼 GPU가 부실한 환경에서
+    /// 어댑터 프로빙을 생략해 부팅이 빨라진다), "gpu" (wgpu 강제).
+    pub renderer: String,
 }
 
 impl Default for GeneralConfig {
@@ -58,6 +62,7 @@ impl Default for GeneralConfig {
             reset_ime_on_launch: true,
             font_size: 16.0,
             visible_rows: 8,
+            renderer: "auto".to_string(),
         }
     }
 }

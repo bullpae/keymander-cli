@@ -123,11 +123,25 @@ pub fn cached_icon_for_item(kind: ItemKind, path: &str, icon_path: Option<&str>)
 /// 주어진 아이템들의 아이콘을 OS에서 추출해 캐시에 채운다 (블로킹).
 ///
 /// 백그라운드 스레드(`spawn_blocking`)에서 호출되어야 한다. 이미 캐시된
-/// 항목은 `app_icon_for_item` 내부에서 건너뛰므로 반복 호출이 저렴하다.
-pub fn prefetch_icons(items: &[(ItemKind, String, Option<String>)]) {
+/// 항목은 건너뛴다. 새로 추출한 아이콘 수를 반환한다 — 0이면 호출부가
+/// 리렌더(IconsReady)를 생략할 수 있다.
+pub fn prefetch_icons(items: &[(ItemKind, String, Option<String>)]) -> usize {
+    let mut newly_extracted = 0;
     for (kind, path, icon_path) in items {
+        let Some(cache_key) = cache_key_for(*kind, path, icon_path.as_deref()) else {
+            continue;
+        };
+        let already_cached = ICON_CACHE
+            .lock()
+            .map(|cache| cache.contains_key(&cache_key))
+            .unwrap_or(true);
+        if already_cached {
+            continue;
+        }
         let _ = app_icon_for_item(*kind, path, icon_path.as_deref());
+        newly_extracted += 1;
     }
+    newly_extracted
 }
 
 /// PNG/이미지 바이트 → TARGET_ICON_SIZE 리사이즈 → Handle

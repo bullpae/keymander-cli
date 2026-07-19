@@ -44,7 +44,16 @@ impl App {
         let text_color = t.text;
         let overlay_color = t.overlay;
         let accent_color = t.accent;
-        let bg = t.background_with_opacity();
+        // Windows: 불투명 창(투명 합성 불가 환경에서 검게 렌더링) — 카드도 완전
+        // 불투명으로 칠해 창 배경과 이음새 없이 이어지게 한다. (main.rs 참고)
+        let bg = if cfg!(target_os = "windows") {
+            Color {
+                a: 1.0,
+                ..t.background
+            }
+        } else {
+            t.background_with_opacity()
+        };
 
         let divider_c = t.border;
 
@@ -161,7 +170,13 @@ impl App {
             ..accent_color
         };
         let inner_line = Color { a: 0.16, ..t.peach };
-        let radius = u.pill_height / 2.0;
+        // Windows: DWM 네이티브 코너 클립(약 8px)과 어긋나지 않도록 작은 라운드.
+        // pill 라운드(~23px)를 그리면 모서리 바깥이 창 배경색으로 채워져 어색하다.
+        let radius = if cfg!(target_os = "windows") {
+            8.0
+        } else {
+            u.pill_height / 2.0
+        };
 
         let card_surface = container(card_col)
             .width(Fill)

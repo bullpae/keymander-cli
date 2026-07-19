@@ -159,6 +159,10 @@ struct EngineLoadResult {
 
 type EngineSlot = Arc<Mutex<Option<EngineLoadResult>>>;
 
+/// 비동기 quick 엔진 로드 결과 슬롯 — 부팅 직후 창 표시를 막지 않기 위해
+/// PATH 스캔/캐시 로드를 백그라운드 스레드에서 수행한다.
+type QuickEngineSlot = Arc<Mutex<Option<kmd_core::SearchEngine>>>;
+
 // ─── App State ────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -190,6 +194,12 @@ pub struct App {
     last_results_signature: u64,
     loading: bool,
     engine_slot: EngineSlot,
+    quick_engine_slot: QuickEngineSlot,
+    /// full 인덱스 엔진이 이미 적용되었는지 — 늦게 도착한 quick 엔진이
+    /// full 엔진을 덮어쓰지 않도록 가드
+    full_engine_loaded: bool,
+    /// 실행 이력 frecency 맵 — 부팅 시 1회 로드해 키 입력마다의 DB 조회를 제거
+    frecency: kmd_core::history::FrecencyMap,
     db: kmd_core::db::Database,
     _guard: Guard,
 
@@ -255,6 +265,8 @@ pub enum Message {
     AutostartToggleFinished(Result<String, String>),
     /// 엔진 교체(EngineReady) 후 IME 조합이 끝나면 검색 결과를 갱신
     EngineSwapSettled,
+    /// 비동기 quick 엔진 로드 완료 → 빈 엔진과 교체
+    QuickEngineReady,
 }
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
@@ -338,13 +350,31 @@ fn context_actions_for(kind: ItemKind) -> Vec<ContextAction> {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 impl App {
-    /// 첫 화면 표시를 막지 않도록 항상 quick 인덱스로 부팅한다.
-    /// 풀 인덱스는 부팅 후 비동기 워밍업(spawn_full_engine_load_task)으로 교체된다.
-    /// 반환하는 bool은 `full_warmup_started` 초기값 — 항상 false라 워밍업이 예약된다.
-    fn build_initial_engine(config: &kmd_core::Config) -> (kmd_core::SearchEngine, bool) {
-        tracing::info!("Booting with quick index — full index loads asynchronously");
-        let engine = crate::engine::create_quick_search_engine(config);
-        (engine, false)
+    /// quick 엔진(PATH + 시스템 명령)을 백그라운드 스레드에서 로드한다.
+    ///
+    /// 이전에는 App 생성자에서 동기로 빌드해 창 표시 자체가 디스크 스캔을
+    /// 기다렸다 — 캐시 미스(첫 설치)나 느린 VM에서 부팅이 수백 ms~수 초
+    /// 지연되는 원인. 빈 엔진으로 즉시 창을 띄우고 완료 시 교체한다.
+    fn spawn_quick_engine_load_task(
+        slot: QuickEngineSlot,
+        config: kmd_core::Config,
+    ) -> Task<Message> {
+        Task::future(async move {
+            match tokio::task::spawn_blocking(move || {
+                let engine = crate::engine::create_quick_search_engine(&config);
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = Some(engine);
+                } else {
+                    tracing::error!("quick_engine_slot mutex poisoned — quick 엔진 저장 실패");
+                }
+            })
+            .await
+            {
+                Ok(()) => {}
+                Err(e) => tracing::error!("quick 엔진 로드 태스크 패닉: {e}"),
+            }
+            Message::QuickEngineReady
+        })
     }
 
     fn initial_boot_tasks(input_id: iced::widget::Id, skip_warmup: bool) -> Task<Message> {
@@ -502,9 +532,10 @@ impl App {
         window_state: WindowState,
         db_path_override: Option<std::path::PathBuf>,
     ) -> (Self, Task<Message>) {
-        // 캐시된 full index가 24시간 이내 → 직접 로드 (2-stage 불필요)
-        // 캐시 없거나 오래됨 → quick index로 즉시 표시 후 full index를 비동기 빌드
-        let (engine, cache_fresh) = Self::build_initial_engine(&config);
+        // 3단계 부팅: 빈 엔진으로 즉시 창 표시 → quick 인덱스 비동기 로드 →
+        // 유휴 시점에 full 인덱스 워밍업 (spawn_full_engine_load_task)
+        tracing::info!("Booting with empty engine — quick index loads asynchronously");
+        let engine = kmd_core::SearchEngine::new();
         let db_path = db_path_override.unwrap_or_else(|| {
             kmd_core::Config::default_data_dir()
                 .join("desktop")
@@ -539,6 +570,10 @@ impl App {
         let input_id = iced::widget::Id::unique();
         let scrollable_id = iced::widget::Id::unique();
         let engine_slot: EngineSlot = Arc::new(Mutex::new(None));
+        let quick_engine_slot: QuickEngineSlot = Arc::new(Mutex::new(None));
+        // 검색 핫패스(키 입력마다)에서 DB를 조회하지 않도록 부팅 시 1회 로드
+        let frecency = kmd_core::history::load_boost_map(&db);
+        let config_for_quick = config.clone();
 
         let app = Self {
             query: String::new(),
@@ -567,8 +602,11 @@ impl App {
             daemon_autostart_toggle_in_flight: false,
             runtime_config: config,
             last_results_signature: 0,
-            loading: false,
+            loading: true,
             engine_slot,
+            quick_engine_slot: quick_engine_slot.clone(),
+            full_engine_loaded: false,
+            frecency,
             db,
             _guard: guard,
             window_width,
@@ -583,12 +621,13 @@ impl App {
             focus_request_count: 0,
             boot_focus_done: false,
             reset_ime_on_launch: reset_ime,
-            full_warmup_started: cache_fresh,
+            full_warmup_started: false,
             warmup_token: 0,
         };
 
-        let tasks = Self::initial_boot_tasks(input_id, cache_fresh);
-        (app, tasks)
+        let quick_task = Self::spawn_quick_engine_load_task(quick_engine_slot, config_for_quick);
+        let boot_tasks = Self::initial_boot_tasks(input_id, false);
+        (app, Task::batch([quick_task, boot_tasks]))
     }
 
     fn schedule_warmup_tick(token: u64) -> Task<Message> {
@@ -681,12 +720,19 @@ impl App {
         if items.is_empty() {
             return Task::none();
         }
+        // 새로 추출된 아이콘이 없으면 IconsReady를 보내지 않는다 — 키 입력마다
+        // 불필요한 리렌더 프레임을 만들지 않기 위함 (소프트웨어 렌더러에서 체감 큼).
         Task::future(async move {
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::app_icons::prefetch_icons(&items);
-            })
-            .await;
-            Message::IconsReady
+            tokio::task::spawn_blocking(move || crate::app_icons::prefetch_icons(&items))
+                .await
+                .unwrap_or(0)
+        })
+        .then(|newly_extracted| {
+            if newly_extracted > 0 {
+                Task::done(Message::IconsReady)
+            } else {
+                Task::none()
+            }
         })
     }
 
@@ -745,6 +791,7 @@ impl App {
                 | Message::EnsureFocus(_)
                 | Message::EngineReady
                 | Message::EngineSwapSettled
+                | Message::QuickEngineReady
                 | Message::IconsReady
                 | Message::AutostartStatusLoaded(_)
                 | Message::AutostartToggleFinished(_)
@@ -828,6 +875,10 @@ impl App {
             },
             Message::GotWindowId(id) => {
                 self.window_id = id;
+                tracing::info!(
+                    "Window id acquired {} ms after boot",
+                    self.app_started_at.elapsed().as_millis()
+                );
                 match id {
                     Some(id) => {
                         let saved_x = self.window_state.x;
@@ -909,6 +960,7 @@ impl App {
 
                 if let Some(res) = loaded {
                     self.engine = res.engine;
+                    self.full_engine_loaded = true;
                     self.use_emoji = res.use_emoji;
                     self.selected_llm_providers = res.llm_providers;
                     self.selected_multi_web_providers = res.multi_web_providers;
@@ -948,6 +1000,43 @@ impl App {
                     });
                 }
                 self.perform_search()
+            }
+            Message::QuickEngineReady => {
+                // full 엔진이 먼저 준비된 경우 quick 결과는 폐기 (더 작은 인덱스)
+                if self.full_engine_loaded {
+                    return Task::none();
+                }
+                // IME 조합 중이면 스왑을 미룬다 — EngineReady와 동일한 보호.
+                // 단, 쿼리가 비어 있으면 조합 중일 수 없으므로 즉시 스왑한다
+                // (last_query_changed_at이 부팅 시각으로 초기화되어 있어
+                //  is_typing_in_progress만 보면 부팅 직후 항상 지연된다).
+                if !self.query.is_empty() && self.is_typing_in_progress() {
+                    self.log_ime_state("QuickEngineReady:defer_for_ime");
+                    return Task::future(async {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        Message::QuickEngineReady
+                    });
+                }
+                let loaded = self
+                    .quick_engine_slot
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        tracing::error!("quick_engine_slot mutex poisoned — 복구 시도");
+                        e.into_inner()
+                    })
+                    .take();
+                if let Some(engine) = loaded {
+                    self.engine = engine;
+                    self.loading = false;
+                    tracing::info!(
+                        "Quick engine applied {} ms after boot",
+                        self.app_started_at.elapsed().as_millis()
+                    );
+                    if !self.query.trim().is_empty() {
+                        return self.perform_search();
+                    }
+                }
+                Task::none()
             }
             Message::IconsReady => Task::none(),
             Message::AutostartStatusLoaded(result) => {
@@ -1243,6 +1332,50 @@ mod tests {
                 "힌트 영역은 힌트 폰트보다 커야 함"
             );
         }
+    }
+
+    // ── 비동기 quick 엔진 부팅 ──
+
+    fn make_quick_engine() -> kmd_core::SearchEngine {
+        let mut engine = kmd_core::SearchEngine::new();
+        engine.load(vec![IndexItem {
+            name: "Firefox".to_string(),
+            path: "/usr/bin/firefox".to_string(),
+            kind: ItemKind::App,
+            source: Source::Apps,
+            icon: "Ap".to_string(),
+            keywords: "firefox".to_string(),
+            icon_path: None,
+        }]);
+        engine
+    }
+
+    #[test]
+    fn 부팅은_빈엔진_quick_ready시_교체() {
+        let mut app = make_test_app();
+        assert_eq!(app.engine.len(), 0, "부팅 직후에는 빈 엔진 (창 즉시 표시)");
+        assert!(app.loading, "quick 로드 전에는 loading 상태");
+
+        *app.quick_engine_slot.lock().unwrap() = Some(make_quick_engine());
+        let _ = app.update(Message::QuickEngineReady);
+
+        assert_eq!(app.engine.len(), 1, "quick 엔진으로 교체되어야 함");
+        assert!(!app.loading, "교체 후 loading 해제");
+    }
+
+    #[test]
+    fn full_엔진_로드후_늦은_quick은_폐기() {
+        let mut app = make_test_app();
+        app.full_engine_loaded = true;
+
+        *app.quick_engine_slot.lock().unwrap() = Some(make_quick_engine());
+        let _ = app.update(Message::QuickEngineReady);
+
+        assert_eq!(
+            app.engine.len(),
+            0,
+            "full 엔진이 이미 적용됐으면 quick 엔진이 덮어쓰면 안 됨"
+        );
     }
 
     #[test]

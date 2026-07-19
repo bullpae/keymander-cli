@@ -345,8 +345,9 @@ impl App {
         let (mode, mut results) = self.engine.search(query, SEARCH_LIMIT);
         self.search_mode = mode;
 
-        // 실행 이력 기반으로 자주 사용하는 항목의 점수를 높인다
-        kmd_core::history::boost_results(&mut results, &self.db);
+        // 실행 이력 기반으로 자주 사용하는 항목의 점수를 높인다.
+        // 키 입력마다 호출되는 핫패스 — DB 조회 대신 부팅 시 로드한 맵 사용.
+        kmd_core::history::boost_results_with_map(&mut results, &self.frecency);
 
         if builtin_calc::looks_like_math(query) {
             let calc = builtin_calc::CalcExtension;
@@ -369,7 +370,7 @@ impl App {
                     SEARCH_LIMIT,
                 );
                 if !relaxed_results.is_empty() {
-                    kmd_core::history::boost_results(&mut relaxed_results, &self.db);
+                    kmd_core::history::boost_results_with_map(&mut relaxed_results, &self.frecency);
                     results = relaxed_results;
                     self.search_mode = kmd_core::SearchMode::Contains;
                 }

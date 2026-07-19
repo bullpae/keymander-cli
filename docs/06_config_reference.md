@@ -38,6 +38,7 @@ preview_width_percent = 40   # 미리보기 패널 너비 (%)
 theme = "default"            # 테마 이름
 emoji_icons = true           # 이모지 아이콘 (false = ASCII 폴백)
 reset_ime_on_launch = true   # (Desktop) 실행 시 IME를 영문 모드로 시작
+renderer = "auto"            # (Desktop) auto | software | gpu — VM/원격 데스크톱은 software 권장
 # editor = "code"            # 외부 에디터 (미설정 시 $EDITOR → vi/notepad)
 
 [launcher]
@@ -93,6 +94,7 @@ toggle_preview = "ctrl+p"
 | theme | String | "default" | 테마 이름 |
 | emoji_icons | bool | true | 이모지 아이콘 (false = ASCII 폴백) |
 | reset_ime_on_launch | bool | true | (Desktop) 런처 오픈 시 IME를 영문 모드로 시작 |
+| renderer | String | "auto" | (Desktop) 렌더러 선택. `software`는 GPU 어댑터 프로빙을 생략하고 tiny-skia로 직행 — VM·원격 데스크톱·가상 GPU 환경에서 부팅이 빨라지고 입력 지연이 줄 수 있다. `gpu`는 wgpu 강제. 환경변수 `ICED_BACKEND`가 설정돼 있으면 그쪽이 우선 |
 | editor | String? | None | 외부 에디터 ($EDITOR 폴백) |
 
 ### 4.2 [launcher]

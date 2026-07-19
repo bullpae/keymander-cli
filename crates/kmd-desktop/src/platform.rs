@@ -1,26 +1,29 @@
 //! Platform-specific window tweaks.
 
-/// Force square (non-rounded) corners on target window (Windows 11).
+/// Apply Windows 11 native rounded corners to the target window.
 ///
-/// Windows 11 DWM automatically applies rounded corners to all windows,
-/// including borderless ones. This calls `DwmSetWindowAttribute` with
-/// `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND` to override that.
+/// The launcher window is opaque on Windows (per-pixel transparency is not
+/// reliably composited by wgpu/DX12, and renders black on VMs/software
+/// renderers). Instead of drawing rounded corners with transparent pixels,
+/// we ask DWM to clip the window itself: `DWMWA_WINDOW_CORNER_PREFERENCE =
+/// DWMWCP_ROUND`. On Windows 10 (no corner preference API) this fails
+/// gracefully and the window stays square — but never black.
 #[cfg(target_os = "windows")]
-pub fn force_square_corners(raw_id: u64) {
+pub fn apply_native_rounded_corners(raw_id: u64) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
         DWM_WINDOW_CORNER_PREFERENCE,
     };
 
     unsafe {
         let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
         if hwnd.0.is_null() {
-            tracing::warn!("force_square_corners: invalid window id");
+            tracing::warn!("apply_native_rounded_corners: invalid window id");
             return;
         }
 
-        let preference = DWMWCP_DONOTROUND;
+        let preference = DWMWCP_ROUND;
         let result = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -29,14 +32,14 @@ pub fn force_square_corners(raw_id: u64) {
         );
 
         match result {
-            Ok(()) => tracing::info!("Windows 11 rounded corners disabled"),
+            Ok(()) => tracing::info!("Windows 11 native rounded corners applied"),
             Err(e) => tracing::warn!("DwmSetWindowAttribute failed: {e}"),
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn force_square_corners(_raw_id: u64) {
+pub fn apply_native_rounded_corners(_raw_id: u64) {
     // No-op on non-Windows platforms.
 }
 
@@ -218,7 +221,7 @@ mod tests {
     /// v0.3.6 회귀 방지: force_foreground 누락 시 키보드 포커스 미동작.
     #[test]
     fn test_platform_functions_compile() {
-        let _: fn(u64) = force_square_corners;
+        let _: fn(u64) = apply_native_rounded_corners;
         let _: fn(u64) = force_english_ime;
         let _: fn(u64) = force_foreground;
     }
