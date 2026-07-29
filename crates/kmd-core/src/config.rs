@@ -90,6 +90,11 @@ pub struct LauncherConfig {
     pub scan_drives: bool,
     /// Max depth when scanning drive roots (shallow to avoid system dirs)
     pub drive_scan_depth: usize,
+    /// 데몬 백그라운드 인덱스 리프레시 주기 (분). 0 = 비활성.
+    /// 데몬이 이 주기로 인덱스를 재빌드해 공유 캐시를 갱신하므로,
+    /// kmd-desktop은 실행 시 항상 신선한 캐시를 즉시 로드한다.
+    #[serde(default = "default_index_refresh_minutes")]
+    pub index_refresh_minutes: u64,
     /// Search result priority weights by item kind (0-100, higher = boosted)
     pub kind_weights: KindWeights,
     /// Custom web services
@@ -203,6 +208,7 @@ impl Default for LauncherConfig {
             index_directories: true,
             scan_drives: false,
             drive_scan_depth: 2,
+            index_refresh_minutes: default_index_refresh_minutes(),
             kind_weights: KindWeights::default(),
             web_services: vec![],
             multi_llm_providers: default_multi_llm_providers(),
@@ -218,6 +224,10 @@ impl Default for LauncherConfig {
             prompt_templates: vec![],
         }
     }
+}
+
+fn default_index_refresh_minutes() -> u64 {
+    360 // 6시간 — 앱/PATH 변동 빈도 대비 충분히 신선하면서 재빌드 비용 최소
 }
 
 fn default_multi_llm_providers() -> Vec<String> {
@@ -594,6 +604,7 @@ impl Config {
             "launcher.index_directories" => get!(self.launcher.index_directories),
             "launcher.scan_drives" => get!(self.launcher.scan_drives),
             "launcher.drive_scan_depth" => get!(self.launcher.drive_scan_depth),
+            "launcher.index_refresh_minutes" => get!(self.launcher.index_refresh_minutes),
             // kind_weights
             "launcher.kind_weights.directory" => get!(self.launcher.kind_weights.directory),
             "launcher.kind_weights.app" => get!(self.launcher.kind_weights.app),
@@ -712,6 +723,10 @@ impl Config {
             }
             "launcher.scan_drives" => {
                 self.launcher.scan_drives = parse_or(value, self.launcher.scan_drives)
+            }
+            "launcher.index_refresh_minutes" => {
+                self.launcher.index_refresh_minutes =
+                    parse_or(value, self.launcher.index_refresh_minutes)
             }
             "launcher.drive_scan_depth" => {
                 self.launcher.drive_scan_depth = parse_or(value, self.launcher.drive_scan_depth)

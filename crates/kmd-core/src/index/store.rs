@@ -12,8 +12,16 @@ pub fn save_index(index: &Index, path: &Path) -> Result<(), StoreError> {
         std::fs::create_dir_all(parent).map_err(StoreError::Io)?;
     }
     let json = serde_json::to_string(index).map_err(StoreError::Json)?;
-    std::fs::write(path, json).map_err(StoreError::Io)?;
+    write_atomic(path, json.as_bytes()).map_err(StoreError::Io)?;
     Ok(())
+}
+
+/// tmp 파일에 쓴 뒤 rename — 데몬이 백그라운드로 캐시를 갱신하는 동안
+/// 데스크톱이 같은 파일을 읽어도 잘린(torn) 파일을 보지 않게 한다.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// JSON 형식에서 인덱스 로드
@@ -32,7 +40,7 @@ pub fn save_index_bin(index: &Index, path: &Path) -> Result<(), StoreError> {
     }
     let bytes = bincode::serde::encode_to_vec(index, bincode::config::standard())
         .map_err(StoreError::BincodeEncode)?;
-    std::fs::write(path, bytes).map_err(StoreError::Io)?;
+    write_atomic(path, &bytes).map_err(StoreError::Io)?;
     Ok(())
 }
 

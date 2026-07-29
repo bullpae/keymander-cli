@@ -4,8 +4,12 @@
 //! and this module handles all kmd-core integration concerns.
 use std::time::{Duration, Instant};
 
-const QUICK_INDEX_CACHE_FILENAME: &str = "quick-index.json";
-const QUICK_INDEX_CACHE_BIN_FILENAME: &str = "quick-index.bin";
+use kmd_core::{QUICK_INDEX_CACHE_BIN_FILENAME, QUICK_INDEX_CACHE_FILENAME};
+
+/// 캐시 신선도 폴백 한계. 평상시에는 데몬 리프레셔가
+/// `launcher.index_refresh_minutes` 주기로 캐시를 갱신하므로 항상 히트하고,
+/// 이 한계는 데몬이 꺼져 있을 때만 재빌드를 유발한다 (부팅 후 비동기 경로라
+/// 창 표시는 지연되지 않음).
 const INDEX_FRESHNESS_SECS: u64 = 24 * 60 * 60;
 
 /// Load the user configuration, falling back to defaults on failure.
@@ -72,7 +76,11 @@ fn load_or_build_quick_index(use_emoji: bool) -> kmd_core::Index {
     let json_path = desktop_dir.join(QUICK_INDEX_CACHE_FILENAME);
     let expected_version = kmd_core::Index::current_version();
 
-    if let Some(cached) = store::try_load_cached(&bin_path, &json_path, expected_version) {
+    // 데몬 리프레셔가 갱신하는 캐시 — freshness 한계는 데몬 부재 시 폴백
+    let max_age = Some(Duration::from_secs(INDEX_FRESHNESS_SECS));
+    if let Some(cached) =
+        store::try_load_cached_with_max_age(&bin_path, &json_path, expected_version, max_age)
+    {
         tracing::info!(
             "Quick index cache hit in {} ms",
             started.elapsed().as_millis()

@@ -36,3 +36,9 @@ pub const DB_FILENAME: &str = "kmd.db";
 pub const INDEX_CACHE_FILENAME: &str = "index.json";
 /// Index cache file name (bincode, fast binary format).
 pub const INDEX_CACHE_BIN_FILENAME: &str = "index.bin";
+/// Quick index cache file name (JSON) — `<data_dir>/desktop/` 하위.
+/// 데스크톱 부팅 즉시 응답용 경량 인덱스로, 데몬 백그라운드 리프레시도
+/// 같은 경로를 갱신한다.
+pub const QUICK_INDEX_CACHE_FILENAME: &str = "quick-index.json";
+/// Quick index cache file name (bincode) — `<data_dir>/desktop/` 하위.
+pub const QUICK_INDEX_CACHE_BIN_FILENAME: &str = "quick-index.bin";

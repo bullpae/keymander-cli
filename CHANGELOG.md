@@ -4,6 +4,20 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Performance
+- **인덱싱 소유권을 데몬으로 이동 — 데스크톱 실행 시 인덱싱 비용 제거** —
+  기존에는 kmd-desktop이 첫 실행(하루 1회)에 24시간 지난 인덱스를 직접
+  재빌드했다. 이제 데몬이 시작 시 + `launcher.index_refresh_minutes` 주기
+  (기본 360분, 0=off)로 전체/quick 인덱스를 백그라운드 재빌드해 공유
+  캐시를 갱신하고 데몬 검색 엔진도 함께 교체한다. kmd-desktop은 언제 떠도
+  캐시 히트로 즉시 로드하며, 24시간 freshness 재빌드는 데몬이 꺼져 있을
+  때의 폴백으로만 남는다. IPC `RebuildIndex`도 캐시를 함께 저장한다.
+- **quick 인덱스 캐시 신선도 적용** — quick 캐시(앱/PATH)는 영구 캐시라
+  새로 설치한 앱이 full 엔진 교체 전까지 안 보였다. 데몬 리프레셔가 quick
+  캐시도 주기 갱신하고, 데스크톱 쪽에도 24시간 freshness 폴백을 추가.
+- **인덱스 캐시 원자적 쓰기 (tmp+rename)** — 데몬이 백그라운드로 캐시를
+  쓰는 동안 데스크톱이 읽어도 잘린 파일을 보지 않는다.
+
 ### Bug Fixes
 - **레이어 더블탭 오토리피트 오판정 수정** — Alt+I/O/`/`를 누르고 있으면
   OS 오토리피트 down이 매번 새 탭으로 계산돼 single↔double 액션이 교대

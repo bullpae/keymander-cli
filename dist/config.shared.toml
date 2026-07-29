@@ -54,6 +54,11 @@
 # 실행 후 창 닫기
 # quit_on_launch = true
 
+# 데몬 백그라운드 인덱스 리프레시 주기 (분, 0 = off, 기본: 360 = 6시간)
+# 데몬이 주기적으로 인덱스를 재빌드해 캐시를 갱신하므로 kmd-desktop은
+# 실행 시점에 인덱싱 비용 없이 항상 신선한 캐시로 뜬다
+# index_refresh_minutes = 360
+
 # 디렉토리도 인덱스에 포함
 # index_directories = true
 

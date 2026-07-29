@@ -10,6 +10,80 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
+/// 전체 인덱스를 공유 캐시(index.bin/index.json)에 저장
+fn save_full_index_cache(index: &Index) {
+    let data_dir = Config::default_data_dir();
+    kmd_core::index::store::save_both(
+        index,
+        &data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME),
+        &data_dir.join(kmd_core::INDEX_CACHE_FILENAME),
+    );
+}
+
+/// quick 인덱스(앱/PATH/시스템 명령)를 데스크톱 캐시에 저장
+fn save_quick_index_cache(use_emoji: bool) {
+    let desktop_dir = Config::default_data_dir().join("desktop");
+    let index = Index::build_quick(use_emoji);
+    kmd_core::index::store::save_both(
+        &index,
+        &desktop_dir.join(kmd_core::QUICK_INDEX_CACHE_BIN_FILENAME),
+        &desktop_dir.join(kmd_core::QUICK_INDEX_CACHE_FILENAME),
+    );
+}
+
+/// 백그라운드 인덱스 리프레셔 스레드.
+///
+/// `launcher.index_refresh_minutes` 주기(기본 6시간, 0=off)로 전체/quick
+/// 인덱스를 재빌드해 공유 캐시를 원자적으로 갱신하고 데몬 검색 엔진도
+/// 교체한다. kmd-desktop은 언제 떠도 신선한 캐시를 즉시 로드하므로
+/// 실행 시점(alt+space)에 인덱싱 비용을 지불하지 않는다.
+fn spawn_index_refresher(engine: Arc<Mutex<SearchEngine>>, shutdown: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        // 시작 직후 quick 캐시부터 신선하게 (전체 캐시는 부팅 경로에서 저장됨).
+        // 부팅 크리티컬 패스 밖이라 IPC/키바인딩 시작을 지연시키지 않는다.
+        let boot_cfg = load_config();
+        save_quick_index_cache(boot_cfg.general.emoji_icons);
+        tracing::info!(
+            "인덱스 리프레셔 시작 (주기 {}분, 0=off)",
+            boot_cfg.launcher.index_refresh_minutes
+        );
+
+        let mut elapsed_secs: u64 = 0;
+        let mut interval_min = boot_cfg.launcher.index_refresh_minutes;
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            elapsed_secs += 1;
+
+            // 1분마다 설정 재로드 — 주기 변경/비활성화를 재시작 없이 반영
+            if elapsed_secs % 60 == 0 {
+                interval_min = load_config().launcher.index_refresh_minutes;
+            }
+            if interval_min == 0 || elapsed_secs < interval_min * 60 {
+                continue;
+            }
+            elapsed_secs = 0;
+
+            let cfg = load_config();
+            let started = Instant::now();
+            let index = Index::build(&cfg.launcher, cfg.general.emoji_icons);
+            let count = index.items.len();
+            save_full_index_cache(&index);
+            if let Ok(mut e) = engine.lock() {
+                e.set_kind_weights(cfg.launcher.kind_weights.clone());
+                e.load(index.items);
+            }
+            save_quick_index_cache(cfg.general.emoji_icons);
+            tracing::info!(
+                "백그라운드 인덱스 리프레시 완료 ({count}개 항목, {}ms)",
+                started.elapsed().as_millis()
+            );
+        }
+    });
+}
+
 /// 데몬 메인 루프
 pub fn run() -> color_eyre::Result<()> {
     let started_at = Instant::now();
@@ -33,12 +107,19 @@ pub fn run() -> color_eyre::Result<()> {
     let item_count = index.items.len();
     tracing::info!("{item_count}개 항목으로 인덱스 빌드 완료");
 
+    // 방금 빌드한 인덱스를 공유 캐시에 저장 — kmd-desktop이 실행 시점에
+    // 재빌드 없이 항상 캐시 히트로 뜨게 한다 (tmp+rename 원자적 쓰기)
+    save_full_index_cache(&index);
+
     let engine = Arc::new(Mutex::new({
         let mut e = SearchEngine::new();
         e.set_kind_weights(config.launcher.kind_weights.clone());
         e.load(index.items);
         e
     }));
+
+    // 백그라운드 인덱스 리프레셔 — 인덱싱 비용을 데몬이 소유한다
+    spawn_index_refresher(engine.clone(), shutdown.clone());
 
     // TCP 서버 시작 (OS가 빈 포트 자동 할당)
     let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -218,6 +299,10 @@ fn process_request(
             let config = load_config();
             let index = Index::build(&config.launcher, config.general.emoji_icons);
             let count = index.items.len();
+
+            // 공유 캐시도 함께 갱신 — kmd-desktop이 다음 실행에서 바로 반영
+            save_full_index_cache(&index);
+            save_quick_index_cache(config.general.emoji_icons);
 
             match engine.lock() {
                 Ok(mut e) => {
