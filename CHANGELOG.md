@@ -4,6 +4,30 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Bug Fixes
+- **레이어 더블탭 오토리피트 오판정 수정** — Alt+I/O/`/`를 누르고 있으면
+  OS 오토리피트 down이 매번 새 탭으로 계산돼 single↔double 액션이 교대
+  발사됐다 (Alt+`/` 홀드 시 Delete와 "줄 전체 삭제" 매크로가 번갈아 실행
+  되는 파괴적 오작동). 이제 up 없이 반복된 down은 오토리피트로 인식해
+  single 액션만 반복하고(연속 단어 이동), double 액션 직후의 리피트는
+  억제한다 (Windows/macOS 공통 엔진 수정).
+- **트리거 선해제 시 맨키 누출 차단** — Alt+H 홀드 중 Alt를 먼저 떼면
+  계속 눌려 있는 H의 오토리피트가 맨키 'h'로 새어나가 문자가 입력되던
+  문제. 레이어가 소비한 키는 keyup까지 추적·억제한다.
+- **레이어 활성 전부터 눌려 있던 매핑 키의 keyup 억제 해제** — 해당 키의
+  up이 OS에 전달되지 않아 stuck 상태가 되던 문제 (우리가 소비한 down의
+  up만 억제).
+- **Cmd/Ctrl+Alt+매핑 키 = OS 조합 보존** — Cmd+Alt+H("다른 앱 가리기")
+  같은 조합이 레이어 매핑(Left 등)으로 오발사되던 문제. 트리거 외의
+  비-Shift 수정자가 함께 눌린 키는 매핑 대신 트리거 조합으로 OS에
+  투과한다 (passthrough 레이어).
+
+### Features
+- **Shift+네비 키 = 선택 확장 (macOS)** — Shift를 누른 채 Alt+H/J/K/L을
+  누르면 Shift+화살표로 합성돼 텍스트 선택이 확장된다. 레이어 액션 실행
+  시 트리거(Alt) 플래그만 지우고 함께 눌린 물리 수정자는 보존하도록 변경
+  (Windows는 물리 Shift가 통과해 이미 동작).
+
 ## [0.10.2] — 2026-07-19
 
 Windows 렌더링·성능 정비 — 검은 화면 근본 해결(불투명 창 전환) +

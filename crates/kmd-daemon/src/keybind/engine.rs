@@ -114,6 +114,20 @@ pub struct EngineState {
     layer_dt_last_key: Option<VKey>,
     /// 레이어 내 더블탭: 마지막 실행 시각 (tick count)
     layer_dt_last_tick: u32,
+    /// 레이어 내 더블탭: 현재 물리적으로 눌려 있는 키.
+    /// up 없이 반복되는 down은 OS 오토리피트 — 새 탭으로 세지 않는다
+    /// (홀드 시 single↔double이 교대 발사되던 오작동 방지).
+    layer_dt_held: Option<VKey>,
+    /// 레이어 내 더블탭: 오토리피트 down에 반복 실행할 액션.
+    /// single 액션은 반복(연속 단어 이동 등), double 액션은 반복 금지
+    /// (줄 삭제 매크로 등 파괴적 액션의 연사 방지 — None).
+    layer_dt_repeat_action: Option<BindAction>,
+    /// 레이어가 소비한(억제/실행) 채 아직 눌려 있는 비수정자 키.
+    /// 트리거가 먼저 떨어지면 orphan으로 승격해 잔여 오토리피트가
+    /// 맨키로 누출되는 것을 막는다 (Alt를 먼저 떼면 "hhh" 입력되던 문제).
+    layer_keys_down: HashSet<VKey>,
+    /// 레이어 비활성 후에도 눌린 채 남아 있는 소비된 키 — keyup까지 억제
+    orphaned_layer_keys: HashSet<VKey>,
     /// 패스쓰루 코드(chord) 모드 — 트리거가 OS에 주입된 상태.
     /// true인 동안 모든 키는 OS 조합으로 통과하고, 트리거 up에서
     /// [`KeyDecision::ReleaseChord`]로 해제된다 (A안, docs/08 참조).
@@ -145,12 +159,25 @@ impl EngineState {
             dt_consumed_key: None,
             layer_dt_last_key: None,
             layer_dt_last_tick: 0,
+            layer_dt_held: None,
+            layer_dt_repeat_action: None,
+            layer_keys_down: HashSet::new(),
+            orphaned_layer_keys: HashSet::new(),
             chord_engaged: false,
             active_tap_hold: None,
             tap_hold_down_tick: 0,
             tap_hold_engaged: false,
             mouse_keys_held: HashSet::new(),
         }
+    }
+
+    /// 레이어 비활성화 시 키 잔여 상태 정리 — 아직 눌려 있는 소비된 키를
+    /// orphan으로 승격해 오토리피트/keyup 누출을 막고, 더블탭 홀드 상태를 리셋
+    fn deactivate_layer_keys(&mut self) {
+        self.orphaned_layer_keys
+            .extend(self.layer_keys_down.drain());
+        self.layer_dt_held = None;
+        self.layer_dt_repeat_action = None;
     }
 
     /// keymap toggle 등으로 상태를 초기화할 때 호출
@@ -163,6 +190,10 @@ impl EngineState {
         self.combo_consumed_key = None;
         self.dt_consumed_key = None;
         self.layer_dt_last_key = None;
+        self.layer_dt_held = None;
+        self.layer_dt_repeat_action = None;
+        self.layer_keys_down.clear();
+        self.orphaned_layer_keys.clear();
         self.chord_engaged = false;
         self.active_tap_hold = None;
         self.tap_hold_engaged = false;
@@ -316,6 +347,16 @@ impl EngineState {
             }
         }
 
+        // ── 2.1 레이어가 소비한 채 남겨진(orphan) 키 억제 ──
+        // 트리거를 먼저 뗀 뒤에도 눌려 있는 키의 오토리피트 down이
+        // 맨키로 누출되지 않게 keyup까지 전부 억제한다.
+        if self.orphaned_layer_keys.contains(&vkey) {
+            if is_up {
+                self.orphaned_layer_keys.remove(&vkey);
+            }
+            return KeyDecision::Suppress;
+        }
+
         // ── keymap 비활성 시: Launch 콤보만 동작 ──
         if !self.keymap_enabled {
             if is_down && !is_modifier_key(&vkey) {
@@ -432,6 +473,7 @@ impl EngineState {
                     self.chord_engaged = false;
                     self.active_layer = None;
                     self.layer_key_used = false;
+                    self.deactivate_layer_keys();
                     let deferred = self.pending_layer_launch.take();
                     return KeyDecision::ReleaseChord {
                         trigger: vkey,
@@ -447,6 +489,7 @@ impl EngineState {
 
                 self.active_layer = None;
                 self.layer_key_used = false;
+                self.deactivate_layer_keys();
 
                 // 이동/버튼 키가 눌린 채 트리거를 뗐다 — 해당 키들의 keyup은
                 // 더 이상 레이어 매핑으로 오지 않으므로 여기서 전부 정지
@@ -477,6 +520,26 @@ impl EngineState {
                 return KeyDecision::PassThrough;
             }
 
+            // 4-pre2. 트리거 외의 비-Shift 수정자(Cmd/Ctrl/Win)가 함께 눌린
+            // 키 down은 매핑을 건너뛰고 트리거 조합으로 OS에 투과한다
+            // (Cmd+Alt+H = "다른 앱 가리기" 등 OS 조합 보존).
+            // Shift는 예외 — Shift+네비 키 = 선택 확장이 더 유용하다.
+            if is_down
+                && !is_modifier_key(&vkey)
+                && self.config.layers[layer_idx].unmapped == UnmappedBehavior::Passthrough
+                && is_modifier_key(&trigger)
+            {
+                let other_mod_held = self.modifiers_held.iter().any(|m| {
+                    !self.config.layers[layer_idx].matches_trigger(*m)
+                        && !matches!(m, VKey::LShift | VKey::RShift)
+                });
+                if other_mod_held {
+                    self.chord_engaged = true;
+                    self.layer_key_used = true;
+                    return KeyDecision::EngageChord { trigger, key: vkey };
+                }
+            }
+
             // 4a. 레이어 내 더블탭 매핑 우선 확인
             let dt_opt = self.config.layers[layer_idx]
                 .double_tap_mappings
@@ -485,13 +548,26 @@ impl EngineState {
 
             if let Some(dt) = dt_opt {
                 if is_down {
+                    // up 없이 반복된 down = OS 오토리피트 — 탭으로 세지 않는다.
+                    // single 액션은 반복 실행(연속 단어 이동), double 액션 직후는
+                    // 반복 금지(줄 삭제 매크로 연사 방지 → 억제)
+                    if self.layer_dt_held == Some(vkey) {
+                        return match self.layer_dt_repeat_action.clone() {
+                            Some(action) => KeyDecision::execute_in_layer(action, trigger),
+                            None => KeyDecision::Suppress,
+                        };
+                    }
+
                     self.layer_key_used = true;
+                    self.layer_dt_held = Some(vkey);
+                    self.layer_keys_down.insert(vkey);
 
                     // 이전 탭과 동일 키이고 timeout 이내면 → 더블탭 액션
                     if self.layer_dt_last_key == Some(vkey) {
                         let elapsed = tick.wrapping_sub(self.layer_dt_last_tick);
                         if elapsed < dt.timeout_ms {
                             self.layer_dt_last_key = None;
+                            self.layer_dt_repeat_action = None;
                             return KeyDecision::execute_in_layer(dt.double_action, trigger);
                         }
                     }
@@ -499,9 +575,18 @@ impl EngineState {
                     // 첫 번째 탭 → 싱글 액션 즉시 실행, 더블탭 대기 기록
                     self.layer_dt_last_key = Some(vkey);
                     self.layer_dt_last_tick = tick;
+                    self.layer_dt_repeat_action = Some(dt.single_action.clone());
                     return KeyDecision::execute_in_layer(dt.single_action, trigger);
                 }
-                return KeyDecision::Suppress;
+                if self.layer_dt_held == Some(vkey) {
+                    self.layer_dt_held = None;
+                }
+                // 우리가 소비한 down의 up만 억제 — 레이어 활성 전부터 눌려
+                // 있던 키의 up은 통과 (stuck 방지)
+                if self.layer_keys_down.remove(&vkey) {
+                    return KeyDecision::Suppress;
+                }
+                return KeyDecision::PassThrough;
             }
 
             // 4b. 일반 레이어 매핑
@@ -529,6 +614,7 @@ impl EngineState {
                 if is_down {
                     self.layer_key_used = true;
                     self.layer_dt_last_key = None;
+                    self.layer_keys_down.insert(vkey);
                     // Launch는 트리거 키를 뗄 때까지 지연 — 트리거 수정자가
                     // 눌린 채 실행하면 새 프로세스 포커스/IME에 간섭한다
                     if matches!(action, BindAction::Launch(_)) {
@@ -537,7 +623,11 @@ impl EngineState {
                     }
                     return KeyDecision::execute_in_layer(action, trigger);
                 }
-                return KeyDecision::Suppress;
+                // 우리가 소비한 down의 up만 억제 (stuck 방지)
+                if self.layer_keys_down.remove(&vkey) {
+                    return KeyDecision::Suppress;
+                }
+                return KeyDecision::PassThrough;
             }
 
             // 4c. 미매핑 키 — 레이어별 unmapped 정책 적용
@@ -549,8 +639,14 @@ impl EngineState {
                     if !is_modifier_key(&vkey) {
                         if is_down {
                             self.layer_key_used = true;
+                            self.layer_keys_down.insert(vkey);
+                            return KeyDecision::Suppress;
                         }
-                        return KeyDecision::Suppress;
+                        // 우리가 소비한 down의 up만 억제 (stuck 방지)
+                        if self.layer_keys_down.remove(&vkey) {
+                            return KeyDecision::Suppress;
+                        }
+                        return KeyDecision::PassThrough;
                     }
                 }
                 // VIA KC_TRNS: 트리거 조합으로 코드 모드 진입.
@@ -803,6 +899,119 @@ mod tests {
 
         // timeout 초과 → 다시 싱글 액션
         assert_execute_sendkey(e.process_key(VKey::I, true, 1500), VKey::Home);
+    }
+
+    #[test]
+    fn layer_double_tap_autorepeat_repeats_single_not_double() {
+        // 홀드 중 OS 오토리피트 down(up 없는 반복)이 더블탭으로 오판정되어
+        // single↔double이 교대 발사되던 문제 — 리피트는 single만 반복한다
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LAlt, true, 1000);
+
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1100), VKey::Home);
+        // timeout(300ms) 이내 오토리피트 down → double(End) 아님, single 반복
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1150), VKey::Home);
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1180), VKey::Home);
+        assert!(matches!(
+            e.process_key(VKey::I, false, 1200),
+            KeyDecision::Suppress
+        ));
+
+        // up 이후의 진짜 재탭(timeout 이내)은 더블탭
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1250), VKey::End);
+    }
+
+    #[test]
+    fn layer_double_tap_double_action_does_not_autorepeat() {
+        // double 액션(줄 삭제 매크로 등 파괴적일 수 있음)은 오토리피트로
+        // 연사되지 않는다
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LAlt, true, 1000);
+
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1100), VKey::Home);
+        e.process_key(VKey::I, false, 1130);
+        assert_execute_sendkey(e.process_key(VKey::I, true, 1200), VKey::End); // 더블
+        // 홀드 유지 → 오토리피트 down 전부 억제
+        assert!(matches!(
+            e.process_key(VKey::I, true, 1250),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::I, true, 1290),
+            KeyDecision::Suppress
+        ));
+    }
+
+    #[test]
+    fn layer_keys_orphaned_on_trigger_release_do_not_leak() {
+        // Alt+H 홀드 중 Alt를 먼저 떼면, 계속 눌려 있는 H의 오토리피트가
+        // 맨키 'h'로 누출되던 문제 — keyup까지 전부 억제한다
+        let mut e = EngineState::new(layer_config());
+        e.process_key(VKey::LAlt, true, 1000);
+        assert_execute_sendkey(e.process_key(VKey::H, true, 1050), VKey::Left);
+
+        e.process_key(VKey::LAlt, false, 1300); // 트리거 먼저 해제 (H는 아직 홀드)
+
+        // H 오토리피트 down/최종 up 모두 억제 — 'h' 누출 없음
+        assert!(matches!(
+            e.process_key(VKey::H, true, 1350),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::H, false, 1400),
+            KeyDecision::Suppress
+        ));
+        // 완전히 뗀 뒤의 새 입력은 정상 통과
+        assert!(matches!(
+            e.process_key(VKey::H, true, 1500),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn layer_mapped_key_up_from_before_activation_passes_through() {
+        // 레이어 활성 전부터 눌려 있던 매핑 키의 up은 억제하지 않는다 (stuck 방지)
+        let mut e = EngineState::new(layer_config());
+        assert!(matches!(
+            e.process_key(VKey::H, true, 900),
+            KeyDecision::PassThrough
+        ));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::H, false, 1050),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn layer_mapping_with_cmd_held_engages_chord() {
+        // Cmd(Win)+Alt+H — 매핑(Left) 대신 OS 조합으로 투과해
+        // "다른 앱 가리기"(Cmd+Alt+H) 등이 살아 있어야 한다
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::LWin, true, 1020),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::H, true, 1050),
+            KeyDecision::EngageChord {
+                trigger: VKey::LAlt,
+                key: VKey::H,
+            }
+        ));
+    }
+
+    #[test]
+    fn layer_mapping_with_shift_held_still_maps() {
+        // Shift+Alt+H는 매핑 유지 — 어댑터가 Shift를 병합해 Shift+Left(선택 확장)
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::LShift, true, 1020),
+            KeyDecision::PassThrough
+        ));
+        assert_execute_sendkey(e.process_key(VKey::H, true, 1050), VKey::Left);
     }
 
     // ── 레이어 패스쓰루 (코드 모드) — docs/08 P0/P1 ──

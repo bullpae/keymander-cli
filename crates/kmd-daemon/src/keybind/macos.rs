@@ -766,6 +766,15 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
         return;
     }
 
+    // 트리거(Alt) 플래그만 지우고 함께 눌린 다른 물리 수정자(Shift 등)는
+    // 보존한다 — flags=0으로 전부 지우면 Shift 홀드 중 상태가 끊긴다.
+    const ALL_MOD_MASK: u64 = CG_EVENT_FLAG_MASK_SHIFT
+        | CG_EVENT_FLAG_MASK_CONTROL
+        | CG_EVENT_FLAG_MASK_ALTERNATE
+        | CG_EVENT_FLAG_MASK_COMMAND;
+    let trigger_mask = modifiers_to_flags(&[trigger]);
+    let kept_flags = unsafe { CGEventSourceFlagsState(1) } & ALL_MOD_MASK & !trigger_mask;
+
     unsafe {
         let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_PRIVATE);
         if !source.is_null() {
@@ -773,7 +782,7 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
             let ev = CGEventCreateKeyboardEvent(source, trigger_kc, false);
             if !ev.is_null() {
                 CGEventSetType(ev, CG_EVENT_FLAGS_CHANGED);
-                CGEventSetFlags(ev, 0);
+                CGEventSetFlags(ev, kept_flags);
                 CGEventSetIntegerValueField(ev, CG_EVENT_SOURCE_USER_DATA, MAGIC_USER_DATA);
                 CGEventPost(CG_SESSION_EVENT_TAP, ev);
                 CFRelease(ev);
@@ -782,6 +791,21 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
         }
     }
     std::thread::sleep(std::time::Duration::from_millis(3));
+
+    // 물리 Shift가 눌려 있으면 레이어 SendKey에 합성한다 —
+    // Shift+Alt+H = Shift+Left (선택 확장). Windows는 물리 Shift가 그대로
+    // 통과해 자연 조합되므로 macOS만 명시 병합이 필요하다.
+    let shift_flag = kept_flags & CG_EVENT_FLAG_MASK_SHIFT;
+    if shift_flag != 0 {
+        if let BindAction::SendKey(key) = action {
+            if !matches!(key, VKey::Hangul | VKey::Hanja) {
+                let kc = vkey_to_cg(*key);
+                send_key_event(kc, true, shift_flag);
+                send_key_event(kc, false, shift_flag);
+                return;
+            }
+        }
+    }
 
     execute_action(action);
 }
