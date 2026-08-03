@@ -21,7 +21,7 @@ use iced::widget::operation::scroll_to;
 use iced::widget::scrollable as scrollable_mod;
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    container, image, mouse_area, row, scrollable, text, text_input, Column, Space,
+    container, image, mouse_area, row, scrollable, stack, text, text_input, Column, Space,
 };
 use iced::{
     window, Background, Border, Color, Element, Fill, Length, Padding, Point, Size, Subscription,
@@ -45,7 +45,6 @@ mod view;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 pub const DEFAULT_WIDTH: f32 = 1000.0;
-const DRAG_STRIP: f32 = 6.0;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
@@ -56,7 +55,7 @@ pub struct UiScale {
     pub font: f32,
     pub visible_rows: usize,
     pub pill_height: f32,
-    /// drag_strip + pill (레이아웃 문서화 겸 테스트 검증용)
+    /// 검색바(pill) 높이 (레이아웃 문서화 겸 테스트 검증용)
     #[allow(dead_code)]
     pub search_bar_height: f32,
     pub row_height: f32,
@@ -89,12 +88,17 @@ impl UiScale {
         let f = raw_font.clamp(12.0, 32.0);
         let visible_rows = raw_rows.clamp(4, 20);
         let pill_height = (f * 2.9).round(); // 16→46
-        let search_bar_height = pill_height + DRAG_STRIP;
+        let search_bar_height = pill_height;
         let row_height = (f * 3.0).round(); // 16→48
         let status_bar_height = (f * 1.75).round(); // 16→28
-        let full_window_height =
-            search_bar_height + 1.0 + (visible_rows as f32 * row_height) + 1.0 + status_bar_height;
-        // 카드 외곽 container 의 padding(2) 상하 = 4.0 (view.rs 의 card 구조와 일치)
+        // 카드 외곽 container 의 padding(2) 상하 = 4.0 (view.rs 의 card 구조와 일치).
+        // 테두리(teal 2px, peach 1px)는 iced 에서 bounds 안쪽에 그려지므로 높이에 더하지 않는다.
+        let full_window_height = search_bar_height
+            + 4.0
+            + 1.0
+            + (visible_rows as f32 * row_height)
+            + 1.0
+            + status_bar_height;
         let collapsed_window_height = search_bar_height + 4.0;
         let no_results_font = (f * 0.8125).round(); // 16→13
         let hint_area_height = (no_results_font * 1.4).ceil() + 16.0;
@@ -1301,6 +1305,7 @@ mod tests {
         let cfg = kmd_core::Config::default();
         let u = UiScale::new(cfg.general.font_size, cfg.general.visible_rows);
         let expected = u.search_bar_height
+            + 4.0
             + 1.0
             + (u.visible_rows as f32 * u.row_height)
             + 1.0
@@ -1316,7 +1321,7 @@ mod tests {
     fn 접힌_창높이_일관성() {
         for fs in [12.0, 16.0, 20.0, 24.0, 32.0] {
             let u = UiScale::new(fs, 8);
-            // view.rs 카드 구조: drag_strip + pill + 카드 padding(2×2)
+            // view.rs 카드 구조: pill + 카드 padding(2×2)
             let expected = u.search_bar_height + 4.0;
             assert!(
                 (u.collapsed_window_height - expected).abs() < f32::EPSILON,
