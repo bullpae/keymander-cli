@@ -58,6 +58,21 @@ const CARD_PAD: f32 = if cfg!(target_os = "windows") {
     2.0
 };
 
+/// 창 축소를 지연시키는 시간.
+///
+/// 결과가 사라질 때 창을 곧바로 접으면 두 가지 문제가 생긴다.
+/// 1. 백스페이스 연타·한 줄 삭제(`macro:Home;Shift+End;Delete`)처럼 텍스트가
+///    빠르게 줄어드는 동안 full → hint → collapsed 로 리사이즈가 연달아 난다.
+/// 2. 리사이즈 직후 1~2프레임은 스왑체인에 이전(큰) 프레임이 남아 있어 DXGI가
+///    그것을 새 창 크기로 stretch 합성한다 — 결과 목록처럼 정보가 빽빽한
+///    화면이 압축돼 "화면이 찢어진" 것처럼 보인다.
+///
+/// 축소를 짧게 지연하면 연속 변화가 한 번으로 합쳐지고, 실제 리사이즈 시점에는
+/// 이미 "빈 카드"(거의 단색)가 렌더돼 있어 stretch 왜곡이 눈에 띄지 않는다.
+/// 확대는 결과가 즉시 보여야 하므로 지연하지 않는다.
+/// Windows 키 오토리피트 간격(~31ms)보다 길게 잡아 연타를 흡수한다.
+const SHRINK_DEBOUNCE: Duration = Duration::from_millis(60);
+
 /// font_size 기반 비례 계산으로 모든 UI 치수를 결정.
 /// `font_size` 하나를 바꾸면 pill, row, 상태바, 아이콘, 서브 폰트가 모두 연동된다.
 #[derive(Debug, Clone, Copy)]
@@ -221,6 +236,13 @@ pub struct App {
     window_width: f32,
     /// 현재 적용된(또는 적용 요청한) 창 높이 — 결과 유무에 따라 collapsed↔full 전환
     window_height: f32,
+    /// 축소 디바운스 토큰 — 값이 바뀌면 대기 중이던 축소 요청은 무효가 된다.
+    /// (확대가 끼어들거나 더 최근의 축소 요청이 들어온 경우)
+    shrink_token: u64,
+    /// 대기 중인 축소 목표 높이. `sync_window_height` 는 매 메시지마다 호출되므로
+    /// 이 값이 없으면 축소가 적용되기 전에 도착한 포커스·타이머 메시지마다
+    /// 예약이 재발행되어 타이머가 끝없이 리셋된다(창이 영영 접히지 않음).
+    pending_shrink_to: Option<f32>,
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
@@ -269,6 +291,8 @@ pub enum Message {
     CheckUnfocusedExit,
     /// 투명 배경 클릭 → Spotlight처럼 앱 닫기
     BackgroundClicked,
+    /// 디바운스된 창 축소 적용 — 토큰이 최신일 때만 유효 (SHRINK_DEBOUNCE 참고)
+    ApplyPendingShrink(u64),
     /// view 재렌더 후 1프레임 뒤 포커스 재요청 (트리 변경 후 포커스 유실 복구)
     DelayedRefocus,
     /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
@@ -625,6 +649,8 @@ impl App {
             _guard: guard,
             window_width,
             window_height: ui.collapsed_window_height,
+            shrink_token: 0,
+            pending_shrink_to: None,
             window_state,
             state_dirty: false,
             window_focused: true,
@@ -776,18 +802,67 @@ impl App {
     }
 
     /// 창 높이가 상태와 어긋나면 리사이즈 태스크를 반환 (일치하면 no-op).
+    ///
+    /// 확대는 즉시, 축소는 [`SHRINK_DEBOUNCE`] 뒤에 적용한다 — 연속 축소를
+    /// 한 번으로 합치고 리사이즈 순간의 stretch 왜곡을 감춘다.
     fn sync_window_height(&mut self) -> Task<Message> {
         let desired = self.desired_window_height();
         if (desired - self.window_height).abs() < 0.5 {
             return Task::none();
         }
+
+        // 확대: 즉시 적용하고 대기 중이던 축소는 무효화한다.
+        if desired > self.window_height {
+            self.shrink_token = self.shrink_token.wrapping_add(1);
+            self.pending_shrink_to = None;
+            self.window_height = desired;
+            return self.resize_window_to(desired);
+        }
+
+        // 이미 같은 목표로 예약돼 있으면 타이머를 살려 둔다 — 재예약하면
+        // 무관한 메시지가 올 때마다 타이머가 리셋돼 축소가 영영 적용되지 않는다.
+        if self
+            .pending_shrink_to
+            .is_some_and(|h| (h - desired).abs() < 0.5)
+        {
+            return Task::none();
+        }
+
+        // 축소: 토큰을 갱신해 이전 대기 요청을 무효화하고 지연 적용한다.
+        // window_height 는 실제 적용 시점에 갱신해야 그 사이의 확대를
+        // "확대"로 정확히 판정할 수 있다.
+        self.shrink_token = self.shrink_token.wrapping_add(1);
+        self.pending_shrink_to = Some(desired);
+        let token = self.shrink_token;
+        Task::future(async move {
+            tokio::time::sleep(SHRINK_DEBOUNCE).await;
+            Message::ApplyPendingShrink(token)
+        })
+    }
+
+    /// 디바운스된 축소 적용 — 최신 토큰이고 여전히 축소가 필요할 때만 리사이즈.
+    fn apply_pending_shrink(&mut self, token: u64) -> Task<Message> {
+        if token != self.shrink_token {
+            return Task::none(); // 더 최근 요청(또는 확대)이 이 요청을 대체함
+        }
+        self.pending_shrink_to = None;
+        let desired = self.desired_window_height();
+        // 대기 중 상태가 바뀌어 축소가 필요 없어졌으면 무시한다.
+        if desired >= self.window_height - 0.5 {
+            return Task::none();
+        }
         self.window_height = desired;
+        self.resize_window_to(desired)
+    }
+
+    /// 창을 주어진 높이로 리사이즈 (폭은 현재 값 유지).
+    fn resize_window_to(&self, height: f32) -> Task<Message> {
         // window::Settings 의 min/max 폭과 동일한 범위로 클램프
         let width = self.window_width.clamp(420.0, 1600.0);
         match self.window_id {
-            Some(id) => window::resize(id, Size::new(width, desired)),
+            Some(id) => window::resize(id, Size::new(width, height)),
             None => window::oldest().then(move |maybe_id| match maybe_id {
-                Some(id) => window::resize(id, Size::new(width, desired)),
+                Some(id) => window::resize(id, Size::new(width, height)),
                 None => Task::none(),
             }),
         }
@@ -802,6 +877,7 @@ impl App {
             message,
             Message::QueryChanged(_)
                 | Message::DelayedRefocus
+                | Message::ApplyPendingShrink(_)
                 | Message::EnsureFocus(_)
                 | Message::EngineReady
                 | Message::EngineSwapSettled
@@ -1123,6 +1199,7 @@ impl App {
                 }
                 iced::exit()
             }
+            Message::ApplyPendingShrink(token) => self.apply_pending_shrink(token),
             Message::DelayedRefocus => self.handle_delayed_refocus(),
             Message::CheckUnfocusedExit => self.handle_check_unfocused_exit(),
         }
@@ -1306,6 +1383,166 @@ mod tests {
         let window_state = WindowState::default();
         let (app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
         app
+    }
+
+    // ── 창 리사이즈 디바운스 (화면 찢어짐 회귀 방지) ──
+
+    /// 결과가 있는 상태(= full 높이)를 만든다.
+    fn with_results(app: &mut App) {
+        app.results = vec![kmd_core::SearchResult {
+            item: kmd_core::IndexItem {
+                name: "t".into(),
+                path: "t".into(),
+                icon: String::new(),
+                kind: kmd_core::ItemKind::File,
+                source: kmd_core::index::Source::FileProvider,
+                keywords: String::new(),
+                icon_path: None,
+            },
+            score: 1,
+        }];
+        app.window_height = app.ui.full_window_height;
+    }
+
+    #[test]
+    fn 축소는_즉시_적용되지_않는다() {
+        // 회귀: 결과가 사라지는 순간 창을 곧바로 접으면 이전 프레임이
+        // stretch 합성돼 화면이 찢어져 보인다 (백스페이스 전체 삭제,
+        // 더블탭 '/' 한 줄 삭제, '.' Backspace 매핑에서 발생).
+        let mut app = make_test_app();
+        with_results(&mut app);
+        let before = app.window_height;
+
+        app.results.clear();
+        let _task = app.sync_window_height();
+
+        assert_eq!(
+            app.window_height, before,
+            "축소는 디바운스 후에 적용되어야 함 — 즉시 창 높이가 바뀌면 안 됨"
+        );
+    }
+
+    #[test]
+    fn 확대는_즉시_적용된다() {
+        let mut app = make_test_app();
+        assert_eq!(app.window_height, app.ui.collapsed_window_height);
+
+        with_results(&mut app);
+        app.window_height = app.ui.collapsed_window_height; // 확대 대기 상태로 되돌림
+        let _task = app.sync_window_height();
+
+        assert_eq!(
+            app.window_height, app.ui.full_window_height,
+            "결과가 생기면 창은 지연 없이 즉시 커져야 함"
+        );
+    }
+
+    #[test]
+    fn 대기중_축소는_최신_토큰만_적용() {
+        let mut app = make_test_app();
+        with_results(&mut app);
+
+        // 1차: 쿼리는 남고 결과만 사라짐 → hint 높이로 예약
+        app.query = "zzz".into();
+        app.results.clear();
+        let _ = app.sync_window_height();
+        let stale = app.shrink_token;
+
+        // 2차: 쿼리까지 비워짐 → 더 작은 목표로 재예약 (1차 무효화)
+        app.query.clear();
+        let _ = app.sync_window_height();
+        assert_ne!(app.shrink_token, stale, "목표가 바뀌면 재예약되어야 함");
+
+        let before = app.window_height;
+        let _ = app.update(Message::ApplyPendingShrink(stale));
+        assert_eq!(app.window_height, before, "스테일 토큰은 무시되어야 함");
+
+        let _ = app.update(Message::ApplyPendingShrink(app.shrink_token));
+        assert_eq!(
+            app.window_height, app.ui.collapsed_window_height,
+            "최신 토큰이면 축소가 적용되어야 함"
+        );
+    }
+
+    #[test]
+    fn 축소_대기중_확대가_오면_축소는_취소() {
+        let mut app = make_test_app();
+        with_results(&mut app);
+
+        // 축소 예약
+        app.results.clear();
+        let _ = app.sync_window_height();
+        let pending = app.shrink_token;
+
+        // 그 사이 결과가 다시 생김 → 즉시 확대 + 예약 무효화
+        with_results(&mut app);
+        app.window_height = app.ui.collapsed_window_height;
+        let _ = app.sync_window_height();
+        assert_eq!(app.window_height, app.ui.full_window_height);
+
+        // 뒤늦게 도착한 축소는 무시되어야 함 (창이 접혔다 펴지는 깜빡임 방지)
+        let _ = app.update(Message::ApplyPendingShrink(pending));
+        assert_eq!(
+            app.window_height, app.ui.full_window_height,
+            "확대 후 도착한 옛 축소 요청은 무시되어야 함"
+        );
+    }
+
+    #[test]
+    fn 축소_대기중_무관한_메시지가_와도_예약이_유지된다() {
+        // 회귀: sync_window_height 는 매 메시지마다 호출되므로, 대기 중에도
+        // 예약을 재발행하면 포커스·타이머 메시지가 올 때마다 타이머가 리셋돼
+        // 창이 영영 접히지 않는다 (실제로 발생했던 버그).
+        let mut app = make_test_app();
+        with_results(&mut app);
+
+        app.results.clear();
+        let _ = app.sync_window_height();
+        let token = app.shrink_token;
+
+        // 축소가 적용되기 전에 무관한 메시지가 여러 번 도착
+        for _ in 0..5 {
+            let _ = app.sync_window_height();
+        }
+        assert_eq!(
+            app.shrink_token, token,
+            "같은 목표로는 재예약하지 않아야 함 (타이머 리셋 방지)"
+        );
+
+        // 최초 예약 토큰이 그대로 유효
+        let _ = app.update(Message::ApplyPendingShrink(token));
+        assert_eq!(
+            app.window_height, app.ui.collapsed_window_height,
+            "최초 예약이 살아 있어 축소가 적용되어야 함"
+        );
+        assert!(
+            app.pending_shrink_to.is_none(),
+            "적용 후 예약은 비워져야 함"
+        );
+    }
+
+    #[test]
+    fn 전체삭제_시_리사이즈는_한_번으로_합쳐진다() {
+        // full → (hint) → collapsed 로 연달아 줄어드는 경로에서 실제
+        // 창 리사이즈는 마지막 한 번만 일어나야 한다.
+        let mut app = make_test_app();
+        with_results(&mut app);
+
+        // 1단계: 결과만 사라짐 (쿼리는 남음) → hint 높이로 축소 예약
+        app.query = "zzz".into();
+        app.results.clear();
+        let _ = app.sync_window_height();
+        assert_eq!(app.window_height, app.ui.full_window_height, "아직 미적용");
+
+        // 2단계: 쿼리까지 비워짐 → 더 작은 높이로 재예약 (앞 요청 무효화)
+        app.query.clear();
+        let _ = app.sync_window_height();
+
+        let _ = app.update(Message::ApplyPendingShrink(app.shrink_token));
+        assert_eq!(
+            app.window_height, app.ui.collapsed_window_height,
+            "중간 단계(hint)를 건너뛰고 최종 높이로 한 번에 축소되어야 함"
+        );
     }
 
     // ── UiScale 비례 계산 일관성 ──
