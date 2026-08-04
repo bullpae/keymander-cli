@@ -30,10 +30,19 @@ fail()  { echo -e "${RED}✗${NC} $1"; exit 1; }
 SKIP_TEST=false
 RESTART_ONLY=false
 
+usage() {
+    echo "사용법:"
+    echo "  ./scripts/deploy-local.sh              # 전체 (빌드+테스트+배포+재시작)"
+    echo "  ./scripts/deploy-local.sh --skip-test  # 테스트 생략"
+    echo "  ./scripts/deploy-local.sh --restart    # 재시작만"
+}
+
 for arg in "$@"; do
     case "$arg" in
         --skip-test) SKIP_TEST=true ;;
         --restart)   RESTART_ONLY=true ;;
+        -h|--help|help) usage; exit 0 ;;
+        *) usage; fail "알 수 없는 인자: $arg" ;;
     esac
 done
 

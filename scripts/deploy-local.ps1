@@ -12,11 +12,13 @@
 #   .\scripts\deploy-local.ps1 -SkipTest      # 테스트 생략
 #   .\scripts\deploy-local.ps1 -RestartOnly   # 재시작만
 #   .\scripts\deploy-local.ps1 -DeployDir "D:\other\path"  # 배포 경로 변경
+#   .\scripts\deploy-local.ps1 -Help          # 도움말 (--help 도 인식)
 
 param(
     [switch]$SkipTest,
     [switch]$RestartOnly,
-    [string]$DeployDir = "C:\WinUtil\keymander"
+    [string]$DeployDir = "C:\WinUtil\keymander",
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +47,35 @@ function Write-Info  { param([string]$Msg) Write-Host "[.] $Msg" -ForegroundColo
 function Write-Ok    { param([string]$Msg) Write-Host "[ok] $Msg" -ForegroundColor Green }
 function Write-Warn  { param([string]$Msg) Write-Host "[!] $Msg" -ForegroundColor Yellow }
 function Write-Fail  { param([string]$Msg) Write-Host "[x] $Msg" -ForegroundColor Red; exit 1 }
+
+function Show-Usage {
+    Write-Host ""
+    Write-Host "keymander Windows 로컬 배포 스크립트" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "사용법:"
+    Write-Host "  .\scripts\deploy-local.ps1                            # 전체 (빌드+테스트+배포+재시작)"
+    Write-Host "  .\scripts\deploy-local.ps1 -SkipTest                  # 테스트 생략"
+    Write-Host "  .\scripts\deploy-local.ps1 -RestartOnly               # 재시작만"
+    Write-Host "  .\scripts\deploy-local.ps1 -DeployDir 'D:\other\path' # 배포 경로 변경"
+    Write-Host "  .\scripts\deploy-local.ps1 -Help                      # 이 도움말"
+    Write-Host ""
+}
+
+# ── 인자 검증 ───────────────────────────────────────────────
+# PowerShell은 "--help" 같은 이중 대시 토큰을 옵션이 아니라 위치 인자로
+# 해석해 $DeployDir="--help"가 되고, 그대로 진행하면 리포 옆에 '--help'
+# 폴더를 만들어 배포해버리는 사고가 난다. 도움말 요청은 사용법을 보여주고,
+# 옵션처럼 생긴 값·상대 경로는 배포 경로로 거부한다.
+if ($Help -or $DeployDir -match '^(-{1,2}h(elp)?|/\?|help)$') {
+    Show-Usage
+    exit 0
+}
+if ($DeployDir.StartsWith("-")) {
+    Write-Fail "잘못된 배포 경로: '$DeployDir' — 옵션은 -SkipTest, -RestartOnly, -DeployDir <경로>, -Help 입니다"
+}
+if (-not [System.IO.Path]::IsPathRooted($DeployDir)) {
+    Write-Fail "배포 경로는 절대 경로여야 합니다: '$DeployDir'"
+}
 
 # ── 프로세스 종료/시작 ────────────────────────────────────────
 function Stop-KmdProcesses {

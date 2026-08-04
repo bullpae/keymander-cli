@@ -934,6 +934,13 @@ fn execute_selected(
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
+/// ":e"/"​:emoji" 별칭 뒤에 공백이 와서 이모지 **키워드 입력이 시작**됐는지.
+/// 공백 전(":e")에는 아직 /exit, :emoji처럼 e로 시작하는 다른 입력일 수
+/// 있으므로 내장 한글 조합을 켜면 안 된다.
+fn emoji_keyword_started(query: &str) -> bool {
+    query.contains(' ')
+}
+
 /// Update search results based on current query (including composing char)
 fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&kmd_core::Database>) {
     // Borrow the cached effective query (no allocation)
@@ -954,14 +961,17 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
 
     let prefix = kmd_core::query_prefix::prefix_of(&query);
 
-    // :e / :emoji 모드에서만 내장 한글 조합 자동 활성화
-    if prefix == QueryPrefix::Emoji {
+    // :e / :emoji 키워드 입력에서만 내장 한글 조합 자동 활성화.
+    // 별칭 뒤에 공백이 온 뒤(":e fire")부터 켠다 — 쿼리가 ":e"인 순간 켜면
+    // /exit, :emoji처럼 e로 시작하는 더 긴 명령을 치는 도중 다음 키가
+    // 자모로 조합되는 오입력이 발생한다 (/exit → /eㅌit).
+    if prefix == QueryPrefix::Emoji && emoji_keyword_started(&query) {
         if !state.hangul_mode && !state.hangul_auto {
             state.hangul_mode = true;
             state.hangul_auto = true;
         }
     } else if state.hangul_auto {
-        // Left emoji prefix — auto-deactivate hangul mode
+        // Left emoji keyword — auto-deactivate hangul mode
         flush_composer(state);
         state.hangul_mode = false;
         state.hangul_auto = false;
@@ -1536,4 +1546,106 @@ fn load_history_into_results(state: &mut AppState, db: &kmd_core::Database) {
             }
         })
         .collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn test_state() -> AppState {
+        AppState {
+            query: String::new(),
+            results: Vec::new(),
+            selected_index: 0,
+            total_items: 0,
+            show_preview: false,
+            preview_width_percent: 40,
+            search_mode: SearchMode::Fuzzy,
+            should_quit: false,
+            quit_on_launch: false,
+            hangul_mode: false,
+            hangul_auto: false,
+            composing: None,
+            composer: HangulComposer::new(),
+            drill_stack: Vec::new(),
+            drill_path: None,
+            status_message: None,
+            settings: None,
+            is_portable: false,
+            use_emoji: true,
+            selected_llm_providers: Vec::new(),
+            multi_llm_prefixes: Vec::new(),
+            llm_autopilot: false,
+            selected_multi_web_providers: Vec::new(),
+            multi_web_prefixes: Vec::new(),
+            spell_providers: Vec::new(),
+            spell_prefixes: Vec::new(),
+            translate_providers: Vec::new(),
+            translate_prefixes: Vec::new(),
+            cached_effective_query: String::new(),
+            dirty: true,
+        }
+    }
+
+    fn type_str(state: &mut AppState, engine: &mut SearchEngine, s: &str) {
+        for c in s.chars() {
+            handle_key(
+                state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                engine,
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn slash_exit_입력중_한글_조합_안됨() {
+        // 회귀: "/e"까지 입력된 순간 이모지 프리픽스로 오인해 한글 조합이
+        // 켜지면서 x가 'ㅌ'로 바뀌던 버그 (/exit → /eㅌit)
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, "/exit");
+        assert_eq!(state.query, "/exit");
+        assert!(!state.hangul_mode);
+        assert!(!state.hangul_auto);
+    }
+
+    #[test]
+    fn emoji_별칭만으로는_한글_조합_비활성() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, "/e");
+        assert!(!state.hangul_mode, "공백 전에는 한글 조합이 켜지면 안 됨");
+    }
+
+    #[test]
+    fn emoji_키워드_공백_후_자동_한글_조합() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, "/e ");
+        assert!(state.hangul_mode && state.hangul_auto);
+
+        // "rk" → ㄱ+ㅏ 조합 중 '가'
+        type_str(&mut state, &mut engine, "rk");
+        assert!(state.effective_query().ends_with('가'));
+    }
+
+    #[test]
+    fn emoji_키워드_이탈시_자동_한글_해제() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, "/e ");
+        assert!(state.hangul_auto);
+
+        // 백스페이스로 공백 제거 → ":e"로 복귀 → 자동 모드 해제
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+            &mut engine,
+            None,
+        );
+        assert!(!state.hangul_mode);
+        assert!(!state.hangul_auto);
+    }
 }
