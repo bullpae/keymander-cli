@@ -148,11 +148,6 @@ impl App {
 
         let divider_c = t.border;
 
-        // ── 드래그 스트립 (투명) ──
-        let drag_strip = mouse_area(container(text("")).width(Fill).height(DRAG_STRIP))
-            .on_press(Message::StartWindowDrag)
-            .interaction(iced::mouse::Interaction::Grab);
-
         // ── 검색바 콘텐츠 ──
         let u = self.ui;
         let brand = self.view_brand_mark();
@@ -261,10 +256,11 @@ impl App {
             ..accent_color
         };
         let inner_line = Color { a: 0.16, ..t.peach };
-        // Windows: DWM 네이티브 코너 클립(약 8px)과 어긋나지 않도록 작은 라운드.
-        // pill 라운드(~23px)를 그리면 모서리 바깥이 창 배경색으로 채워져 어색하다.
+        // Windows: 바깥 링(radius+2)이 창 가장자리에 밀착하므로, 링 라운드가
+        // DWM 네이티브 코너 클립(약 8px)과 일치하도록 안쪽 radius 를 6으로 둔다.
+        // pill 라운드(~23px)를 그리면 DWM 이 모서리를 잘라내 형태가 깨진다.
         let radius = if cfg!(target_os = "windows") {
-            8.0
+            6.0
         } else {
             u.pill_height / 2.0
         };
@@ -293,17 +289,26 @@ impl App {
                 ..Default::default()
             });
 
-        // ── 안정적 트리: 항상 동일한 4개 자식 (drag, card_row, hint, bg_dismiss) ──
-        // edge_w를 항상 동일하게 유지하여 pill↔결과 전환 시 카드 너비 일관성 확보
-        let edge_w: f32 = 4.0;
+        // ── 안정적 트리: 항상 동일한 3개 자식 (card_stack, hint, bg_dismiss) ──
+        // 카드 빈 영역 어디서든 창 드래그 — text_input·결과 행 등 자식이
+        // capture 한 클릭은 이 mouse_area 까지 내려오지 않는다.
+        let draggable_card = mouse_area(card).on_press(Message::StartWindowDrag);
+
+        // 좌우 리사이즈 히트존은 stack 오버레이로 카드 위에 겹쳐 레이아웃 여백 0.
+        // 히트존 5px = 바깥 링 1 + 간격 2 + teal 테두리 2 — 콘텐츠(좌우 12px 안쪽
+        // 패딩)와 겹치지 않는다.
+        let edge_w: f32 = 5.0;
         let left_edge = mouse_area(container(text("")).width(edge_w).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::West))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
         let right_edge = mouse_area(container(text("")).width(edge_w).height(Fill))
             .on_press(Message::StartWindowResize(window::Direction::East))
             .interaction(iced::mouse::Interaction::ResizingHorizontally);
+        let resize_overlay = row![left_edge, Space::new().width(Fill), right_edge]
+            .width(Fill)
+            .height(Fill);
 
-        let card_row = row![left_edge, card, right_edge]
+        let card_stack = stack![draggable_card, resize_overlay]
             .width(Fill)
             .height(if has_results {
                 Length::Fill
@@ -335,8 +340,7 @@ impl App {
         .on_press(Message::BackgroundClicked);
 
         let content = Column::new()
-            .push(drag_strip)
-            .push(card_row)
+            .push(card_stack)
             .push(hint_area)
             .push(bg_dismiss);
 

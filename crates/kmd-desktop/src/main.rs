@@ -149,8 +149,8 @@ fn main() -> iced::Result {
     let window_state = WindowState::load();
     apply_renderer_preference(&config.general.renderer);
 
-    // Windows 불투명 창의 배경색 — 카드가 덮지 않는 픽셀(드래그 스트립,
-    // 리사이즈 엣지, 힌트 영역)이 검정 대신 테마 배경색으로 칠해진다.
+    // Windows 불투명 창의 배경색 — 카드가 덮지 않는 픽셀(라운드 모서리 바깥,
+    // 힌트 영역)이 검정 대신 테마 배경색으로 칠해진다.
     let opaque_bg = {
         let t = theme::from_name(&config.general.theme);
         Color {
