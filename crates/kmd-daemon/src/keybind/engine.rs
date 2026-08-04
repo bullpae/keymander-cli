@@ -931,7 +931,7 @@ mod tests {
         assert_execute_sendkey(e.process_key(VKey::I, true, 1100), VKey::Home);
         e.process_key(VKey::I, false, 1130);
         assert_execute_sendkey(e.process_key(VKey::I, true, 1200), VKey::End); // 더블
-        // 홀드 유지 → 오토리피트 down 전부 억제
+                                                                               // 홀드 유지 → 오토리피트 down 전부 억제
         assert!(matches!(
             e.process_key(VKey::I, true, 1250),
             KeyDecision::Suppress
