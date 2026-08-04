@@ -37,6 +37,13 @@ All notable changes to keymander are documented here.
   투과한다 (passthrough 레이어).
 
 ### Features
+- **브랜드 아이콘 모노 모드 (`general.brand_icons = "mono"`)** — 구글·네이버·
+  GPT 등 웹 서비스 브랜드 아이콘을 풀컬러 로고 대신 Simple Icons(CC0) 단색
+  글리프로 렌더링하는 옵션. 테마의 WebSearch 색(teal)으로 틴트되고 시스템
+  아이콘과 같은 12% 알파 컨테이너에 얹혀 목록 전체가 한 톤으로 통일된다.
+  `:set`의 "Brand Icons: Mono" 토글로 즉시 전환·저장 가능. 글리프가 없는
+  서비스(grok/daum/papago)는 시스템 아이콘 폴백으로 흘리되 같은 teal로
+  틴트해 톤을 유지. 기본값은 "color"(기존 풀컬러 로고).
 - **데스크톱 시스템 아이콘 전면 교체 — 이모지 → 테마 틴트 SVG** — 시스템
   명령·프리픽스 명령·파일 확장자·키맵 치트시트 등 kmd-core가 이모지로
   내려주던 아이콘 90여 종을 데스크톱에서 Lucide SVG(ISC)로 오버라이드.

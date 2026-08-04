@@ -40,6 +40,9 @@
 # Desktop 런처 결과창에 표시되는 행 수 (범위: 4–20, 기본: 8)
 # visible_rows = 8
 
+# Desktop 브랜드 아이콘 스타일: color (공식 풀컬러 로고) | mono (테마 틴트 단색 글리프)
+# brand_icons = "color"
+
 # ── 런처 설정 ────────────────────────────────────────────────
 [launcher]
 # 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs

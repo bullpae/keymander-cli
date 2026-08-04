@@ -48,6 +48,9 @@ pub struct GeneralConfig {
     /// "software" (tiny-skia — VM/원격 데스크톱처럼 GPU가 부실한 환경에서
     /// 어댑터 프로빙을 생략해 부팅이 빨라진다), "gpu" (wgpu 강제).
     pub renderer: String,
+    /// Desktop launcher brand icon style: "color" (official full-color logos)
+    /// or "mono" (theme-tinted monochrome glyphs — unified look).
+    pub brand_icons: String,
 }
 
 impl Default for GeneralConfig {
@@ -63,6 +66,7 @@ impl Default for GeneralConfig {
             font_size: 16.0,
             visible_rows: 8,
             renderer: "auto".to_string(),
+            brand_icons: "color".to_string(),
         }
     }
 }

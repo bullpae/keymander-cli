@@ -128,6 +128,16 @@ impl App {
             Some(false) => "Daemon Auto Start [OFF]",
             None => "Daemon Auto Start [UNKNOWN]",
         };
+        let brand_icons_label = if self
+            .runtime_config
+            .general
+            .brand_icons
+            .eq_ignore_ascii_case("mono")
+        {
+            "Brand Icons: Mono (theme tint) [ON]"
+        } else {
+            "Brand Icons: Mono (theme tint) [OFF]"
+        };
 
         let label = |base: &str, theme_name: &str| -> String {
             if current_theme.eq_ignore_ascii_case(theme_name) {
@@ -177,6 +187,12 @@ impl App {
                 "kmd:settings:toggle_autostart".to_string(),
                 if emoji { "\u{23FB}\u{FE0F}" } else { "[BOOT]" }.to_string(),
                 "Toggle daemon start at login".to_string(),
+            ),
+            (
+                brand_icons_label.to_string(),
+                "kmd:settings:toggle_brand_icons".to_string(),
+                if emoji { "\u{1F5BC}" } else { "[ICO]" }.to_string(),
+                "Mono glyphs vs full-color logos".to_string(),
             ),
             (
                 label("Theme: Keymander (default)", "Keymander"),
@@ -417,6 +433,21 @@ impl App {
                 self.query.clear();
                 self.clear_results_state(kmd_core::SearchMode::Fuzzy);
                 return task;
+            }
+            "toggle_brand_icons" => {
+                let mono = self
+                    .runtime_config
+                    .general
+                    .brand_icons
+                    .eq_ignore_ascii_case("mono");
+                let new_val = if mono { "color" } else { "mono" };
+                self.runtime_config.general.brand_icons = new_val.to_string();
+                tracing::info!("brand_icons = {new_val}");
+                save_config(|cfg| cfg.general.brand_icons = new_val.to_string());
+
+                self.query = ":set".to_string();
+                self.handle_settings_query(":set");
+                return self.request_focus();
             }
             "toggle_ime_reset" => {
                 self.reset_ime_on_launch = !self.reset_ime_on_launch;

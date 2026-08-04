@@ -4,24 +4,44 @@ use super::*;
 use super::{context_actions_for, estimate_title_max_chars, truncate_str};
 
 impl App {
-    /// 아이템 아이콘 — 브랜드/앱 PNG → 시스템 SVG(테마 틴트 + 컨테이너) → 이모지 텍스트
-    /// 3단계 폴백. `emoji_font`는 텍스트 폴백일 때의 글자 크기.
+    /// 아이템 아이콘 — 브랜드(컬러 PNG 또는 모노 글리프) → 앱 PNG →
+    /// 시스템 SVG(테마 틴트 + 컨테이너) → 이모지 텍스트 폴백.
+    /// `emoji_font`는 텍스트 폴백일 때의 글자 크기.
+    ///
+    /// `general.brand_icons = "mono"`면 브랜드도 Simple Icons 단색 글리프를
+    /// WebSearch 색(teal)으로 틴트해 시스템 아이콘과 같은 톤으로 그린다.
     fn item_icon_element<'a>(
         &'a self,
         item: &'a kmd_core::IndexItem,
         size: f32,
         emoji_font: f32,
     ) -> Element<'a, Message> {
-        if let Some(handle) =
+        let mono = self
+            .runtime_config
+            .general
+            .brand_icons
+            .eq_ignore_ascii_case("mono");
+
+        if mono {
+            if let Some(handle) =
+                crate::brand_icons::mono_brand_icon_for_item(item.kind, &item.keywords, &item.path)
+                    .or_else(|| crate::brand_icons::mono_brand_icon_for_settings(&item.keywords))
+            {
+                return self.tinted_svg_icon(handle, self.theme.teal, size, 0.56);
+            }
+        } else if let Some(handle) =
             crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
                 .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
-                .or_else(|| {
-                    crate::app_icons::cached_icon_for_item(
-                        item.kind,
-                        &item.path,
-                        item.icon_path.as_deref(),
-                    )
-                })
+        {
+            return image(handle)
+                .content_fit(iced::ContentFit::Fill)
+                .width(size)
+                .height(size)
+                .into();
+        }
+
+        if let Some(handle) =
+            crate::app_icons::cached_icon_for_item(item.kind, &item.path, item.icon_path.as_deref())
         {
             return image(handle)
                 .content_fit(iced::ContentFit::Fill)
@@ -31,29 +51,47 @@ impl App {
         }
 
         if let Some((handle, role)) = crate::system_icons::system_icon_for(&item.icon, item.kind) {
-            let color = role.color(&self.theme);
-            let box_bg = Color { a: 0.12, ..color };
-            let glyph = iced::widget::svg(handle)
-                .width(size * 0.62)
-                .height(size * 0.62)
-                .style(move |_: &_, _| iced::widget::svg::Style { color: Some(color) });
-            return container(glyph)
-                .center_x(size)
-                .center_y(size)
-                .style(move |_: &_| container::Style {
-                    background: Some(Background::Color(box_bg)),
-                    border: Border {
-                        radius: (size * 0.25).into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .into();
+            // 모노 모드에서 글리프 없는 웹 서비스(grok/daum/papago 등)도
+            // 브랜드와 같은 teal로 맞춰 목록 톤을 유지한다.
+            let color = if mono && item.kind == kmd_core::ItemKind::WebSearch {
+                self.theme.teal
+            } else {
+                role.color(&self.theme)
+            };
+            return self.tinted_svg_icon(handle, color, size, 0.62);
         }
 
         container(text(&item.icon).size(emoji_font))
             .center_x(size)
             .center_y(size)
+            .into()
+    }
+
+    /// 틴트 SVG + 12% 알파 라운드 컨테이너 렌더링. `scale`은 컨테이너 대비
+    /// 글리프 비율 (스트로크형 0.62, 면형 브랜드 글리프는 0.56이 옵티컬 밸런스).
+    fn tinted_svg_icon(
+        &self,
+        handle: iced::widget::svg::Handle,
+        color: Color,
+        size: f32,
+        scale: f32,
+    ) -> Element<'_, Message> {
+        let box_bg = Color { a: 0.12, ..color };
+        let glyph = iced::widget::svg(handle)
+            .width(size * scale)
+            .height(size * scale)
+            .style(move |_: &_, _| iced::widget::svg::Style { color: Some(color) });
+        container(glyph)
+            .center_x(size)
+            .center_y(size)
+            .style(move |_: &_| container::Style {
+                background: Some(Background::Color(box_bg)),
+                border: Border {
+                    radius: (size * 0.25).into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
             .into()
     }
 

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use iced::widget::image::Handle;
+use iced::widget::svg::Handle as SvgHandle;
 use kmd_core::ItemKind;
 
 // ── 임베드 PNG 바이트 ────────────────────────────────────────────────────────
@@ -72,6 +73,68 @@ static HANDLE_CACHE: LazyLock<HashMap<&'static str, Handle>> = LazyLock::new(|| 
         .map(|(id, bytes)| (*id, Handle::from_bytes(bytes.to_vec())))
         .collect()
 });
+
+// ── 모노 글리프 (Simple Icons, CC0) ──────────────────────────────────────────
+//
+// `general.brand_icons = "mono"`일 때 풀컬러 PNG 대신 사용하는 단색 SVG.
+// 렌더 시점에 테마 색으로 틴트된다. 글리프가 없는 서비스(grok/daum/papago,
+// OpenAI는 라이브러리에서 삭제된 전력이 있어 v13.10에서 벤더링)는 None →
+// 시스템 아이콘/이모지 폴백.
+
+macro_rules! mono_svg {
+    ($id:literal) => {
+        include_bytes!(concat!("../assets/svg/brands/", $id, ".svg")).as_slice()
+    };
+}
+
+static MONO_CACHE: LazyLock<HashMap<&'static str, SvgHandle>> = LazyLock::new(|| {
+    let entries: &[(&str, &[u8])] = &[
+        ("google", mono_svg!("google")),
+        ("google_translate", mono_svg!("googletranslate")),
+        ("youtube", mono_svg!("youtube")),
+        ("github", mono_svg!("github")),
+        ("stackoverflow", mono_svg!("stackoverflow")),
+        ("npm", mono_svg!("npm")),
+        ("crates", mono_svg!("rust")),
+        ("wikipedia", mono_svg!("wikipedia")),
+        ("x", mono_svg!("x")),
+        ("maps", mono_svg!("googlemaps")),
+        ("naver", mono_svg!("naver")),
+        ("naver_search", mono_svg!("naver")),
+        ("naver_dict", mono_svg!("naver")),
+        ("naver_spell", mono_svg!("naver")),
+        ("perplexity", mono_svg!("perplexity")),
+        ("chatgpt", mono_svg!("openai")),
+        ("claude", mono_svg!("claude")),
+        ("gemini", mono_svg!("googlegemini")),
+        ("deepl", mono_svg!("deepl")),
+    ];
+    entries
+        .iter()
+        .map(|(id, bytes)| (*id, SvgHandle::from_memory(*bytes)))
+        .collect()
+});
+
+/// 모노 모드용 브랜드 글리프 Handle. [`brand_icon_for_item`]의 SVG 대응.
+pub fn mono_brand_icon_for_item(kind: ItemKind, keywords: &str, path: &str) -> Option<SvgHandle> {
+    if kind != ItemKind::WebSearch {
+        return None;
+    }
+    let id = detect_service(keywords, path)?;
+    MONO_CACHE.get(id).cloned()
+}
+
+/// 모노 모드용 `:set` 프로바이더 토글 글리프. [`brand_icon_for_settings`] 대응.
+pub fn mono_brand_icon_for_settings(keywords: &str) -> Option<SvgHandle> {
+    let id = keywords.strip_prefix("kmd:settings:").and_then(|rest| {
+        if rest.contains(":toggle:") {
+            rest.rsplit(':').next()
+        } else {
+            None
+        }
+    })?;
+    MONO_CACHE.get(id).cloned()
+}
 
 // ── @prefix → 서비스 ID ──────────────────────────────────────────────────────
 
@@ -387,6 +450,47 @@ mod tests {
     fn settings_non_toggle_반환_none() {
         let h = brand_icon_for_settings("kmd:settings:config");
         assert!(h.is_none(), "toggle이 아닌 settings 항목은 None");
+    }
+
+    #[test]
+    fn 모노_글리프_주요_서비스_매핑() {
+        for (kw, path) in [
+            (
+                "@g @google Search Google",
+                "https://google.com/search?q={query}",
+            ),
+            (
+                "@gpt @chatgpt Ask ChatGPT",
+                "https://chatgpt.com/?q={query}",
+            ),
+            (
+                "@naver Search Naver",
+                "https://search.naver.com/?query={query}",
+            ),
+            ("@claude Ask Claude", "https://claude.ai/new?q={query}"),
+        ] {
+            assert!(
+                mono_brand_icon_for_item(ItemKind::WebSearch, kw, path).is_some(),
+                "모노 글리프 누락: {kw}"
+            );
+        }
+    }
+
+    #[test]
+    fn 모노_글리프_없는_서비스는_none() {
+        // grok은 Simple Icons에 글리프가 없다 — 시스템 아이콘 폴백으로 흘러야 함
+        let h = mono_brand_icon_for_item(
+            ItemKind::WebSearch,
+            "@grok Ask Grok",
+            "https://grok.com/?q={query}",
+        );
+        assert!(h.is_none());
+    }
+
+    #[test]
+    fn 모노_settings_토글_매핑() {
+        assert!(mono_brand_icon_for_settings("kmd:settings:llm:toggle:chatgpt").is_some());
+        assert!(mono_brand_icon_for_settings("kmd:settings:translate:toggle:papago").is_none());
     }
 
     #[test]

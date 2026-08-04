@@ -39,6 +39,7 @@ theme = "default"            # 테마 이름
 emoji_icons = true           # 이모지 아이콘 (false = ASCII 폴백)
 reset_ime_on_launch = true   # (Desktop) 실행 시 IME를 영문 모드로 시작
 renderer = "auto"            # (Desktop) auto | software | gpu — VM/원격 데스크톱은 software 권장
+brand_icons = "color"        # (Desktop) color = 풀컬러 로고 | mono = 테마 틴트 단색 글리프
 # editor = "code"            # 외부 에디터 (미설정 시 $EDITOR → vi/notepad)
 
 [launcher]
@@ -95,6 +96,7 @@ toggle_preview = "ctrl+p"
 | emoji_icons | bool | true | 이모지 아이콘 (false = ASCII 폴백) |
 | reset_ime_on_launch | bool | true | (Desktop) 런처 오픈 시 IME를 영문 모드로 시작 |
 | renderer | String | "auto" | (Desktop) 렌더러 선택. `software`는 GPU 어댑터 프로빙을 생략하고 tiny-skia로 직행 — VM·원격 데스크톱·가상 GPU 환경에서 부팅이 빨라지고 입력 지연이 줄 수 있다. `gpu`는 wgpu 강제. 환경변수 `ICED_BACKEND`가 설정돼 있으면 그쪽이 우선 |
+| brand_icons | String | "color" | (Desktop) 브랜드 아이콘 스타일. `color`는 공식 풀컬러 로고 PNG, `mono`는 Simple Icons 단색 글리프를 테마 teal로 틴트해 시스템 아이콘과 톤을 통일. `:set`의 "Brand Icons" 토글과 동일. 글리프 없는 서비스(grok/daum/papago)는 시스템 아이콘으로 폴백 |
 | editor | String? | None | 외부 에디터 ($EDITOR 폴백) |
 
 ### 4.2 [launcher]
