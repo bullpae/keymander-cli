@@ -203,6 +203,199 @@ pub fn is_our_window_foreground(raw_id: u64) -> bool {
     }
 }
 
+// ─── 리사이즈 잔상(찢어짐) 방지 ────────────────────────────────────────────────
+//
+// 창 높이를 바꾸면 OS는 창을 즉시 새 크기로 만들지만, 렌더러(wgpu)가 새 크기의
+// 프레임을 그려 present 하기까지는 최소 한 프레임의 공백이 있다. 그 사이 컴포지터가
+// 무엇을 보여주는지가 "화면이 찌직 깨지는" 현상의 정체다.
+//
+// - macOS: wgpu 는 NSView 루트 레이어에 `CAMetalLayer` 서브레이어를 붙이고 KVO 로
+//   루트 bounds 를 따라간다. 이 레이어의 `contentsGravity` 기본값이 `resize` 라서
+//   이전 프레임이 새 창 크기로 **늘려/찌그러뜨려** 합성된다. 게다가 뷰가 직접 소유한
+//   레이어가 아니므로 암묵적 애니메이션(기본 0.25초)까지 걸려 왜곡이 한참 보인다.
+//   → gravity 를 `topLeft` 로 바꾸면 늘리는 대신 좌상단에 고정(확대 시 아래쪽은 빈
+//     영역, 축소 시 위쪽만 남김)되고, actions 를 NSNull 로 덮어 애니메이션을 없앤다.
+// - Windows: DXGI 스왑체인은 `DXGI_SCALING_STRETCH` 로 고정돼 있어 같은 교정이
+//   불가능하다. 대신 리사이즈 순간에만 DWM 합성에서 창을 잠깐 제외(cloak)한다.
+
+/// macOS: wgpu 가 만든 `CAMetalLayer` 의 리사이즈 거동을 교정한다.
+///
+/// 성공(레이어를 찾아 적용) 시 `true`. 소프트웨어 렌더러(tiny-skia) 폴백이거나
+/// 아직 레이어가 만들어지지 않았으면 `false` — 호출부에서 재시도하면 된다.
+#[cfg(target_os = "macos")]
+pub fn stabilize_surface_layer() -> bool {
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::{msg_send, MainThreadMarker};
+
+    // AppKit 접근은 메인 스레드 전용. 단위 테스트는 워커 스레드에서 돌므로 건너뛴다.
+    if cfg!(test) || MainThreadMarker::new().is_none() {
+        return false;
+    }
+
+    unsafe {
+        let Some(app_cls) = AnyClass::get(c"NSApplication") else {
+            return false;
+        };
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return false;
+        }
+        let windows: *mut AnyObject = msg_send![app, windows];
+        if windows.is_null() {
+            return false;
+        }
+        let count: usize = msg_send![windows, count];
+
+        let mut patched = 0usize;
+        for i in 0..count {
+            let win: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+            if win.is_null() {
+                continue;
+            }
+            let view: *mut AnyObject = msg_send![win, contentView];
+            if view.is_null() {
+                continue;
+            }
+            let root: *mut AnyObject = msg_send![view, layer];
+            if root.is_null() {
+                continue;
+            }
+            if let Some(metal) = find_metal_layer(root, 0) {
+                pin_layer_contents(metal);
+                patched += 1;
+            }
+        }
+
+        if patched > 0 {
+            tracing::info!("CAMetalLayer 리사이즈 고정 적용 ({patched}개 레이어)");
+        }
+        patched > 0
+    }
+}
+
+/// 레이어 트리에서 `CAMetalLayer` 를 찾는다 (루트 자신이거나 서브레이어).
+#[cfg(target_os = "macos")]
+unsafe fn find_metal_layer(
+    layer: *mut objc2::runtime::AnyObject,
+    depth: u32,
+) -> Option<*mut objc2::runtime::AnyObject> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    // wgpu 는 루트 바로 아래에 한 겹만 붙이지만, 프레임워크가 래핑을 추가해도
+    // 견디도록 몇 단계까지 훑는다.
+    if depth > 4 {
+        return None;
+    }
+    let metal_cls = AnyClass::get(c"CAMetalLayer")?;
+    let is_metal: bool = msg_send![layer, isKindOfClass: metal_cls];
+    if is_metal {
+        return Some(layer);
+    }
+
+    let subs: *mut AnyObject = msg_send![layer, sublayers];
+    if subs.is_null() {
+        return None;
+    }
+    let count: usize = msg_send![subs, count];
+    for i in 0..count {
+        let sub: *mut AnyObject = msg_send![subs, objectAtIndex: i];
+        if sub.is_null() {
+            continue;
+        }
+        if let Some(found) = find_metal_layer(sub, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// 이전 프레임을 늘리지 않고 좌상단에 고정 + 암묵적 애니메이션 제거.
+#[cfg(target_os = "macos")]
+unsafe fn pin_layer_contents(layer: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+
+    // kCAGravityTopLeft 의 실제 값은 문자열 "topLeft" (QuartzCore 상수).
+    let gravity = NSString::from_str("topLeft");
+    let _: () = msg_send![layer, setContentsGravity: &*gravity];
+
+    // 뷰가 소유한 레이어가 아니므로 AppKit 이 암묵적 애니메이션을 꺼주지 않는다.
+    // bounds/position 이 애니메이션되면 리사이즈 왜곡이 0.25초간 그대로 보인다.
+    let (Some(dict_cls), Some(null_cls)) = (
+        AnyClass::get(c"NSMutableDictionary"),
+        AnyClass::get(c"NSNull"),
+    ) else {
+        return;
+    };
+    let dict: *mut AnyObject = msg_send![dict_cls, dictionary];
+    let null: *mut AnyObject = msg_send![null_cls, null];
+    if dict.is_null() || null.is_null() {
+        return;
+    }
+    for key in [
+        "bounds",
+        "position",
+        "frame",
+        "contents",
+        "sublayers",
+        "onOrderIn",
+        "onOrderOut",
+        "hidden",
+    ] {
+        let k = NSString::from_str(key);
+        let _: () = msg_send![dict, setObject: null, forKey: &*k];
+    }
+    let _: () = msg_send![layer, setActions: dict];
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn stabilize_surface_layer() -> bool {
+    // macOS 외에는 교정할 레이어가 없다 (Windows 는 cloak 경로를 쓴다).
+    false
+}
+
+/// Windows: DWM 합성에서 창을 잠깐 제외한다(cloak).
+///
+/// `DXGI_SCALING_STRETCH` 로 고정된 스왑체인 때문에 리사이즈 직후 한두 프레임은
+/// 이전 프레임이 새 창 크기로 늘어나 합성된다. cloak 은 포커스·Z오더·항상 위
+/// 속성을 건드리지 않고 합성 대상에서만 빼므로, 새 프레임이 준비될 때까지
+/// 왜곡된 프레임 대신 아무것도 보이지 않게 만든다.
+///
+/// DWM 이 없는 환경(서버 코어 등)에서는 실패를 반환하고 호출부가 그대로 진행한다.
+#[cfg(target_os = "windows")]
+pub fn set_window_cloaked(raw_id: u64, cloaked: bool) -> bool {
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+
+    unsafe {
+        let hwnd = HWND(raw_id as usize as *mut core::ffi::c_void);
+        if hwnd.0.is_null() {
+            return false;
+        }
+        let value = BOOL(i32::from(cloaked));
+        let result = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            &value as *const BOOL as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!("DwmSetWindowAttribute(DWMWA_CLOAK={cloaked}) 실패: {e}");
+                false
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_window_cloaked(_raw_id: u64, _cloaked: bool) -> bool {
+    false
+}
+
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 pub fn is_our_window_foreground(_raw_id: u64) -> bool {
@@ -224,5 +417,14 @@ mod tests {
         let _: fn(u64) = apply_native_rounded_corners;
         let _: fn(u64) = force_english_ime;
         let _: fn(u64) = force_foreground;
+        let _: fn() -> bool = stabilize_surface_layer;
+        let _: fn(u64, bool) -> bool = set_window_cloaked;
+    }
+
+    /// 헤드리스(워커 스레드) 환경에서 호출해도 패닉 없이 false 를 반환해야 한다.
+    /// macOS 구현이 AppKit 을 건드리므로 메인 스레드 가드가 살아 있는지 검증한다.
+    #[test]
+    fn test_stabilize_surface_layer_is_headless_safe() {
+        assert!(!stabilize_surface_layer());
     }
 }

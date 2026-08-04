@@ -37,7 +37,9 @@ impl App {
         if self.reset_ime_on_launch {
             crate::platform::force_english_ime(raw_id);
         }
-        if self.query.is_empty() {
+        // 리사이즈 잔상 교정 (macOS CAMetalLayer) — 창이 살아 있는 지금이 가장 이른 시점.
+        let stabilize = self.handle_stabilize_surface_layer(0);
+        let rest = if self.query.is_empty() {
             let focus = self.request_focus();
             #[cfg(target_os = "windows")]
             {
@@ -49,7 +51,32 @@ impl App {
             }
         } else {
             Task::none()
+        };
+        Task::batch([stabilize, rest])
+    }
+
+    /// CAMetalLayer 리사이즈 고정을 적용하고, 아직 레이어가 없으면 짧게 재시도한다.
+    ///
+    /// wgpu 서피스는 창 생성과 함께 만들어지므로 보통 첫 시도에 성공한다. 느린
+    /// 환경에서 어댑터 프로빙이 늦어지는 경우를 대비해 몇 번만 더 두드린다.
+    /// (소프트웨어 렌더러 폴백이면 끝내 실패하는데, 그때는 늘어날 레이어 자체가 없다)
+    pub(super) fn handle_stabilize_surface_layer(&mut self, attempt: u8) -> Task<Message> {
+        if !cfg!(target_os = "macos") || self.surface_layer_stabilized {
+            return Task::none();
         }
+        if crate::platform::stabilize_surface_layer() {
+            self.surface_layer_stabilized = true;
+            return Task::none();
+        }
+        if attempt >= MAX_SURFACE_STABILIZE_RETRIES {
+            tracing::info!("CAMetalLayer를 찾지 못함 — 리사이즈 고정 생략 (소프트웨어 렌더러?)");
+            return Task::none();
+        }
+        let next = attempt + 1;
+        Task::future(async move {
+            tokio::time::sleep(SURFACE_STABILIZE_RETRY).await;
+            Message::StabilizeSurfaceLayer(next)
+        })
     }
 
     pub(super) fn handle_ensure_focus(&mut self, attempt: u8) -> Task<Message> {
@@ -125,6 +152,11 @@ impl App {
                     self.window_width = w;
                     self.window_state.width = Some(w);
                     self.state_dirty = true;
+                }
+                // cloak 중이었다면 새 크기가 실제로 적용된 지금부터 한 프레임만 더
+                // 기다렸다 되돌린다 — 하드 리밋(150ms)까지 기다릴 필요가 없다.
+                if self.window_cloaked {
+                    return self.schedule_uncloak(UNCLOAK_AFTER_RESIZE);
                 }
                 Task::none()
             }

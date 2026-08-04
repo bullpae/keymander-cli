@@ -73,6 +73,27 @@ const CARD_PAD: f32 = if cfg!(target_os = "windows") {
 /// Windows 키 오토리피트 간격(~31ms)보다 길게 잡아 연타를 흡수한다.
 const SHRINK_DEBOUNCE: Duration = Duration::from_millis(60);
 
+/// Windows: 리사이즈 cloak 을 풀기까지 기다리는 시간 (안전망 상한).
+///
+/// 정상 경로에서는 `window::Event::Resized` 를 받은 뒤 [`UNCLOAK_AFTER_RESIZE`] 만
+/// 기다리므로 실제 cloak 시간은 한 프레임 남짓이다. 이 상수는 Resized 가 오지
+/// 않는 예외 상황에서도 창이 영영 숨지 않게 하는 하드 리밋이다.
+const CLOAK_HARD_LIMIT: Duration = Duration::from_millis(150);
+
+/// Windows: Resized 수신 후 cloak 을 푸는 지연 — 새 크기 프레임이 present 될 시간.
+const UNCLOAK_AFTER_RESIZE: Duration = Duration::from_millis(16);
+
+/// cloak 을 걸 만한 축소 비율 하한.
+///
+/// 왜곡 크기는 절대 픽셀이 아니라 축소 "배율"에 비례한다 — 10배로 접히면 결과 목록이
+/// 10배로 눌린 프레임이 보인다. 1.25배 미만(예: 창을 몇 px 다듬는 정도)은 눈에
+/// 띄지 않으므로 굳이 창을 숨겨 깜빡이게 만들지 않는다.
+const CLOAK_MIN_RATIO: f32 = 1.25;
+
+/// macOS 서피스 레이어 고정 재시도 간격/횟수 — 렌더러 초기화가 늦는 환경 대비.
+const SURFACE_STABILIZE_RETRY: Duration = Duration::from_millis(150);
+const MAX_SURFACE_STABILIZE_RETRIES: u8 = 4;
+
 /// font_size 기반 비례 계산으로 모든 UI 치수를 결정.
 /// `font_size` 하나를 바꾸면 pill, row, 상태바, 아이콘, 서브 폰트가 모두 연동된다.
 #[derive(Debug, Clone, Copy)]
@@ -243,6 +264,14 @@ pub struct App {
     /// 이 값이 없으면 축소가 적용되기 전에 도착한 포커스·타이머 메시지마다
     /// 예약이 재발행되어 타이머가 끝없이 리셋된다(창이 영영 접히지 않음).
     pending_shrink_to: Option<f32>,
+    /// Windows 전용 — 리사이즈 잔상을 가리려고 DWM 합성에서 창을 뺀 상태인지.
+    window_cloaked: bool,
+    /// cloak 해제 예약 토큰 — 가장 최근 예약만 유효.
+    cloak_token: u64,
+    /// cloak 시작 시각 — 예약이 유실돼도 다음 메시지에서 강제 해제하는 안전망.
+    cloaked_at: Option<std::time::Instant>,
+    /// macOS CAMetalLayer 리사이즈 고정 적용 완료 여부 (재시도 중단 조건).
+    surface_layer_stabilized: bool,
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
@@ -293,6 +322,10 @@ pub enum Message {
     BackgroundClicked,
     /// 디바운스된 창 축소 적용 — 토큰이 최신일 때만 유효 (SHRINK_DEBOUNCE 참고)
     ApplyPendingShrink(u64),
+    /// Windows 리사이즈 cloak 해제 — 토큰이 최신일 때만 유효
+    UncloakWindow(u64),
+    /// macOS CAMetalLayer 리사이즈 고정 재시도 (레이어 생성이 늦을 때)
+    StabilizeSurfaceLayer(u8),
     /// view 재렌더 후 1프레임 뒤 포커스 재요청 (트리 변경 후 포커스 유실 복구)
     DelayedRefocus,
     /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
@@ -651,6 +684,10 @@ impl App {
             window_height: ui.collapsed_window_height,
             shrink_token: 0,
             pending_shrink_to: None,
+            window_cloaked: false,
+            cloak_token: 0,
+            cloaked_at: None,
+            surface_layer_stabilized: false,
             window_state,
             state_dirty: false,
             window_focused: true,
@@ -851,8 +888,85 @@ impl App {
         if desired >= self.window_height - 0.5 {
             return Task::none();
         }
+        let needs_cloak = Self::should_cloak_shrink(self.window_height, desired);
         self.window_height = desired;
-        self.resize_window_to(desired)
+        // 눈에 띌 만한 축소는 stretch 왜곡이 그대로 드러나므로 Windows 에서만
+        // cloak 으로 가린다. (macOS 는 CAMetalLayer gravity 교정으로 늘어나지 않는다)
+        let cloak = if needs_cloak {
+            self.cloak_for_resize()
+        } else {
+            Task::none()
+        };
+        Task::batch([cloak, self.resize_window_to(desired)])
+    }
+
+    // ─── Windows 리사이즈 cloak ───────────────────────────────────────────
+
+    /// 이 축소가 cloak 으로 가릴 만한지 — 플랫폼 호출과 분리한 순수 판정.
+    fn should_cloak_shrink(from: f32, to: f32) -> bool {
+        to > 0.0 && from / to >= CLOAK_MIN_RATIO
+    }
+
+    /// 리사이즈 직전에 창을 DWM 합성에서 빼고, 해제를 예약한다.
+    ///
+    /// Windows 외에서는 no-op — macOS/Linux 는 컴포지터 쪽 교정으로 해결한다.
+    fn cloak_for_resize(&mut self) -> Task<Message> {
+        if !cfg!(target_os = "windows") {
+            return Task::none();
+        }
+        let Some(raw_id) = self.raw_window_id else {
+            return Task::none();
+        };
+        if !self.window_cloaked {
+            if !crate::platform::set_window_cloaked(raw_id, true) {
+                return Task::none(); // DWM 미지원 환경 — 그대로 진행
+            }
+            self.window_cloaked = true;
+            self.cloaked_at = Some(std::time::Instant::now());
+        }
+        self.schedule_uncloak(CLOAK_HARD_LIMIT)
+    }
+
+    /// cloak 해제를 `delay` 뒤로 예약한다 (이전 예약은 토큰으로 무효화).
+    fn schedule_uncloak(&mut self, delay: Duration) -> Task<Message> {
+        self.cloak_token = self.cloak_token.wrapping_add(1);
+        let token = self.cloak_token;
+        Task::future(async move {
+            tokio::time::sleep(delay).await;
+            Message::UncloakWindow(token)
+        })
+    }
+
+    /// 예약된 cloak 해제 — 최신 토큰일 때만 적용.
+    fn apply_uncloak(&mut self, token: u64) -> Task<Message> {
+        if token != self.cloak_token {
+            return Task::none();
+        }
+        self.uncloak_now();
+        Task::none()
+    }
+
+    /// 즉시 cloak 해제 (idempotent). 예약이 유실돼도 창이 숨은 채 남지 않게 한다.
+    fn uncloak_now(&mut self) {
+        if !self.window_cloaked {
+            return;
+        }
+        self.window_cloaked = false;
+        self.cloaked_at = None;
+        if let Some(raw_id) = self.raw_window_id {
+            let _ = crate::platform::set_window_cloaked(raw_id, false);
+        }
+    }
+
+    /// 안전망: 어떤 이유로든 해제 메시지가 유실돼 cloak 이 하드 리밋을 넘겼으면
+    /// 다음 메시지 처리에서 무조건 되돌린다.
+    fn enforce_cloak_deadline(&mut self) {
+        if let Some(started) = self.cloaked_at {
+            if started.elapsed() > CLOAK_HARD_LIMIT * 2 {
+                tracing::warn!("cloak 해제 예약 유실 — 강제 해제");
+                self.uncloak_now();
+            }
+        }
     }
 
     /// 창을 주어진 높이로 리사이즈 (폭은 현재 값 유지).
@@ -878,6 +992,8 @@ impl App {
             Message::QueryChanged(_)
                 | Message::DelayedRefocus
                 | Message::ApplyPendingShrink(_)
+                | Message::UncloakWindow(_)
+                | Message::StabilizeSurfaceLayer(_)
                 | Message::EnsureFocus(_)
                 | Message::EngineReady
                 | Message::EngineSwapSettled
@@ -889,6 +1005,9 @@ impl App {
 
         let old_query_len = self.query.len();
         let old_results_len = self.results.len();
+
+        // cloak 은 어떤 경로로든 반드시 풀려야 한다 — 매 메시지에서 기한을 확인.
+        self.enforce_cloak_deadline();
 
         let inner_task = self.update_inner(message);
         // 결과 유무가 바뀌면 창 높이를 동기화 — 어떤 메시지 경로에서 바뀌었든 보장
@@ -1200,6 +1319,8 @@ impl App {
                 iced::exit()
             }
             Message::ApplyPendingShrink(token) => self.apply_pending_shrink(token),
+            Message::UncloakWindow(token) => self.apply_uncloak(token),
+            Message::StabilizeSurfaceLayer(attempt) => self.handle_stabilize_surface_layer(attempt),
             Message::DelayedRefocus => self.handle_delayed_refocus(),
             Message::CheckUnfocusedExit => self.handle_check_unfocused_exit(),
         }
@@ -1542,6 +1663,61 @@ mod tests {
         assert_eq!(
             app.window_height, app.ui.collapsed_window_height,
             "중간 단계(hint)를 건너뛰고 최종 높이로 한 번에 축소되어야 함"
+        );
+    }
+
+    // ── 리사이즈 cloak (Windows 잔상 가리기) ──
+
+    #[test]
+    fn cloak_해제는_최신_토큰만_적용() {
+        let mut app = make_test_app();
+        // 플랫폼 호출 없이 상태만 세팅 — 토큰 판정 로직 자체를 검증한다.
+        app.window_cloaked = true;
+        app.cloaked_at = Some(std::time::Instant::now());
+        let stale = app.cloak_token;
+        let _ = app.schedule_uncloak(UNCLOAK_AFTER_RESIZE);
+
+        let _ = app.update(Message::UncloakWindow(stale));
+        assert!(app.window_cloaked, "스테일 토큰은 무시되어야 함");
+
+        let _ = app.update(Message::UncloakWindow(app.cloak_token));
+        assert!(!app.window_cloaked, "최신 토큰이면 해제되어야 함");
+        assert!(app.cloaked_at.is_none());
+    }
+
+    #[test]
+    fn cloak은_기한을_넘기면_강제_해제된다() {
+        // 회귀 안전망: 해제 메시지가 유실돼도 창이 숨은 채 남으면 안 된다.
+        let mut app = make_test_app();
+        app.window_cloaked = true;
+        app.cloaked_at = Some(std::time::Instant::now() - CLOAK_HARD_LIMIT * 3);
+
+        // 아무 메시지나 한 번 처리되면 안전망이 동작해야 함
+        let _ = app.update(Message::IconsReady);
+        assert!(!app.window_cloaked, "기한 초과 cloak은 강제 해제되어야 함");
+    }
+
+    #[test]
+    fn cloak_판정은_축소_배율을_따른다() {
+        let u = UiScale::new(16.0, 8);
+        let collapsed = u.collapsed_window_height;
+        let hint = collapsed + u.hint_area_height;
+
+        assert!(
+            App::should_cloak_shrink(u.full_window_height, collapsed),
+            "full → collapsed 는 왜곡이 가장 크다"
+        );
+        assert!(
+            App::should_cloak_shrink(hint, collapsed),
+            "hint → collapsed 도 1.25배를 넘어 눌림이 보인다"
+        );
+        assert!(
+            !App::should_cloak_shrink(collapsed + 2.0, collapsed),
+            "몇 px 다듬는 정도는 가리지 않는다"
+        );
+        assert!(
+            !App::should_cloak_shrink(collapsed, 0.0),
+            "0 높이는 방어적으로 false"
         );
     }
 
