@@ -14,6 +14,7 @@ mod brand_icons;
 mod engine;
 mod platform;
 mod query_prefix;
+mod system_icons;
 mod theme;
 mod window_state;
 
@@ -152,7 +153,10 @@ fn main() -> iced::Result {
     // 리사이즈 엣지, 힌트 영역)이 검정 대신 테마 배경색으로 칠해진다.
     let opaque_bg = {
         let t = theme::from_name(&config.general.theme);
-        Color { a: 1.0, ..t.background }
+        Color {
+            a: 1.0,
+            ..t.background
+        }
     };
 
     let base_width = window_state

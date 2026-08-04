@@ -4,6 +4,59 @@ use super::*;
 use super::{context_actions_for, estimate_title_max_chars, truncate_str};
 
 impl App {
+    /// 아이템 아이콘 — 브랜드/앱 PNG → 시스템 SVG(테마 틴트 + 컨테이너) → 이모지 텍스트
+    /// 3단계 폴백. `emoji_font`는 텍스트 폴백일 때의 글자 크기.
+    fn item_icon_element<'a>(
+        &'a self,
+        item: &'a kmd_core::IndexItem,
+        size: f32,
+        emoji_font: f32,
+    ) -> Element<'a, Message> {
+        if let Some(handle) =
+            crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
+                .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
+                .or_else(|| {
+                    crate::app_icons::cached_icon_for_item(
+                        item.kind,
+                        &item.path,
+                        item.icon_path.as_deref(),
+                    )
+                })
+        {
+            return image(handle)
+                .content_fit(iced::ContentFit::Fill)
+                .width(size)
+                .height(size)
+                .into();
+        }
+
+        if let Some((handle, role)) = crate::system_icons::system_icon_for(&item.icon, item.kind) {
+            let color = role.color(&self.theme);
+            let box_bg = Color { a: 0.12, ..color };
+            let glyph = iced::widget::svg(handle)
+                .width(size * 0.62)
+                .height(size * 0.62)
+                .style(move |_: &_, _| iced::widget::svg::Style { color: Some(color) });
+            return container(glyph)
+                .center_x(size)
+                .center_y(size)
+                .style(move |_: &_| container::Style {
+                    background: Some(Background::Color(box_bg)),
+                    border: Border {
+                        radius: (size * 0.25).into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into();
+        }
+
+        container(text(&item.icon).size(emoji_font))
+            .center_x(size)
+            .center_y(size)
+            .into()
+    }
+
     fn view_brand_mark(&self) -> Element<'_, Message> {
         let t = &self.theme;
         let u = self.ui;
@@ -292,27 +345,7 @@ impl App {
             });
 
         let icon_size = u.result_icon;
-        let icon_element: Element<'_, Message> = if let Some(handle) =
-            crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
-                .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
-                .or_else(|| {
-                    crate::app_icons::cached_icon_for_item(
-                        item.kind,
-                        &item.path,
-                        item.icon_path.as_deref(),
-                    )
-                }) {
-            image(handle)
-                .content_fit(iced::ContentFit::Fill)
-                .width(icon_size)
-                .height(icon_size)
-                .into()
-        } else {
-            container(text(&item.icon).size(icon_size - 6.0))
-                .center_x(icon_size)
-                .center_y(icon_size)
-                .into()
-        };
+        let icon_element = self.item_icon_element(item, icon_size, icon_size - 6.0);
         let title = text(&item.name)
             .size(u.title_font)
             .color(t.text)
@@ -527,27 +560,7 @@ impl App {
 
         // ── 아이콘 영역 (그라데이션 배경 위 큰 아이콘) ──
         let big_icon_size = u.detail_big_icon;
-        let big_icon: Element<'_, Message> = if let Some(handle) =
-            crate::brand_icons::brand_icon_for_item(item.kind, &item.keywords, &item.path)
-                .or_else(|| crate::brand_icons::brand_icon_for_settings(&item.keywords))
-                .or_else(|| {
-                    crate::app_icons::cached_icon_for_item(
-                        item.kind,
-                        &item.path,
-                        item.icon_path.as_deref(),
-                    )
-                }) {
-            image(handle)
-                .content_fit(iced::ContentFit::Fill)
-                .width(big_icon_size)
-                .height(big_icon_size)
-                .into()
-        } else {
-            container(text(&item.icon).size(big_icon_size - 10.0))
-                .center_x(big_icon_size)
-                .center_y(big_icon_size)
-                .into()
-        };
+        let big_icon = self.item_icon_element(item, big_icon_size, big_icon_size - 10.0);
 
         let kind_color = t.kind_color(item.kind);
         let icon_glow = Color {

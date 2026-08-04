@@ -14,7 +14,7 @@ path = "src/main.rs"
 kmd-core = { path = "../kmd-core" }
 
 # GUI
-iced = { version = "0.14", features = ["tokio", "image"] }
+iced = { version = "0.14", features = ["tokio", "image", "svg"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 

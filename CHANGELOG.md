@@ -37,6 +37,14 @@ All notable changes to keymander are documented here.
   투과한다 (passthrough 레이어).
 
 ### Features
+- **데스크톱 시스템 아이콘 전면 교체 — 이모지 → 테마 틴트 SVG** — 시스템
+  명령·프리픽스 명령·파일 확장자·키맵 치트시트 등 kmd-core가 이모지로
+  내려주던 아이콘 90여 종을 데스크톱에서 Lucide SVG(ISC)로 오버라이드.
+  아이콘은 카테고리별 시맨틱 컬러(teal/green/yellow/peach/red)로 틴트되고
+  12% 알파 라운드 컨테이너 위에 얹혀 렌더링된다. `stroke="currentColor"`
+  기반이라 5개 테마 전부 자동 추종. 브랜드 PNG → 시스템 SVG → 이모지
+  텍스트 3단계 폴백으로 kmd-core/TUI는 무수정 (`system_icons.rs`,
+  brand_icons 패턴 미러). `:emoji` 검색 결과는 실제 이모지를 유지한다.
 - **Shift+네비 키 = 선택 확장 (macOS)** — Shift를 누른 채 Alt+H/J/K/L을
   누르면 Shift+화살표로 합성돼 텍스트 선택이 확장된다. 레이어 액션 실행
   시 트리거(Alt) 플래그만 지우고 함께 눌린 물리 수정자는 보존하도록 변경
