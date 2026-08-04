@@ -48,6 +48,16 @@ pub const DEFAULT_WIDTH: f32 = 1000.0;
 const SEARCH_LIMIT: usize = 50;
 const SCORE_PLUGIN: u32 = u32::MAX;
 
+/// 카드 외곽 래퍼 padding — 바깥 링(peach)과 창 가장자리 사이 간격.
+/// Windows 불투명 창에서는 이 간격이 창 배경색 띠로 노출되는 데다 DPI 소수
+/// 배율에서 우측이 서브픽셀로 잘려 상하좌우 마진이 비대칭으로 보이므로 0
+/// (teal 테두리가 창 가장자리에 밀착). macOS 투명 pill은 이중 테두리 유지.
+const CARD_PAD: f32 = if cfg!(target_os = "windows") {
+    0.0
+} else {
+    2.0
+};
+
 /// font_size 기반 비례 계산으로 모든 UI 치수를 결정.
 /// `font_size` 하나를 바꾸면 pill, row, 상태바, 아이콘, 서브 폰트가 모두 연동된다.
 #[derive(Debug, Clone, Copy)]
@@ -91,15 +101,15 @@ impl UiScale {
         let search_bar_height = pill_height;
         let row_height = (f * 3.0).round(); // 16→48
         let status_bar_height = (f * 1.75).round(); // 16→28
-        // 카드 외곽 container 의 padding(2) 상하 = 4.0 (view.rs 의 card 구조와 일치).
-        // 테두리(teal 2px, peach 1px)는 iced 에서 bounds 안쪽에 그려지므로 높이에 더하지 않는다.
+                                                    // 카드 외곽 container 의 padding(CARD_PAD) 상하 (view.rs 의 card 구조와 일치).
+                                                    // 테두리(teal 2px, peach 1px)는 iced 에서 bounds 안쪽에 그려지므로 높이에 더하지 않는다.
         let full_window_height = search_bar_height
-            + 4.0
+            + CARD_PAD * 2.0
             + 1.0
             + (visible_rows as f32 * row_height)
             + 1.0
             + status_bar_height;
-        let collapsed_window_height = search_bar_height + 4.0;
+        let collapsed_window_height = search_bar_height + CARD_PAD * 2.0;
         let no_results_font = (f * 0.8125).round(); // 16→13
         let hint_area_height = (no_results_font * 1.4).ceil() + 16.0;
         Self {
@@ -1305,7 +1315,7 @@ mod tests {
         let cfg = kmd_core::Config::default();
         let u = UiScale::new(cfg.general.font_size, cfg.general.visible_rows);
         let expected = u.search_bar_height
-            + 4.0
+            + CARD_PAD * 2.0
             + 1.0
             + (u.visible_rows as f32 * u.row_height)
             + 1.0
@@ -1321,8 +1331,8 @@ mod tests {
     fn 접힌_창높이_일관성() {
         for fs in [12.0, 16.0, 20.0, 24.0, 32.0] {
             let u = UiScale::new(fs, 8);
-            // view.rs 카드 구조: pill + 카드 padding(2×2)
-            let expected = u.search_bar_height + 4.0;
+            // view.rs 카드 구조: pill + 카드 padding(CARD_PAD×2)
+            let expected = u.search_bar_height + CARD_PAD * 2.0;
             assert!(
                 (u.collapsed_window_height - expected).abs() < f32::EPSILON,
                 "font_size={fs}: collapsed({}) != 계산값({expected})",

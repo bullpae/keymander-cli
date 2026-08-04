@@ -256,13 +256,16 @@ impl App {
             ..accent_color
         };
         let inner_line = Color { a: 0.16, ..t.peach };
-        // Windows: 바깥 링(radius+2)이 창 가장자리에 밀착하므로, 링 라운드가
-        // DWM 네이티브 코너 클립(약 8px)과 일치하도록 안쪽 radius 를 6으로 둔다.
+        // Windows: 불투명 창에서는 바깥 링·간격(CARD_PAD)이 창 배경색 띠로
+        // 노출되고 DPI 소수 배율에서 우측이 서브픽셀로 잘려 상하좌우가
+        // 비대칭으로 보인다 — 링을 없애고(teal 테두리가 창 가장자리에 밀착)
+        // 라운드는 DWM 네이티브 코너 클립(약 8px)과 일치시킨다.
+        // macOS 투명 pill은 이중 테두리 디자인 유지.
         // pill 라운드(~23px)를 그리면 DWM 이 모서리를 잘라내 형태가 깨진다.
-        let radius = if cfg!(target_os = "windows") {
-            6.0
+        let (radius, ring_width) = if cfg!(target_os = "windows") {
+            (8.0, 0.0)
         } else {
-            u.pill_height / 2.0
+            (u.pill_height / 2.0, 1.0)
         };
 
         let card_surface = container(card_col)
@@ -279,11 +282,11 @@ impl App {
 
         let card = container(card_surface)
             .width(Fill)
-            .padding(2)
+            .padding(CARD_PAD)
             .style(move |_: &_| container::Style {
                 border: Border {
-                    radius: (radius + 2.0).into(),
-                    width: 1.0,
+                    radius: (radius + CARD_PAD).into(),
+                    width: ring_width,
                     color: inner_line,
                 },
                 ..Default::default()
@@ -308,13 +311,14 @@ impl App {
             .width(Fill)
             .height(Fill);
 
-        let card_stack = stack![draggable_card, resize_overlay]
-            .width(Fill)
-            .height(if has_results {
-                Length::Fill
-            } else {
-                Length::Shrink
-            });
+        let card_stack =
+            stack![draggable_card, resize_overlay]
+                .width(Fill)
+                .height(if has_results {
+                    Length::Fill
+                } else {
+                    Length::Shrink
+                });
 
         // 고정 높이(u.hint_area_height) — 접힌 창 높이 계산과 일치해야 함 (app.rs)
         let hint_area: Element<'_, Message> = if !has_results && !self.query.trim().is_empty() {
