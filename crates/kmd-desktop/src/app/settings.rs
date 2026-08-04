@@ -399,10 +399,17 @@ impl App {
                 self.window_state = WindowState::default();
                 self.window_width = DEFAULT_WIDTH;
                 self.state_dirty = false;
-                let collapsed = self.ui.collapsed_window_height;
-                self.window_height = collapsed;
+                // 높이 고정 플랫폼에서는 높이를 건드리지 않는다 — 여기서 접으면
+                // 리사이즈 잔상이 그대로 드러난다 (app.rs FIXED_WINDOW_HEIGHT).
+                // (쿼리/결과는 이 아래에서 비우므로 목표 높이는 명시적으로 정한다)
+                let reset_height = if self.fixed_window_height {
+                    self.ui.full_window_height
+                } else {
+                    self.ui.collapsed_window_height
+                };
+                self.window_height = reset_height;
                 let run_reset = move |id: window::Id| {
-                    let resize = window::resize(id, Size::new(DEFAULT_WIDTH, collapsed));
+                    let resize = window::resize(id, Size::new(DEFAULT_WIDTH, reset_height));
                     let move_task = window::monitor_size(id).then(move |maybe_size| {
                         if let Some(mon) = maybe_size {
                             let x = (mon.width - DEFAULT_WIDTH) / 2.0;

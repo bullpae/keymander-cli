@@ -90,6 +90,21 @@ const UNCLOAK_AFTER_RESIZE: Duration = Duration::from_millis(16);
 /// 띄지 않으므로 굳이 창을 숨겨 깜빡이게 만들지 않는다.
 const CLOAK_MIN_RATIO: f32 = 1.25;
 
+/// 창 높이를 결과 유무에 따라 바꾸지 않고 full 로 고정할지.
+///
+/// v0.10.1(e34e241)에서 창 접기를 도입한 이유는 오직 하나 — 빈 영역을 투명
+/// 픽셀로 채우면 **투명 합성이 안 되는 환경**(Windows on ARM VM 등 wgpu alpha
+/// mode 가 Opaque 로 폴백)에서 거대한 검은 사각형이 되기 때문이었다. 그런데
+/// 창 리사이즈는 그 자체로 컴포지터가 이전 프레임을 새 크기로 늘려 합성하는
+/// 구간을 만든다 — "결과창이 뜨고 사라질 때 화면이 깨진다"는 증상의 원인이다.
+///
+/// macOS 는 Quartz 가 알파를 항상 정확히 합성하므로 검은 사각형 문제가 없다.
+/// (Windows 는 v0.10.2 부터 아예 불투명 창이라 창을 접어야 큰 색 덩어리가 안
+/// 남는다 — 그쪽은 리사이즈 경로를 유지한다.)
+/// 그래서 macOS 만 v0.10.1 이전처럼 높이를 고정하고, 카드만 콘텐츠 크기로
+/// 늘었다 줄었다 한다. 리사이즈가 없으면 늘어날 이전 프레임도 없다.
+const FIXED_WINDOW_HEIGHT: bool = cfg!(target_os = "macos");
+
 /// macOS 서피스 레이어 고정 재시도 간격/횟수 — 렌더러 초기화가 늦는 환경 대비.
 const SURFACE_STABILIZE_RETRY: Duration = Duration::from_millis(150);
 const MAX_SURFACE_STABILIZE_RETRIES: u8 = 4;
@@ -186,6 +201,19 @@ pub fn collapsed_window_height(font_size: f32, visible_rows: usize) -> f32 {
     UiScale::new(font_size, visible_rows).collapsed_window_height
 }
 
+/// 창을 처음 만들 때의 높이 (main.rs 에서 사용).
+///
+/// 높이를 고정하는 플랫폼(macOS)에서는 처음부터 full 로 띄운다 — 부팅 직후
+/// collapsed 로 띄웠다가 늘리면 그 한 번의 리사이즈에서 왜곡이 그대로 보인다.
+pub fn initial_window_height(font_size: f32, visible_rows: usize) -> f32 {
+    let u = UiScale::new(font_size, visible_rows);
+    if FIXED_WINDOW_HEIGHT {
+        u.full_window_height
+    } else {
+        u.collapsed_window_height
+    }
+}
+
 const QUIT_POLL_MS: u64 = 300;
 const WARMUP_IDLE_MS: u64 = 400;
 const FOCUS_RETRY_MS: u64 = 120;
@@ -272,6 +300,9 @@ pub struct App {
     cloaked_at: Option<std::time::Instant>,
     /// macOS CAMetalLayer 리사이즈 고정 적용 완료 여부 (재시도 중단 조건).
     surface_layer_stabilized: bool,
+    /// 창 높이를 결과 유무와 무관하게 고정할지 ([`FIXED_WINDOW_HEIGHT`]).
+    /// 테스트에서 리사이즈 경로를 검증하려고 뒤집을 수 있도록 필드로 둔다.
+    fixed_window_height: bool,
     window_state: WindowState,
     state_dirty: bool,
     window_focused: bool,
@@ -681,13 +712,18 @@ impl App {
             db,
             _guard: guard,
             window_width,
-            window_height: ui.collapsed_window_height,
+            window_height: if FIXED_WINDOW_HEIGHT {
+                ui.full_window_height
+            } else {
+                ui.collapsed_window_height
+            },
             shrink_token: 0,
             pending_shrink_to: None,
             window_cloaked: false,
             cloak_token: 0,
             cloaked_at: None,
             surface_layer_stabilized: false,
+            fixed_window_height: FIXED_WINDOW_HEIGHT,
             window_state,
             state_dirty: false,
             window_focused: true,
@@ -829,6 +865,12 @@ impl App {
     /// 창 자체를 콘텐츠 크기로 유지하면 렌더러와 무관하게 문제가 없다.
     fn desired_window_height(&self) -> f32 {
         let u = &self.ui;
+        // 높이 고정 플랫폼: 창은 그대로 두고 카드만 콘텐츠 크기로 바뀐다.
+        // (view 는 이미 결과가 없으면 card_stack=Shrink + 투명 bg_dismiss=Fill 로
+        //  그리므로, 빈 영역은 창이 접힌 것과 똑같이 보인다)
+        if self.fixed_window_height {
+            return u.full_window_height;
+        }
         if !self.results.is_empty() {
             u.full_window_height
         } else if !self.query.trim().is_empty() {
@@ -1508,6 +1550,16 @@ mod tests {
 
     // ── 창 리사이즈 디바운스 (화면 찢어짐 회귀 방지) ──
 
+    /// 창을 접는 플랫폼(Windows/Linux)의 앱 — 리사이즈 경로를 검증한다.
+    /// macOS 는 높이를 고정하므로([`FIXED_WINDOW_HEIGHT`]) 그대로 두면 이 경로가
+    /// 통째로 죽는다. 디바운스/토큰 로직은 플랫폼과 무관하므로 어디서든 돌린다.
+    fn make_resizing_app() -> App {
+        let mut app = make_test_app();
+        app.fixed_window_height = false;
+        app.window_height = app.ui.collapsed_window_height;
+        app
+    }
+
     /// 결과가 있는 상태(= full 높이)를 만든다.
     fn with_results(app: &mut App) {
         app.results = vec![kmd_core::SearchResult {
@@ -1530,7 +1582,7 @@ mod tests {
         // 회귀: 결과가 사라지는 순간 창을 곧바로 접으면 이전 프레임이
         // stretch 합성돼 화면이 찢어져 보인다 (백스페이스 전체 삭제,
         // 더블탭 '/' 한 줄 삭제, '.' Backspace 매핑에서 발생).
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         with_results(&mut app);
         let before = app.window_height;
 
@@ -1545,7 +1597,7 @@ mod tests {
 
     #[test]
     fn 확대는_즉시_적용된다() {
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         assert_eq!(app.window_height, app.ui.collapsed_window_height);
 
         with_results(&mut app);
@@ -1560,7 +1612,7 @@ mod tests {
 
     #[test]
     fn 대기중_축소는_최신_토큰만_적용() {
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         with_results(&mut app);
 
         // 1차: 쿼리는 남고 결과만 사라짐 → hint 높이로 예약
@@ -1587,7 +1639,7 @@ mod tests {
 
     #[test]
     fn 축소_대기중_확대가_오면_축소는_취소() {
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         with_results(&mut app);
 
         // 축소 예약
@@ -1614,7 +1666,7 @@ mod tests {
         // 회귀: sync_window_height 는 매 메시지마다 호출되므로, 대기 중에도
         // 예약을 재발행하면 포커스·타이머 메시지가 올 때마다 타이머가 리셋돼
         // 창이 영영 접히지 않는다 (실제로 발생했던 버그).
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         with_results(&mut app);
 
         app.results.clear();
@@ -1646,7 +1698,7 @@ mod tests {
     fn 전체삭제_시_리사이즈는_한_번으로_합쳐진다() {
         // full → (hint) → collapsed 로 연달아 줄어드는 경로에서 실제
         // 창 리사이즈는 마지막 한 번만 일어나야 한다.
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         with_results(&mut app);
 
         // 1단계: 결과만 사라짐 (쿼리는 남음) → hint 높이로 축소 예약
@@ -1666,11 +1718,70 @@ mod tests {
         );
     }
 
+    // ── 창 높이 고정 (macOS: 리사이즈 자체를 없애 잔상 원천 차단) ──
+
+    #[test]
+    fn 높이_고정이면_결과_유무가_창을_리사이즈하지_않는다() {
+        // 회귀 방지: v0.10.1에서 도입한 collapsed↔full 리사이즈가 "결과창이
+        // 뜨고 사라질 때 화면이 깨지는" 증상의 원인이었다. 높이를 고정한
+        // 플랫폼에서는 어떤 상태 변화도 창 크기를 건드리면 안 된다.
+        let mut app = make_test_app();
+        app.fixed_window_height = true;
+        app.window_height = app.ui.full_window_height;
+
+        let full = app.ui.full_window_height;
+
+        with_results(&mut app);
+        let _ = app.sync_window_height();
+        assert_eq!(app.window_height, full, "결과가 생겨도 창 높이 유지");
+        assert!(app.pending_shrink_to.is_none());
+
+        // 쿼리는 남고 결과만 사라짐 (hint 상태)
+        app.query = "zzz".into();
+        app.results.clear();
+        let _ = app.sync_window_height();
+        assert_eq!(app.window_height, full, "결과가 사라져도 창 높이 유지");
+        assert!(app.pending_shrink_to.is_none(), "축소 예약도 생기면 안 됨");
+
+        // 쿼리까지 비워짐 (최초 상태)
+        app.query.clear();
+        let _ = app.sync_window_height();
+        assert_eq!(app.window_height, full, "쿼리를 다 지워도 창 높이 유지");
+        assert!(app.pending_shrink_to.is_none());
+        assert!(!app.window_cloaked, "리사이즈가 없으니 cloak 도 필요 없음");
+    }
+
+    #[test]
+    fn macos는_높이_고정_기본값() {
+        // 플랫폼 정책이 실수로 뒤집히면 즉시 잡힌다.
+        assert_eq!(FIXED_WINDOW_HEIGHT, cfg!(target_os = "macos"));
+        let app = make_test_app();
+        assert_eq!(app.fixed_window_height, cfg!(target_os = "macos"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                app.window_height, app.ui.full_window_height,
+                "고정 플랫폼은 처음부터 full 높이로 떠야 한다 (부팅 리사이즈 제거)"
+            );
+        }
+    }
+
+    #[test]
+    fn 초기_창높이는_플랫폼_정책을_따른다() {
+        let cfg = kmd_core::Config::default();
+        let u = UiScale::new(cfg.general.font_size, cfg.general.visible_rows);
+        let initial = initial_window_height(cfg.general.font_size, cfg.general.visible_rows);
+        if FIXED_WINDOW_HEIGHT {
+            assert_eq!(initial, u.full_window_height);
+        } else {
+            assert_eq!(initial, u.collapsed_window_height);
+        }
+    }
+
     // ── 리사이즈 cloak (Windows 잔상 가리기) ──
 
     #[test]
     fn cloak_해제는_최신_토큰만_적용() {
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         // 플랫폼 호출 없이 상태만 세팅 — 토큰 판정 로직 자체를 검증한다.
         app.window_cloaked = true;
         app.cloaked_at = Some(std::time::Instant::now());
@@ -1688,7 +1799,7 @@ mod tests {
     #[test]
     fn cloak은_기한을_넘기면_강제_해제된다() {
         // 회귀 안전망: 해제 메시지가 유실돼도 창이 숨은 채 남으면 안 된다.
-        let mut app = make_test_app();
+        let mut app = make_resizing_app();
         app.window_cloaked = true;
         app.cloaked_at = Some(std::time::Instant::now() - CLOAK_HARD_LIMIT * 3);
 
