@@ -2,6 +2,25 @@
 
 All notable changes to keymander are documented here.
 
+## [Unreleased]
+
+### Internal
+- **`fast` 빌드 프로파일 추가 — 로컬 배포 사이클 10분+ → 20초대** — 릴리스
+  프로파일의 `lto = true` + `codegen-units = 1`은 378개 의존 크레이트를 하나로
+  합쳐 재최적화하므로, 자체 코드가 한 줄만 바뀌어도 링크 단계를 전부 다시 돈다
+  (실측: 증분 빌드 10분 초과). 개발·검증 중에는 과한 비용이라 LTO만 끈
+  `[profile.fast]`를 추가했다 — 실행 동작(`opt-level`/`panic`/`strip`)은
+  release와 같고 바이너리만 약 1.8MB 커진다.
+
+  | 프로파일 | 증분 빌드 | 바이너리 |
+  |---|---|---|
+  | release (`lto=true`, `cgu=1`) | 10분 초과 | 15.6MB |
+  | `lto="thin"`, `cgu=16` | 4분 43초 | 18.4MB |
+  | **fast (`lto=false`, `cgu=16`)** | **21초** | 17.4MB |
+
+  `deploy-local.ps1 -Fast` / `deploy-local.sh --fast`로 사용한다. GitHub 릴리스
+  자산은 CI가 기존 release 프로파일로 만들므로 배포물 품질에는 영향이 없다.
+
 ## [0.12.0] — 2026-08-05
 
 Windows 투명 창 지원 — 창 리사이즈를 없애 화면 찢어짐을 근본 해결하고,

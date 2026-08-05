@@ -86,6 +86,9 @@ assets = [
     { source = "README.md", dest = "/usr/share/doc/keymander/README.md", mode = "644" },
 ]
 
+# 정식 배포(GitHub 릴리스) — 크기·성능 우선. 빌드 시간은 비싸다.
+# full LTO + codegen-units=1 은 378개 의존 크레이트를 하나로 합쳐 재최적화하므로,
+# 자체 코드가 한 줄만 바뀌어도 링크 단계 전체를 다시 돈다(실측 10분+).
 [profile.release]
 opt-level = 2
 lto = true
@@ -96,3 +99,11 @@ panic = "abort"
 # CLI binary: size-optimized (less impactful since it's TUI)
 [profile.release.package.keymander]
 opt-level = "z"
+
+# 로컬 배포·빠른 검증용 — 실행 동작은 release 와 같게 두고 LTO 만 끈다.
+# 실측(자체 코드 1줄 수정 후 증분 빌드): release 10분+ → fast 21초.
+# 대가는 바이너리 약 +1.8MB. `scripts/deploy-local.ps1 -Fast` 가 이 프로파일을 쓴다.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16

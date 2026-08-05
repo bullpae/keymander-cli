@@ -30,21 +30,39 @@ fail()  { echo -e "${RED}✗${NC} $1"; exit 1; }
 SKIP_TEST=false
 RESTART_ONLY=false
 
+FAST=false
+
 usage() {
     echo "사용법:"
     echo "  ./scripts/deploy-local.sh              # 전체 (빌드+테스트+배포+재시작)"
     echo "  ./scripts/deploy-local.sh --skip-test  # 테스트 생략"
     echo "  ./scripts/deploy-local.sh --restart    # 재시작만"
+    echo "  ./scripts/deploy-local.sh --fast       # 빠른 빌드 (LTO off — 로컬 검증용)"
+    echo ""
+    echo "  --fast 는 실행 동작이 release 와 같지만 LTO 를 꺼서 빌드가 크게 빨라진다."
+    echo "  바이너리가 조금 커지므로 배포 자산은 CI 가 release 로 만든다."
 }
 
 for arg in "$@"; do
     case "$arg" in
         --skip-test) SKIP_TEST=true ;;
         --restart)   RESTART_ONLY=true ;;
+        --fast)      FAST=true ;;
         -h|--help|help) usage; exit 0 ;;
         *) usage; fail "알 수 없는 인자: $arg" ;;
     esac
 done
+
+# 빌드 프로파일 — --fast 는 LTO 를 끈 fast 프로파일 (Cargo.toml [profile.fast])
+if [ "$FAST" = true ]; then
+    PROFILE="fast"
+    PROFILE_FLAG="--profile fast"
+    TARGET_DIR="target/fast"
+else
+    PROFILE="release"
+    PROFILE_FLAG="--release"
+    TARGET_DIR="target/release"
+fi
 
 restart_daemon() {
     info "데몬/데스크톱 프로세스 종료 중..."
@@ -88,8 +106,13 @@ echo -e "${CYAN}=== keymander v${VERSION} 로컬 배포 ===${NC}"
 echo ""
 
 # [1] 빌드
-info "[1/4] 릴리스 빌드..."
-cargo build --release --workspace 2>&1 | tail -3
+if [ "$FAST" = true ]; then
+    info "[1/4] 빠른 빌드 (fast 프로파일 — LTO off)..."
+else
+    info "[1/4] 릴리스 빌드..."
+fi
+# shellcheck disable=SC2086  # PROFILE_FLAG 는 의도적으로 분리되어야 한다
+cargo build $PROFILE_FLAG --workspace 2>&1 | tail -3
 ok "빌드 완료"
 
 # [2] 테스트
@@ -108,9 +131,9 @@ fi
 info "[3/4] $DEPLOY_DIR 에 배포 중..."
 mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/kmd-data"
 
-cp target/release/kmd "$DEPLOY_DIR/"
-cp target/release/kmd-desktop "$DEPLOY_DIR/"
-cp target/release/kmd-daemon "$DEPLOY_DIR/"
+cp "$TARGET_DIR/kmd" "$DEPLOY_DIR/"
+cp "$TARGET_DIR/kmd-desktop" "$DEPLOY_DIR/"
+cp "$TARGET_DIR/kmd-daemon" "$DEPLOY_DIR/"
 if [ ! -f "$DEPLOY_DIR/kmd-data/config.toml" ]; then
     case "$(uname -s)" in
         Darwin) CONFIG_PLATFORM=macos ;;
@@ -132,6 +155,7 @@ restart_daemon
 echo ""
 echo -e "${GREEN}=== 배포 완료 ===${NC}"
 echo "  버전:  v${VERSION}"
+echo "  프로파일: ${PROFILE}$([ "$FAST" = true ] && echo '  (LTO off — 로컬 검증용)')"
 echo "  경로:  $DEPLOY_DIR"
 echo "  데몬:  PID $(pgrep -f kmd-daemon | head -1)"
 echo "  실행:  Alt+Space 로 kmd-desktop 실행"

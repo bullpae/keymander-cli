@@ -11,6 +11,7 @@
 #   .\scripts\deploy-local.ps1                # 전체 (빌드+테스트+배포+재시작)
 #   .\scripts\deploy-local.ps1 -SkipTest      # 테스트 생략
 #   .\scripts\deploy-local.ps1 -RestartOnly   # 재시작만
+#   .\scripts\deploy-local.ps1 -Fast          # 빠른 빌드 (LTO off — 로컬 검증용)
 #   .\scripts\deploy-local.ps1 -DeployDir "D:\other\path"  # 배포 경로 변경
 #   .\scripts\deploy-local.ps1 -Help          # 도움말 (--help 도 인식)
 
@@ -18,8 +19,16 @@ param(
     [switch]$SkipTest,
     [switch]$RestartOnly,
     [string]$DeployDir = "C:\WinUtil\keymander",
+    [switch]$Fast,
     [switch]$Help
 )
+
+# 빌드 프로파일 — -Fast 는 LTO 를 끈 fast 프로파일을 쓴다.
+# 실행 동작(opt-level/panic)은 release 와 같고 빌드만 빨라진다(10분+ → 20초대).
+# 정식 릴리스 산출물은 CI 가 release 프로파일로 만드므로 영향 없다.
+$Profile     = if ($Fast) { "fast" } else { "release" }
+$ProfileFlag = if ($Fast) { "--profile", "fast" } else { "--release" }
+$TargetDir   = if ($Fast) { "target\fast" } else { "target\release" }
 
 $ErrorActionPreference = "Stop"
 
@@ -56,8 +65,12 @@ function Show-Usage {
     Write-Host "  .\scripts\deploy-local.ps1                            # 전체 (빌드+테스트+배포+재시작)"
     Write-Host "  .\scripts\deploy-local.ps1 -SkipTest                  # 테스트 생략"
     Write-Host "  .\scripts\deploy-local.ps1 -RestartOnly               # 재시작만"
+    Write-Host "  .\scripts\deploy-local.ps1 -Fast                      # 빠른 빌드 (LTO off, 10분+ → 20초대)"
     Write-Host "  .\scripts\deploy-local.ps1 -DeployDir 'D:\other\path' # 배포 경로 변경"
     Write-Host "  .\scripts\deploy-local.ps1 -Help                      # 이 도움말"
+    Write-Host ""
+    Write-Host "  -Fast 는 로컬 검증용입니다. 실행 동작은 release 와 같지만 LTO 를 꺼서"
+    Write-Host "  바이너리가 약 1.8MB 커집니다. 배포 자산은 CI 가 release 로 만듭니다."
     Write-Host ""
 }
 
@@ -71,7 +84,7 @@ if ($Help -or $DeployDir -match '^(-{1,2}h(elp)?|/\?|help)$') {
     exit 0
 }
 if ($DeployDir.StartsWith("-")) {
-    Write-Fail "잘못된 배포 경로: '$DeployDir' — 옵션은 -SkipTest, -RestartOnly, -DeployDir <경로>, -Help 입니다"
+    Write-Fail "잘못된 배포 경로: '$DeployDir' — 옵션은 -SkipTest, -RestartOnly, -Fast, -DeployDir <경로>, -Help 입니다"
 }
 if (-not [System.IO.Path]::IsPathRooted($DeployDir)) {
     Write-Fail "배포 경로는 절대 경로여야 합니다: '$DeployDir'"
@@ -125,8 +138,12 @@ try {
     Write-Host ""
 
     # [1] 빌드
-    Write-Info "[1/4] 릴리스 빌드..."
-    cargo build --release --workspace
+    if ($Fast) {
+        Write-Info "[1/4] 빠른 빌드 (fast 프로파일 — LTO off)..."
+    } else {
+        Write-Info "[1/4] 릴리스 빌드..."
+    }
+    cargo build @ProfileFlag --workspace
     if ($LASTEXITCODE -ne 0) { Write-Fail "빌드 실패" }
     Write-Ok "빌드 완료"
 
@@ -136,8 +153,8 @@ try {
     if ($SkipTest) {
         Write-Warn "[2/4] 테스트 생략 (-SkipTest)"
     } else {
-        Write-Info "[2/4] 테스트 실행 (release)..."
-        cargo test --workspace --release
+        Write-Info "[2/4] 테스트 실행 ($Profile)..."
+        cargo test --workspace @ProfileFlag
         if ($LASTEXITCODE -ne 0) { Write-Fail "테스트 실패 — 배포 중단" }
         Write-Ok "모든 테스트 통과"
     }
@@ -150,9 +167,9 @@ try {
     if (-not (Test-Path $DeployDir)) { New-Item -ItemType Directory -Path $DeployDir -Force | Out-Null }
     if (-not (Test-Path $dataDir))   { New-Item -ItemType Directory -Path $dataDir -Force | Out-Null }
 
-    Copy-Item "target\release\kmd.exe"         $DeployDir -Force
-    Copy-Item "target\release\kmd-desktop.exe" $DeployDir -Force
-    Copy-Item "target\release\kmd-daemon.exe"  $DeployDir -Force
+    Copy-Item "$TargetDir\kmd.exe"         $DeployDir -Force
+    Copy-Item "$TargetDir\kmd-desktop.exe" $DeployDir -Force
+    Copy-Item "$TargetDir\kmd-daemon.exe"  $DeployDir -Force
 
     $configDest = Join-Path $dataDir "config.toml"
     if (-not (Test-Path $configDest)) {
@@ -171,6 +188,7 @@ try {
     Write-Host ""
     Write-Host "=== 배포 완료 ===" -ForegroundColor Green
     Write-Host "  버전:  v$version"
+    Write-Host "  프로파일: $Profile$(if ($Fast) { '  (LTO off — 로컬 검증용)' })"
     Write-Host "  경로:  $DeployDir"
     $daemon = Get-Process -Name "kmd-daemon" -ErrorAction SilentlyContinue
     if ($daemon) {
