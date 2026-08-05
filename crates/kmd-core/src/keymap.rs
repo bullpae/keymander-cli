@@ -34,7 +34,7 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;; keymander vim-nav 프로파일
 ;; Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행
 ;; CapsLock → 짧게 탭 = CapsLock, 홀드 = Ctrl (HHKB 스타일)
-;; RAlt 홀드 → 마우스 레이어 (WASD 이동 + Space/J/K/L 클릭)
+;; RAlt 홀드 → 마우스 레이어 (ESDF 이동 + Space/C/G 클릭 + R/V 휠)
 ;;
 ;; 의존: kanata (https://github.com/jtroo/kanata)
 ;; 생성: kmd keymap init vim-nav
@@ -48,12 +48,12 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 
 ;; ── 2. 물리 키 매핑 ──────────────────────────────────────────
 (defsrc
-  caps alt  ralt lsft spc  w    a    s    d    h    j    k    l    n    m    i    o    .    /    y    p
+  caps alt  ralt lsft spc  e    s    d    f    r    v    c    g    h    j    k    l    n    m    i    o    .    /    y    p    u    ,
 )
 
 ;; ── 3. 기본 레이어 ──────────────────────────────────────────
 (deflayer default
-  @caps-th @nav-mod @mouse-mod lsft spc  w    a    s    d    h    j    k    l    n    m    i    o    .    /    y    p
+  @caps-th @nav-mod @mouse-mod lsft spc  e    s    d    f    r    v    c    g    h    j    k    l    n    m    i    o    .    /    y    p    u    ,
 )
 
 ;; ── 4. 네비게이션 레이어 ────────────────────────────────────
@@ -62,22 +62,24 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 ;;    h/j/k/l  = ←↓↑→          n/m = PageUp/PageDown
 ;;    i        = 단어 앞(1탭) / Home(2탭)
 ;;    o        = 단어 뒤(1탭) / End(2탭)
-;;    .        = Backspace      / = Del(1탭) / 줄 삭제(2탭)
+;;    .        = Backspace      / = Delete   (둘 다 연타 그대로)
+;;    ,        = 앞 단어 삭제   u = 줄 삭제 (연타 개념이 없는 키로 분리)
 ;;    y        = 줄 복사        p = 붙여넣기
 ;;    Space    = kmd-desktop 실행 (Alt+Space)
 (deflayer navigation
-  _  _  _  _  @launch-kmd  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc @sl-dt @y-cp @p-vt
+  _  _  _  _  @launch-kmd  _  _  _  _  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc del @y-cp @p-vt @del-line C-bspc
 )
 
 ;; ── 5. 마우스 레이어 ────────────────────────────────────────
 ;;    RAlt 홀드 상태 — 홀드 손(오른엄지)과 조작 손(왼손) 분리
 ;;
-;;    w/a/s/d  = 포인터 ↑←↓→ (시간 가속)
-;;    Space    = 좌클릭 (홀드 = 드래그)
-;;    j/k/l    = 좌/우/중 클릭    LShift = 저속 정밀 모드
+;;    e/s/d/f  = 포인터 ↑←↓→ (시간 가속, 타이핑 홈포지션 유지)
+;;    r/v      = 휠 ↑/↓ (검지 세로열 r-f-v)
+;;    Space    = 좌클릭 (홀드 = 드래그)   c/g = 우/중 클릭
+;;    j/k/l    = 좌/우/중 클릭 (오른손 별칭)   LShift = 저속 정밀 모드
 ;;    나머지 키는 차단 (오타 방지)
 (deflayer mouse
-  XX _  _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r XX mlft mrgt mmid XX XX XX XX XX XX XX XX
+  XX _  _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r @ms-wu @ms-wd mrgt mmid XX mlft mrgt mmid XX XX XX XX XX XX XX XX XX XX
 )
 
 ;; ── 6. 기능 정의 ────────────────────────────────────────────
@@ -92,9 +94,10 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 
   ;; --- 복합 기능 (tap-dance) ---
   ;; 200ms 이내에 연타하면 두 번째 기능이 실행됩니다.
+  ;; 삭제키(. /)에는 tap-dance를 걸지 않는다 — 연타로 지우는 습관이
+  ;; 줄 삭제로 오발사되기 때문. 줄 삭제는 u 전용 키로 뺐다.
   i-dt  (tap-dance 200 (C-left home))
   o-dt  (tap-dance 200 (C-rght end))
-  sl-dt (tap-dance 200 (del @del-line))
 
   ;; --- Alt 레이어 전환 ---
   ;; Alt 홀드 → navigation 레이어, Alt 짧게 탭 → ESC
@@ -115,6 +118,10 @@ const VIM_NAV_KBD: &str = r#";; ================================================
   ms-r (movemouse-accel-right 4 500 1 6)
   ms-lclk mlft
   ms-slow (movemouse-speed 25)
+
+  ;; --- 마우스 휠 (50ms 간격, 120 = 1노치) ---
+  ms-wu (mwheel-up 50 120)
+  ms-wd (mwheel-down 50 120)
 )
 "#;
 
@@ -571,17 +578,25 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     mappings.insert("N".into(), "PageUp".into());
     mappings.insert("M".into(), "PageDown".into());
     mappings.insert(".".into(), "Backspace".into());
+    // 삭제키는 더블탭 게이팅을 걸지 않는다 — Backspace/Delete는 탭 연타 빈도가
+    // 가장 높은 키라, 두 글자 지우려는 탭-탭이 줄 삭제로 오발사된다.
+    // 줄 삭제는 연타 개념이 없는 U(= vim dd, Y와 짝)로 분리했다.
+    mappings.insert("/".into(), "Delete".into());
     mappings.insert("Space".into(), "launch:kmd-desktop".into());
 
     #[cfg(target_os = "macos")]
     {
         mappings.insert("P".into(), "Cmd+V".into());
         mappings.insert("Y".into(), "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C".into());
+        mappings.insert("U".into(), "macro:Cmd+Left;Shift+Cmd+Right;Delete".into());
+        mappings.insert(",".into(), "Alt+Backspace".into());
     }
     #[cfg(not(target_os = "macos"))]
     {
         mappings.insert("P".into(), "Ctrl+V".into());
         mappings.insert("Y".into(), "macro:Home;Shift+End;Ctrl+C".into());
+        mappings.insert("U".into(), "macro:Home;Shift+End;Delete".into());
+        mappings.insert(",".into(), "Ctrl+Backspace".into());
     }
 
     let mut double_taps = std::collections::HashMap::new();
@@ -604,14 +619,6 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
                 timeout_ms: Some(300),
             },
         );
-        double_taps.insert(
-            "Slash".into(),
-            LayerDoubleTapToml {
-                single: "Delete".into(),
-                double: "macro:Cmd+Left;Shift+Cmd+Right;Delete".into(),
-                timeout_ms: Some(300),
-            },
-        );
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -631,14 +638,6 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
                 timeout_ms: Some(300),
             },
         );
-        double_taps.insert(
-            "Slash".into(),
-            LayerDoubleTapToml {
-                single: "Delete".into(),
-                double: "macro:Home;Shift+End;Delete".into(),
-                timeout_ms: Some(300),
-            },
-        );
     }
 
     LayerToml {
@@ -654,18 +653,27 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
 /// vim-nav 프리셋의 마우스 레이어 기본값 — RAlt 홀드 + 왼손 조작.
 ///
 /// 설계 원칙: 홀드 손(오른엄지)과 조작 손(왼손)을 분리한다.
-/// - WASD = 포인터 이동 (공간 조작은 게이밍 축, 텍스트는 vim 축으로 분리)
+/// - ESDF = 포인터 이동 — WASD는 검지를 D로 한 칸 왼쪽에 묶어 타이핑
+///   홈포지션(검지 F)을 깨뜨린다. ESDF는 손을 홈에 둔 채로 조작되고,
+///   덤으로 Q/W/R/T/A/G/Z/X/C/V/B가 확장 자리로 열린다.
+/// - R/V = 휠 ↑/↓ — 검지 세로열(R-F-V). 이동축(중지)과 손가락이 갈려
+///   포인터를 움직이면서 스크롤할 수 있다.
 /// - Space(왼엄지) = 좌클릭 — 이동하던 손이 자세를 안 바꾸고 확정
-/// - J/K/L = 좌/우/중 클릭 (마우스 파지 미러링 별칭)
+/// - C = 우클릭 (중지열 E-D-C 끝), G = 중클릭 (검지 한 칸 오른쪽)
+/// - J/K/L = 좌/우/중 클릭 (오른손 병행용 별칭)
 /// - LShift = 저속 정밀 모드
 fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
     use crate::config::LayerToml;
     let mut mappings = std::collections::HashMap::new();
-    mappings.insert("W".into(), "mouse:up".into());
-    mappings.insert("A".into(), "mouse:left".into());
-    mappings.insert("S".into(), "mouse:down".into());
-    mappings.insert("D".into(), "mouse:right".into());
+    mappings.insert("E".into(), "mouse:up".into());
+    mappings.insert("S".into(), "mouse:left".into());
+    mappings.insert("D".into(), "mouse:down".into());
+    mappings.insert("F".into(), "mouse:right".into());
+    mappings.insert("R".into(), "mouse:wheel-up".into());
+    mappings.insert("V".into(), "mouse:wheel-down".into());
     mappings.insert("Space".into(), "mouse:click".into());
+    mappings.insert("C".into(), "mouse:rclick".into());
+    mappings.insert("G".into(), "mouse:mclick".into());
     mappings.insert("J".into(), "mouse:click".into());
     mappings.insert("K".into(), "mouse:rclick".into());
     mappings.insert("L".into(), "mouse:mclick".into());
@@ -1320,20 +1328,55 @@ mod tests {
         let mouse = e.layers.get("mouse").expect("mouse 레이어");
         assert_eq!(mouse.trigger, "RAlt");
         assert_eq!(mouse.unmapped.as_deref(), Some("block"));
-        assert_eq!(mouse.mappings["W"], "mouse:up");
+        // ESDF 이동 — 타이핑 홈포지션(검지 F) 유지
+        assert_eq!(mouse.mappings["E"], "mouse:up");
+        assert_eq!(mouse.mappings["S"], "mouse:left");
+        assert_eq!(mouse.mappings["D"], "mouse:down");
+        assert_eq!(mouse.mappings["F"], "mouse:right");
+        // 검지 세로열 R-F-V = 휠
+        assert_eq!(mouse.mappings["R"], "mouse:wheel-up");
+        assert_eq!(mouse.mappings["V"], "mouse:wheel-down");
         assert_eq!(mouse.mappings["Space"], "mouse:click");
+        assert_eq!(mouse.mappings["C"], "mouse:rclick");
+        assert_eq!(mouse.mappings["G"], "mouse:mclick");
         assert_eq!(mouse.mappings["LShift"], "mouse:slow");
+        assert!(
+            !mouse.mappings.contains_key("W") && !mouse.mappings.contains_key("A"),
+            "WASD 배치는 폐기 — S/D 의미가 뒤집혀 ESDF와 병행 불가"
+        );
 
         // 사용자 정의는 기본 위에 병합
         let mut km = keymap_with_profile("vim-nav");
         let mut layer = LayerToml::default();
-        layer.mappings.insert("W".into(), "mouse:wheel-up".into());
+        layer.mappings.insert("E".into(), "mouse:wheel-up".into());
         km.layers.insert("mouse".into(), layer);
         let e2 = effective_keymap(&km);
         let mouse2 = &e2.layers["mouse"];
         assert_eq!(mouse2.trigger, "RAlt", "trigger 생략 시 기본 유지");
-        assert_eq!(mouse2.mappings["W"], "mouse:wheel-up");
-        assert_eq!(mouse2.mappings["A"], "mouse:left", "미지정 키 기본 보존");
+        assert_eq!(mouse2.mappings["E"], "mouse:wheel-up");
+        assert_eq!(mouse2.mappings["S"], "mouse:left", "미지정 키 기본 보존");
+    }
+
+    #[test]
+    fn vim_nav_삭제키는_더블탭_없이_연타() {
+        let e = effective_keymap(&keymap_with_profile("vim-nav"));
+        let nav = e.layers.get("nav").expect("nav 레이어");
+
+        // . / 는 평범한 매핑 — 탭 연타가 그대로 Backspace/Delete 연타
+        assert_eq!(nav.mappings["."], "Backspace");
+        assert_eq!(nav.mappings["/"], "Delete");
+        assert!(
+            !nav.double_taps.contains_key("Slash"),
+            "삭제키 더블탭은 연타와 충돌 — 줄 삭제는 U로 분리"
+        );
+
+        // 줄 삭제/단어 삭제는 연타 개념이 없는 전용 키
+        assert!(nav.mappings["U"].starts_with("macro:"), "U = 줄 삭제 매크로");
+        assert!(nav.mappings.contains_key(","), ", = 앞 단어 삭제");
+
+        // 단어 이동 더블탭은 유지 (연타로 더 멀리 가는 용도로 실사용 검증됨)
+        assert!(nav.double_taps.contains_key("I"));
+        assert!(nav.double_taps.contains_key("O"));
     }
 
     #[cfg(target_os = "windows")]

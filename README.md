@@ -34,7 +34,7 @@ It fits in a single ~3MB binary. No Electron, no runtime, no ceremony.
   through hold-layers so fingers never travel. And one ergonomic rule runs
   through every default layout: **the hand that holds a layer is never the hand
   that operates it.** Left-hand `LAlt` hold drives right-hand HJKL navigation;
-  right-thumb `RAlt` hold drives left-hand WASD pointer movement. No one-handed
+  right-thumb `RAlt` hold drives left-hand ESDF pointer movement. No one-handed
   claw grips.
 - **One binary, no ceremony.** Portable install, SQLite + one TOML file,
   instant startup, <5MB RAM.
@@ -284,11 +284,14 @@ kmd keymap list-presets    # all built-in presets
 
 The `vim-nav` preset provides:
 - `LAlt` hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
+- `LAlt` + `.` / `/` = Backspace / Delete (plain taps — mash them freely),
+  `,` = delete word back, `Y` / `U` = copy / delete line (vim `yy` / `dd`)
 - `LAlt` + Space = launch kmd-desktop; `LAlt` tap alone = Esc
 - CapsLock mod-tap: tap = CapsLock, hold + key = Ctrl combo (HHKB-style)
-- `RAlt` hold = mouse layer: WASD pointer move (accelerated), Space
-  left-click/drag, J/K/L clicks, LShift precision — on Korean Windows
-  keyboards a short RAlt tap still toggles 한/영
+- `RAlt` hold = mouse layer: ESDF pointer move (accelerated, keeps the typing
+  home position), R/V wheel, Space left-click/drag, C/G right/middle click,
+  J/K/L click aliases, LShift precision — on Korean Windows keyboards a short
+  RAlt tap still toggles 한/영
 - Every key is customizable in `config.toml`
   ([config reference](docs/06_config_reference.md))
 

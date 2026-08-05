@@ -1582,7 +1582,7 @@ mod tests {
     fn 축소는_즉시_적용되지_않는다() {
         // 회귀: 결과가 사라지는 순간 창을 곧바로 접으면 이전 프레임이
         // stretch 합성돼 화면이 찢어져 보인다 (백스페이스 전체 삭제,
-        // 더블탭 '/' 한 줄 삭제, '.' Backspace 매핑에서 발생).
+        // 'U' 한 줄 삭제, '.' Backspace 매핑에서 발생).
         let mut app = make_resizing_app();
         with_results(&mut app);
         let before = app.window_height;

@@ -37,7 +37,7 @@ TUI/Desktop에서 :dojo     # 터미널로 TUI dojo 실행
 | Lv1 | Summon | 런처 검색·실행 (`fire`→Enter, `@gh`, `.pdf`) | TUI 내 모의 검색 (kmd-core 검색 엔진 그대로 사용, 실행은 시뮬레이션) |
 | Lv2 | Navigate | LAlt 홀드 + HJKL/N/M/I/O | 매핑 **결과** 키 도착 판정 (Left/PageDown/Home …) |
 | Lv3 | Mod-Tap | CapsLock 탭/홀드 (Caps+C/V/S, 탭=CapsLock) | Ctrl+문자 도착 판정 + 탭/홀드 구분 라운드 |
-| Lv4 | Pointer | RAlt 홀드 + WASD 이동, Space 클릭, LShift 정밀 | 터미널 마우스 캡처 — 셀 좌표 타겟 박스 안 클릭 판정 |
+| Lv4 | Pointer | RAlt 홀드 + ESDF 이동, Space 클릭, LShift 정밀 | 터미널 마우스 캡처 — 셀 좌표 타겟 박스 안 클릭 판정 |
 | Lv5 | Gauntlet | Lv1~4 혼합 타임어택 | 위 판정 전부, 랜덤 순서 |
 
 레벨별 별점: ★ 완주 / ★★ 제한시간 내 / ★★★ 무실수 + 상위 반응속도.
@@ -78,7 +78,7 @@ dojo 진입 시:
 
 1. `kmd keymap status` / 데몬 상태를 조회해 키맵 활성 여부 확인.
    비활성이면 Lv2~4 잠금 + "지금 켜기" 안내 (`kmd keymap start` 실행 제안).
-2. IME 상태 안내: 한글 입력 모드면 WASD가 ㅈㅁㄴㅇ로 들어온다.
+2. IME 상태 안내: 한글 입력 모드면 ESDF가 ㄷㄴㅇㄹ로 들어온다.
    Lv1 판정에서 한글 자모가 감지되면 "영문 모드로 전환하세요" 힌트를 즉시
    표시 (기존 `reset_ime_on_launch` 로직 재사용 검토).
 3. 터미널 capability: 마우스 캡처 불가 터미널(일부 원격/멀티플렉서 환경)이면
