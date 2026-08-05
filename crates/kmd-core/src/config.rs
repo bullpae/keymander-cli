@@ -51,6 +51,14 @@ pub struct GeneralConfig {
     /// Desktop launcher brand icon style: "color" (official full-color logos)
     /// or "mono" (theme-tinted monochrome glyphs — unified look).
     pub brand_icons: String,
+    /// Desktop window transparency: "auto" or "off".
+    ///
+    /// `auto` — 투명 창을 쓴다. 창 높이를 고정하고 빈 영역을 투명으로 두므로
+    /// 결과가 생기고 사라질 때 창 리사이즈가 없다(= 화면 찢어짐 없음).
+    /// Windows 는 DirectComposition 스왑체인으로 알파를 합성한다.
+    /// `off` — 불투명 창 + 결과에 맞춘 창 리사이즈(구버전 동작). 투명 합성이
+    /// 안 되는 환경에서 빈 영역이 검게 보이면 이 값으로 되돌린다.
+    pub window_transparency: String,
 }
 
 impl Default for GeneralConfig {
@@ -67,6 +75,7 @@ impl Default for GeneralConfig {
             visible_rows: 8,
             renderer: "auto".to_string(),
             brand_icons: "color".to_string(),
+            window_transparency: "auto".to_string(),
         }
     }
 }

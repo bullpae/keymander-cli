@@ -1,11 +1,16 @@
 [workspace]
 members = ["crates/kmd-core", "crates/kmd-desktop", "crates/kmd-daemon"]
-exclude = ["tools/gen-icon"]
+exclude = ["tools/gen-icon", "tools/gpu-probe", "vendor/iced_wgpu"]
 resolver = "2"
+
+# [실험] Windows 투명 창 검증용 — iced_wgpu 가 wgpu 백엔드 옵션을 환경변수에서
+# 읽도록 한 줄 패치. 검증이 끝나면 유지/제거를 결정한다.
+[patch.crates-io]
+iced_wgpu = { path = "vendor/iced_wgpu" }
 
 [package]
 name = "keymander"
-version = "0.11.3"
+version = "0.12.0"
 edition = "2021"
 build = "build.rs"
 description = "?ㅻ낫???섎굹濡?紐⑤뱺 寃껋쓣 吏?섑븳????CLI-first ?щ줈?ㅽ뵆?ロ뤌 ?곗쿂"

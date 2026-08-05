@@ -2,6 +2,47 @@
 
 All notable changes to keymander are documented here.
 
+## [0.12.0] — 2026-08-05
+
+Windows 투명 창 지원 — 창 리사이즈를 없애 화면 찢어짐을 근본 해결하고,
+Windows/macOS UI를 동일하게 통일.
+
+### Features
+- **Windows 투명 창 (DirectComposition) — 리사이즈 제거 + UI 통일** —
+  v0.10.1부터 Windows는 불투명 창 + 결과에 맞춘 창 리사이즈를 써 왔다.
+  리사이즈는 그 자체로 컴포지터가 이전 프레임을 새 크기로 늘려 합성하는
+  구간을 만들어, 결과가 뜨고 사라질 때 화면이 찢어져 보였다(v0.11.1~0.11.3의
+  디바운스·cloak은 완화책이었다).
+
+  원인을 추적한 결과 **아키텍처(x86/ARM) 문제가 아니라 스왑체인 종류** 문제였다.
+  wgpu는 Windows에서 HWND 스왑체인(`DxgiFromHwnd`)을 쓰는데 이건
+  per-pixel 알파를 지원하지 않아 `alpha_modes=[Opaque]`로 고정된다
+  (`wgpu-hal/dx12/adapter.rs`). 예전에 투명이 됐던 것은 Vulkan 드라이버가
+  있는 환경에서 wgpu가 Vulkan을 잡았기 때문이고, Vulkan이 없는 환경
+  (Windows on ARM VM 등)에서만 DX12로 폴백해 검은 화면이 났던 것이다.
+
+  이제 DirectComposition 스왑체인(`DxgiFromVisual`)을 사용한다 —
+  실측 `alpha_modes=[Auto, Inherit, Opaque, PostMultiplied, PreMultiplied]`.
+  덕분에 Windows도 macOS와 같은 구조를 쓴다:
+  - 창 높이 **고정**, 빈 영역은 투명 → **창 리사이즈가 없어 찢어짐 원천 제거**
+  - 카드 라운드를 직접 그림 → DWM 고정 8px 코너 클립 대신 **양 플랫폼 동일한
+    pill 라운드** (기존에는 Windows만 라운드 사각형이라 UI가 갈렸다)
+  - 부팅 시에도 처음부터 full 높이 → 첫 확대 리사이즈까지 제거
+- **`general.window_transparency` 설정 추가** (`auto`/`off`) — 기본 `auto`.
+  빈 영역이 검게 보이는 환경에서는 `off`로 이전 동작(불투명 창 + 리사이즈)으로
+  되돌릴 수 있다. 소프트웨어 렌더러(`renderer="software"`)에서는 자동으로
+  `off` 폴백. 긴급 시 환경변수 `KMD_NO_TRANSPARENT=1`.
+
+### Internal
+- **`vendor/iced_wgpu` — iced 0.14.0에 한 줄 패치** — 업스트림이 wgpu 인스턴스를
+  `InstanceDescriptor { ..Default::default() }`로 만들어 `backend_options`가
+  항상 기본값(`DxgiFromHwnd`)으로 고정되고 `WGPU_DX12_PRESENTATION_SYSTEM`
+  환경변수가 무시된다. `BackendOptions::from_env_or_default()`를 넘기도록
+  수정했다 (업스트림 PR 후보).
+- **`tools/gpu-probe`** — 투명 창을 만들고 백엔드/스왑체인 조합별
+  `alpha_modes`를 실측하는 진단 도구. 워크스페이스에서 제외되어 릴리스
+  빌드에는 포함되지 않는다.
+
 ## [0.11.3] — 2026-08-04
 
 ### Bug Fixes

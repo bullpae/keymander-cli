@@ -43,6 +43,11 @@
 # Desktop 브랜드 아이콘 스타일: color (공식 풀컬러 로고) | mono (테마 틴트 단색 글리프)
 # brand_icons = "color"
 
+# Desktop 창 투명 처리: auto (투명 창 — 창 리사이즈 없음) | off (불투명 + 리사이즈)
+# 투명 창이면 결과가 뜨고 사라질 때 창 크기가 바뀌지 않아 화면 찢어짐이 없다.
+# 빈 영역이 검게 보이는 환경에서만 "off" 로 되돌린다.
+# window_transparency = "auto"
+
 # ── 런처 설정 ────────────────────────────────────────────────
 [launcher]
 # 파일 검색 엔진: auto | builtin | fd | everything | mdfind | locate | winfs

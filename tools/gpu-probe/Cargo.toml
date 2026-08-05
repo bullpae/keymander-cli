@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "gpu-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 진단 전용 도구 — 워크스페이스에서 제외되어 있어 릴리스 빌드에 포함되지 않는다.
+# 실행: cargo run --manifest-path tools/gpu-probe/Cargo.toml
+
+[dependencies]
+wgpu = "27.0"
+wgpu-types = "27.0"
+winit = { version = "0.30", features = ["rwh_06"] }
+pollster = "0.4"

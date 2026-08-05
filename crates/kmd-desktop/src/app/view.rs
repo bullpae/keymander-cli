@@ -137,7 +137,7 @@ impl App {
         let accent_color = t.accent;
         // Windows: 불투명 창(투명 합성 불가 환경에서 검게 렌더링) — 카드도 완전
         // 불투명으로 칠해 창 배경과 이음새 없이 이어지게 한다. (main.rs 참고)
-        let bg = if cfg!(target_os = "windows") {
+        let bg = if cfg!(target_os = "windows") && !crate::window_transparent() {
             Color {
                 a: 1.0,
                 ..t.background
@@ -262,10 +262,13 @@ impl App {
         // 라운드는 DWM 네이티브 코너 클립(약 8px)과 일치시킨다.
         // macOS 투명 pill은 이중 테두리 디자인 유지.
         // pill 라운드(~23px)를 그리면 DWM 이 모서리를 잘라내 형태가 깨진다.
-        let (radius, ring_width) = if cfg!(target_os = "windows") {
-            (8.0, 0.0)
-        } else {
+        // 투명 창이면 모서리 바깥을 우리가 투명으로 남길 수 있으므로 플랫폼과
+        // 무관하게 같은 라운드를 그린다(= UI 통일). 불투명 창(Windows 폴백)에서는
+        // 모서리 바깥이 창 배경색으로 채워지므로 DWM 코너 클립(8px)에 맞춘다.
+        let (radius, ring_width) = if crate::window_transparent() {
             (u.pill_height / 2.0, 1.0)
+        } else {
+            (8.0, 0.0)
         };
 
         let card_surface = container(card_col)

@@ -207,7 +207,7 @@ pub fn collapsed_window_height(font_size: f32, visible_rows: usize) -> f32 {
 /// collapsed 로 띄웠다가 늘리면 그 한 번의 리사이즈에서 왜곡이 그대로 보인다.
 pub fn initial_window_height(font_size: f32, visible_rows: usize) -> f32 {
     let u = UiScale::new(font_size, visible_rows);
-    if FIXED_WINDOW_HEIGHT {
+    if FIXED_WINDOW_HEIGHT || crate::window_transparent() {
         u.full_window_height
     } else {
         u.collapsed_window_height
@@ -712,7 +712,7 @@ impl App {
             db,
             _guard: guard,
             window_width,
-            window_height: if FIXED_WINDOW_HEIGHT {
+            window_height: if FIXED_WINDOW_HEIGHT || crate::window_transparent() {
                 ui.full_window_height
             } else {
                 ui.collapsed_window_height
@@ -723,7 +723,8 @@ impl App {
             cloak_token: 0,
             cloaked_at: None,
             surface_layer_stabilized: false,
-            fixed_window_height: FIXED_WINDOW_HEIGHT,
+            // [실험] Windows에서 투명이 되면 macOS처럼 높이를 고정할 수 있다.
+            fixed_window_height: FIXED_WINDOW_HEIGHT || crate::window_transparent(),
             window_state,
             state_dirty: false,
             window_focused: true,
@@ -1752,15 +1753,21 @@ mod tests {
     }
 
     #[test]
-    fn macos는_높이_고정_기본값() {
-        // 플랫폼 정책이 실수로 뒤집히면 즉시 잡힌다.
+    fn 투명_창이면_높이_고정() {
+        // 정책: 빈 영역을 투명으로 둘 수 있으면 창을 리사이즈하지 않는다.
+        // (리사이즈가 없어야 컴포지터가 이전 프레임을 늘려 합성하는 구간도 없다)
+        // macOS 는 항상 투명, Windows 는 DirectComposition 이 열렸을 때 투명.
         assert_eq!(FIXED_WINDOW_HEIGHT, cfg!(target_os = "macos"));
         let app = make_test_app();
-        assert_eq!(app.fixed_window_height, cfg!(target_os = "macos"));
-        if cfg!(target_os = "macos") {
+        let expect_fixed = FIXED_WINDOW_HEIGHT || crate::window_transparent();
+        assert_eq!(
+            app.fixed_window_height, expect_fixed,
+            "투명 창이면 높이 고정, 불투명 폴백이면 리사이즈"
+        );
+        if expect_fixed {
             assert_eq!(
                 app.window_height, app.ui.full_window_height,
-                "고정 플랫폼은 처음부터 full 높이로 떠야 한다 (부팅 리사이즈 제거)"
+                "고정 모드는 처음부터 full 높이로 떠야 한다 (부팅 리사이즈 제거)"
             );
         }
     }
@@ -1770,7 +1777,8 @@ mod tests {
         let cfg = kmd_core::Config::default();
         let u = UiScale::new(cfg.general.font_size, cfg.general.visible_rows);
         let initial = initial_window_height(cfg.general.font_size, cfg.general.visible_rows);
-        if FIXED_WINDOW_HEIGHT {
+        // 높이 고정(투명) 모드는 부팅 리사이즈까지 없애려고 처음부터 full 로 뜬다.
+        if FIXED_WINDOW_HEIGHT || crate::window_transparent() {
             assert_eq!(initial, u.full_window_height);
         } else {
             assert_eq!(initial, u.collapsed_window_height);

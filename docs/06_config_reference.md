@@ -40,6 +40,7 @@ emoji_icons = true           # 이모지 아이콘 (false = ASCII 폴백)
 reset_ime_on_launch = true   # (Desktop) 실행 시 IME를 영문 모드로 시작
 renderer = "auto"            # (Desktop) auto | software | gpu — VM/원격 데스크톱은 software 권장
 brand_icons = "color"        # (Desktop) color = 풀컬러 로고 | mono = 테마 틴트 단색 글리프
+window_transparency = "auto" # (Desktop) auto = 투명 창(리사이즈 없음) | off = 불투명 + 리사이즈
 # editor = "code"            # 외부 에디터 (미설정 시 $EDITOR → vi/notepad)
 
 [launcher]
@@ -96,6 +97,7 @@ toggle_preview = "ctrl+p"
 | emoji_icons | bool | true | 이모지 아이콘 (false = ASCII 폴백) |
 | reset_ime_on_launch | bool | true | (Desktop) 런처 오픈 시 IME를 영문 모드로 시작 |
 | renderer | String | "auto" | (Desktop) 렌더러 선택. `software`는 GPU 어댑터 프로빙을 생략하고 tiny-skia로 직행 — VM·원격 데스크톱·가상 GPU 환경에서 부팅이 빨라지고 입력 지연이 줄 수 있다. `gpu`는 wgpu 강제. 환경변수 `ICED_BACKEND`가 설정돼 있으면 그쪽이 우선 |
+| window_transparency | String | "auto" | (Desktop) `auto`는 투명 창을 써서 창 높이를 고정한다 — 결과가 생기고 사라질 때 창 리사이즈가 없으므로 컴포지터가 이전 프레임을 늘려 합성하는 "화면 찢어짐"이 발생하지 않고, 카드 라운드를 직접 그려 플랫폼 간 UI가 같아진다. Windows는 DirectComposition 스왑체인으로 알파를 합성한다(HWND 스왑체인은 `alpha_modes=[Opaque]`라 불가). 소프트웨어 렌더러(`renderer="software"`)에서는 자동으로 `off`로 폴백. 빈 영역이 검게 보이면 `off`로 되돌린다(불투명 창 + 리사이즈). 긴급 시 환경변수 `KMD_NO_TRANSPARENT=1` |
 | brand_icons | String | "color" | (Desktop) 브랜드 아이콘 스타일. `color`는 공식 풀컬러 로고 PNG, `mono`는 Simple Icons 단색 글리프를 테마 teal로 틴트해 시스템 아이콘과 톤을 통일. `:set`의 "Brand Icons" 토글과 동일. 글리프 없는 서비스(grok/daum/papago)는 시스템 아이콘으로 폴백 |
 | editor | String? | None | 외부 에디터 ($EDITOR 폴백) |
 

@@ -32,7 +32,11 @@ impl App {
     pub(super) fn handle_got_raw_window_id(&mut self, raw_id: u64) -> Task<Message> {
         self.log_ime_state("GotRawWindowId:start");
         self.raw_window_id = Some(raw_id);
-        crate::platform::apply_native_rounded_corners(raw_id);
+        // 투명 창이면 라운드를 카드가 직접 그린다 — DWM 코너 클립(고정 8px)을
+        // 함께 걸면 우리가 그린 모서리가 잘려 형태가 깨진다.
+        if !crate::window_transparent() {
+            crate::platform::apply_native_rounded_corners(raw_id);
+        }
         crate::platform::force_foreground(raw_id);
         if self.reset_ime_on_launch {
             crate::platform::force_english_ime(raw_id);

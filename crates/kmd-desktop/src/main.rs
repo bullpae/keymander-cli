@@ -57,10 +57,58 @@ fn create_icon() -> Option<window::Icon> {
     window::icon::from_rgba(rgba.into_raw(), 32, 32).ok()
 }
 
-/// Windows에서는 창 투명 합성이 신뢰할 수 없다(wgpu/DX12·VM·소프트웨어 렌더러
-/// 폴백에서 투명 픽셀이 검게 그려짐) — 불투명 창 + DWM 라운드 코너를 쓴다.
-/// macOS/Linux는 컴포지터가 알파를 처리하므로 투명 창 유지.
-const WINDOW_TRANSPARENT: bool = !cfg!(target_os = "windows");
+/// 투명 창 사용 여부 — 부팅 시 1회 결정되어 전 모듈이 같은 값을 본다.
+///
+/// 투명하면 창 높이를 고정하고 빈 영역을 투명으로 두므로 **창 리사이즈가
+/// 사라진다** — 리사이즈 순간 컴포지터가 이전 프레임을 새 크기로 늘려 합성하는
+/// 구간이 없어져 "화면이 찢어지는" 증상이 원천적으로 발생하지 않는다.
+/// 카드 라운드도 우리가 직접 그리므로 플랫폼 간 UI가 같아진다.
+static WINDOW_TRANSPARENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+pub fn window_transparent() -> bool {
+    // 초기화 전(테스트 등)에는 플랫폼 기본값 — macOS/Linux 는 항상 투명 가능.
+    *WINDOW_TRANSPARENT.get_or_init(|| !cfg!(target_os = "windows"))
+}
+
+/// 설정과 실행 환경을 보고 투명 창 사용 여부를 확정한다 (창 생성 전 1회).
+///
+/// Windows 는 DX12 HWND 스왑체인이 `alpha_modes=[Opaque]`라 그대로는 투명이
+/// 불가능하고, DirectComposition 스왑체인으로 바꿔야 PreMultiplied 를 쓸 수 있다.
+/// 소프트웨어 렌더러(tiny-skia)는 그 경로가 없으므로 불투명으로 되돌린다.
+fn init_window_transparency(config: &kmd_core::Config) {
+    let requested = !config
+        .general
+        .window_transparency
+        .eq_ignore_ascii_case("off");
+    // 긴급 킬스위치 — 배포본에서 설정 파일을 못 고치는 상황 대비.
+    let killed = std::env::var_os("KMD_NO_TRANSPARENT").is_some();
+    let software = matches!(
+        config.general.renderer.trim().to_ascii_lowercase().as_str(),
+        "software" | "tiny-skia" | "cpu"
+    ) || std::env::var("ICED_BACKEND")
+        .is_ok_and(|v| v.eq_ignore_ascii_case("tiny-skia"));
+
+    let transparent = requested && !killed && !(cfg!(target_os = "windows") && software);
+    let _ = WINDOW_TRANSPARENT.set(transparent);
+
+    if !transparent {
+        tracing::info!(
+            "투명 창 비활성 (요청={requested}, 킬스위치={killed}, 소프트웨어렌더러={software}) \
+             — 불투명 창 + 리사이즈 방식으로 동작"
+        );
+        return;
+    }
+
+    // Windows: wgpu 가 DirectComposition 스왑체인을 쓰도록 지정한다. 기본값
+    // (DxgiFromHwnd)은 per-pixel 알파를 지원하지 않아 투명 픽셀이 검게 그려진다.
+    // 창을 만들기 **전에** 적용되어야 하며, vendor/iced_wgpu 패치가 이 환경변수를
+    // 읽어 wgpu 인스턴스에 전달한다.
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("WGPU_DX12_PRESENTATION_SYSTEM").is_none() {
+        std::env::set_var("WGPU_DX12_PRESENTATION_SYSTEM", "visual");
+        tracing::info!("DX12 presentation = DirectComposition visual (투명 창 지원)");
+    }
+}
 
 /// config.general.renderer → iced 렌더러 선택 환경변수.
 ///
@@ -150,6 +198,8 @@ fn main() -> iced::Result {
     let config = engine::load_config();
     let window_state = WindowState::load();
     apply_renderer_preference(&config.general.renderer);
+    // 창을 만들기 전에 투명 여부를 확정해야 한다 (창 설정·레이아웃·렌더에 모두 영향).
+    init_window_transparency(&config);
 
     // Windows 불투명 창의 배경색 — 카드가 덮지 않는 픽셀(라운드 모서리 바깥,
     // 힌트 영역)이 검정 대신 테마 배경색으로 칠해진다.
@@ -208,7 +258,7 @@ fn main() -> iced::Result {
     .window(window::Settings {
         size: initial_size,
         decorations: false,
-        transparent: WINDOW_TRANSPARENT,
+        transparent: window_transparent(),
         level: window::Level::AlwaysOnTop,
         position,
         resizable: true,
@@ -221,7 +271,7 @@ fn main() -> iced::Result {
     })
     .theme(app::App::theme)
     .style(move |_state, _theme| iced::theme::Style {
-        background_color: if WINDOW_TRANSPARENT {
+        background_color: if window_transparent() {
             Color::TRANSPARENT
         } else {
             opaque_bg
