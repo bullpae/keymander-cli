@@ -26,9 +26,16 @@ param(
 # 빌드 프로파일 — -Fast 는 LTO 를 끈 fast 프로파일을 쓴다.
 # 실행 동작(opt-level/panic)은 release 와 같고 빌드만 빨라진다(10분+ → 20초대).
 # 정식 릴리스 산출물은 CI 가 release 프로파일로 만드므로 영향 없다.
-$Profile     = if ($Fast) { "fast" } else { "release" }
-$ProfileFlag = if ($Fast) { "--profile", "fast" } else { "--release" }
-$TargetDir   = if ($Fast) { "target\fast" } else { "target\release" }
+#
+# `--release` 대신 항상 `--profile <이름>` 2개 토큰을 쓴다. PowerShell 은 if 표현식
+# 결과가 원소 1개 배열이면 **스칼라로 언랩**하므로, @("--release") 로 감싸도
+# 문자열이 되어 @splatting 시 문자 단위로 쪼개진다
+# (cargo: "unexpected argument '-' found"). 2개 토큰이면 항상 배열이라 안전하다.
+# `--profile release` 는 `--release` 와 동일하다.
+# 변수명도 $Profile 은 PowerShell 자동 변수와 충돌하므로 $BuildProfile 을 쓴다.
+$BuildProfile = if ($Fast) { "fast" } else { "release" }
+$ProfileFlag  = @("--profile", $BuildProfile)
+$TargetDir    = Join-Path "target" $BuildProfile
 
 $ErrorActionPreference = "Stop"
 
@@ -153,7 +160,7 @@ try {
     if ($SkipTest) {
         Write-Warn "[2/4] 테스트 생략 (-SkipTest)"
     } else {
-        Write-Info "[2/4] 테스트 실행 ($Profile)..."
+        Write-Info "[2/4] 테스트 실행 ($BuildProfile)..."
         cargo test --workspace @ProfileFlag
         if ($LASTEXITCODE -ne 0) { Write-Fail "테스트 실패 — 배포 중단" }
         Write-Ok "모든 테스트 통과"
@@ -188,7 +195,7 @@ try {
     Write-Host ""
     Write-Host "=== 배포 완료 ===" -ForegroundColor Green
     Write-Host "  버전:  v$version"
-    Write-Host "  프로파일: $Profile$(if ($Fast) { '  (LTO off — 로컬 검증용)' })"
+    Write-Host "  프로파일: $BuildProfile$(if ($Fast) { '  (LTO off — 로컬 검증용)' })"
     Write-Host "  경로:  $DeployDir"
     $daemon = Get-Process -Name "kmd-daemon" -ErrorAction SilentlyContinue
     if ($daemon) {

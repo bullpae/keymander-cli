@@ -54,15 +54,14 @@ for arg in "$@"; do
 done
 
 # 빌드 프로파일 — --fast 는 LTO 를 끈 fast 프로파일 (Cargo.toml [profile.fast])
+# `--profile <이름>` 형태로 통일한다 (`--profile release` == `--release`).
 if [ "$FAST" = true ]; then
     PROFILE="fast"
-    PROFILE_FLAG="--profile fast"
-    TARGET_DIR="target/fast"
 else
     PROFILE="release"
-    PROFILE_FLAG="--release"
-    TARGET_DIR="target/release"
 fi
+PROFILE_FLAG="--profile $PROFILE"
+TARGET_DIR="target/$PROFILE"
 
 restart_daemon() {
     info "데몬/데스크톱 프로세스 종료 중..."
