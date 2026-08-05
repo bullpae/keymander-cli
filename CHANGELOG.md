@@ -18,8 +18,18 @@ All notable changes to keymander are documented here.
   | `lto="thin"`, `cgu=16` | 4분 43초 | 18.4MB |
   | **fast (`lto=false`, `cgu=16`)** | **21초** | 17.4MB |
 
+  `panic = "unwind"`도 함께 지정한다 — cargo는 테스트를 항상 unwind로 빌드하므로,
+  release의 `panic="abort"`를 상속하면 `cargo build`와 `cargo test`가 서로 다른
+  아티팩트를 만들어 의존성 378개를 두 번 컴파일한다(빌드 9분 + 테스트 9분).
+  unwind로 맞추면 테스트 단계 재컴파일이 8개 크레이트(29초)로 줄어든다.
+
+  **엔드투엔드 실측**: 코드 1줄 수정 후 `-Fast` 배포(빌드+테스트+배포+데몬 재시작)
+  **82초**, `-SkipTest` 병용 시 **9초**.
+
   `deploy-local.ps1 -Fast` / `deploy-local.sh --fast`로 사용한다. GitHub 릴리스
   자산은 CI가 기존 release 프로파일로 만들므로 배포물 품질에는 영향이 없다.
+  단, 체크아웃마다 `target/fast`가 따로 만들어지므로 **각 체크아웃의 첫 실행은
+  클린 빌드**(약 9~13분)다.
 
 ## [0.12.0] — 2026-08-05
 
