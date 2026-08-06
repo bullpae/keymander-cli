@@ -199,6 +199,45 @@ brew install bullpae/tap/keymander
 Installs `kmd` (TUI/CLI), `kmd-desktop`, and `kmd-daemon`. A starter config is
 available at `$(brew --prefix)/share/keymander/config.example.toml`.
 
+Upgrade with `brew upgrade keymander`.
+
+### Debian / Ubuntu (apt)
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://bullpae.github.io/keymander-cli/keymander-archive-keyring.asc \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/keymander.gpg
+echo "deb [signed-by=/etc/apt/keyrings/keymander.gpg] https://bullpae.github.io/keymander-cli/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/keymander.list
+sudo apt update && sudo apt install keymander
+```
+
+Upgrades then come with the usual `sudo apt update && sudo apt upgrade`.
+
+### Fedora / RHEL / CentOS (dnf, yum)
+
+```bash
+sudo rpm --import https://bullpae.github.io/keymander-cli/keymander-archive-keyring.asc
+sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
+  https://bullpae.github.io/keymander-cli/keymander.repo
+sudo dnf install keymander
+```
+
+Upgrades come with `sudo dnf upgrade keymander`.
+
+Both Linux repositories are `x86_64`/`amd64` only, are signed with the
+[archive key](dist/keymander-archive-keyring.asc), and carry the three most
+recent stable releases.
+
+### Windows (winget)
+
+```powershell
+winget install keymander
+```
+
+> Pending initial registration in `microsoft/winget-pkgs`. Until it lands, use
+> the portable zip from [Releases](https://github.com/bullpae/keymander-cli/releases).
+
 ### From source
 
 ```bash

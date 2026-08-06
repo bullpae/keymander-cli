@@ -1,20 +1,25 @@
 # 배포 채널 셋업 가이드
 
-keymander를 winget / Homebrew / .deb / .rpm으로 배포하기 위해 구축한 파이프라인의
+keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 파이프라인의
 **남은 수동 작업**과, **다른 프로젝트에 동일하게 적용하기 위한 체크리스트**.
 
-작성: 2026-07-12 (v0.9.2 기준)
+갱신: 2026-08-06 (v0.12.0 기준)
 
 ---
 
 ## 1. 현재 상태 요약
 
-| 채널 | 상태 | 남은 일 |
-|---|---|---|
-| GitHub Releases + SHA256SUMS | ✅ 자동화 완료 | 없음 |
-| Homebrew (`brew install bullpae/tap/keymander`) | ✅ 설치 가능 | 자동 갱신용 시크릿 등록 (§2.2) |
-| winget | 🔶 최초 등록 PR 심사 중 ([winget-pkgs#401304](https://github.com/microsoft/winget-pkgs/pull/401304)) | CLA 서명 (§2.1) + 자동 갱신용 시크릿 (§2.2) |
-| .deb / .rpm | ✅ CI 구성 완료 | 다음 릴리스(v0.9.3)부터 자산으로 첨부됨 |
+| 채널 | 사용자 명령 | 상태 | 남은 일 |
+|---|---|---|---|
+| GitHub Releases + SHA256SUMS | — | ✅ 자동 | 없음 |
+| Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
+| apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
+| yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
+| winget (Windows) | `winget install keymander` | ❌ 미등록 | 최초 등록 PR 재제출 + CLA 서명 (§2.1) |
+
+**주의 — 자산 첨부 ≠ 저장소.** `.deb`/`.rpm`을 릴리스 자산으로 올리는 것만으로는
+`apt update`/`dnf upgrade`가 새 버전을 찾지 못한다. 인덱스(`Packages`/`repodata`)와
+서명을 갖춘 저장소가 있어야 하며, 그 발행이 `publish-repos.yml` 잡이다.
 
 릴리스 자동화 흐름 (태그 push 시):
 
@@ -22,57 +27,95 @@ keymander를 winget / Homebrew / .deb / .rpm으로 배포하기 위해 구축한
 git tag vX.Y.Z && git push origin vX.Y.Z
   → build-cli / build-desktop / build-bundle / build-packages (deb·rpm)
   → release (SHA256SUMS.txt 생성 + GitHub Release 발행)
-  → update-tap    (homebrew-tap의 formula 자동 갱신)   ← TAP_GITHUB_TOKEN 필요
-  → update-winget (winget-pkgs에 갱신 PR 자동 제출)     ← WINGET_GITHUB_TOKEN 필요
+  → publish-repos (gh-pages에 APT/YUM 저장소 재발행)  ← GPG_PRIVATE_KEY
+  → update-tap    (homebrew-tap의 formula 자동 갱신)   ← TAP_DEPLOY_KEY
+  → update-winget (winget-pkgs에 갱신 PR 자동 제출)     ← WINGET_GITHUB_TOKEN
 ```
 
-`-`가 포함된 태그(`v1.0.0-rc1` 등)는 tap/winget 갱신을 건너뛴다.
+`-`가 포함된 태그(`v1.0.0-rc1` 등)는 세 갱신 잡을 모두 건너뛴다.
+
+### 1.1 Linux 저장소 구조
+
+`https://bullpae.github.io/keymander-cli/` (gh-pages 브랜치)
+
+```
+apt/pool/main/k/keymander/*.deb
+apt/dists/stable/main/binary-amd64/Packages{,.gz}
+apt/dists/stable/{Release,InRelease,Release.gpg}
+yum/x86_64/*.rpm + repodata/{repomd.xml,repomd.xml.asc}
+keymander-archive-keyring.{asc,gpg}   # 저장소 서명 공개키
+keymander.repo                        # dnf/yum 설정 파일
+```
+
+- 아키텍처는 `amd64`/`x86_64`만. CI가 리눅스용 deb/rpm을 그것만 만든다.
+- 최근 **안정 릴리스 3개**만 담는다 (`publish-repos.yml`의 `KEEP_RELEASES`).
+  릴리스당 약 17MB라, Pages 용량(1GB)과 롤백 여지의 절충값이다.
+- 저장소는 매 발행마다 릴리스에서 통째로 재생성하고 gh-pages를 force-push한다.
+  상태를 누적하지 않아 자기 치유적이고, 패키지 바이너리로 git 이력이 붓지 않는다.
+- 릴리스 없이 재발행/검증하려면: `gh workflow run publish-repos.yml`.
 
 ---
 
 ## 2. 직접 해야 하는 작업 (1회성)
 
-### 2.1 Microsoft CLA 서명 — winget 최초 등록
+### 2.1 winget 최초 등록 — 재제출 + CLA 서명
 
-winget-pkgs PR에는 Microsoft CLA 동의가 필요하다. **계정당 1회**만 하면 되고,
-이후 모든 PR(자동 갱신 포함)에 적용된다.
+**현재 미등록 상태다.** 최초 등록 PR
+[#401304](https://github.com/microsoft/winget-pkgs/pull/401304)은 매니페스트 검증
+(`Validation-Completed`, `Azure-Pipeline-Passed`)까지 통과했지만 **CLA가 끝내
+서명되지 않아 `Needs-CLA` 라벨이 붙은 채 CLOSED**됐다. 되살릴 수 없으므로 새 PR을
+내야 한다.
 
-1. [PR #401304](https://github.com/microsoft/winget-pkgs/pull/401304)에 `microsoft-github-policy-service` 봇이 남긴 코멘트를 확인한다.
-2. 봇 안내에 따라 PR에 코멘트를 단다 (개인 자격 기여):
+1. 최신 버전 매니페스트 생성:
+   ```bash
+   scripts/gen-winget-manifests.sh 0.12.0 /tmp/winget
+   ```
+2. `microsoft/winget-pkgs`를 fork하고 새 브랜치에 3개 파일을 올린다
+   (`manifests/b/bullpae/keymander/0.12.0/`). 저장소가 거대해서 clone보다
+   GitHub contents API로 올리는 게 훨씬 빠르다.
+3. PR 제목: `New package: bullpae.keymander version 0.12.0`
+4. **PR에 코멘트로 CLA 서명** — 이게 지난번에 빠진 단계다. 계정당 1회면 되고
+   이후 모든 PR(자동 갱신 포함)에 적용된다:
    ```
    @microsoft-github-policy-service agree
    ```
-3. 서명 후 자동 검증 파이프라인(Azure)이 돌고, `Validation-Completed` 라벨이 붙으면
-   모더레이터 승인을 기다린다. 신규 패키지는 보통 며칠 걸린다.
-4. 머지 확인: Windows에서 `winget search keymander` → `winget install keymander`.
+5. `Validation-Completed` 라벨 후 모더레이터 승인 대기 (신규 패키지는 보통 며칠).
+6. 머지 확인: Windows에서 `winget search keymander` → `winget install keymander`.
 
 문제가 생기면 PR에 봇이 라벨/코멘트로 원인을 남긴다
 (예: `Validation-Installation-Error`, `Manifest-Validation-Error`).
 
-### 2.2 PAT 발급 + 시크릿 등록 — 자동 갱신 활성화
+### 2.2 winget 자동 갱신용 PAT
 
-릴리스 CI가 다른 저장소(homebrew-tap, winget-pkgs fork)에 쓰기 위해 PAT가 필요하다.
-
-**가장 간단한 방법 — classic PAT 1개로 둘 다 처리:**
+최초 등록이 머지된 **뒤에야** 의미가 있다. winget-releaser는 winget-pkgs를
+fork하고 PR을 내야 하므로 deploy key로는 안 되고 사용자 PAT가 필요하다.
 
 1. GitHub → Settings → Developer settings → Personal access tokens →
    **Tokens (classic)** → Generate new token (classic)
-2. Note: `keymander-release-automation`, Expiration: 1년 권장
-3. Scopes: **`public_repo`** 하나만 체크
-   (homebrew-tap 쓰기 + winget-pkgs fork/PR 모두 공개 저장소라 이걸로 충분)
-4. 생성된 토큰을 복사한 뒤:
-   ```bash
-   gh secret set TAP_GITHUB_TOKEN    --repo bullpae/keymander-cli   # 붙여넣기
-   gh secret set WINGET_GITHUB_TOKEN --repo bullpae/keymander-cli   # 같은 토큰 붙여넣기
-   gh secret list --repo bullpae/keymander-cli                      # 확인
+2. Note: `keymander-winget-automation`, Expiration: 1년 권장
+3. Scopes: **`public_repo`** 하나만
+4. ```bash
+   gh secret set WINGET_GITHUB_TOKEN --repo bullpae/keymander-cli
    ```
 
-**보안을 더 조이려면** TAP 쪽만 fine-grained PAT로 분리:
-Fine-grained tokens → Repository access: `homebrew-tap`만 선택 →
-Permissions → Contents: **Read and write**. (winget 쪽은 임의 공개 저장소
-fork/PR이 필요해서 fine-grained로는 제약이 있다 — classic `public_repo` 사용.)
+토큰 만료 시 같은 명령으로 재등록. 만료가 다가오면 GitHub가 메일로 알려준다.
 
-토큰 만료 시 같은 명령으로 재등록하면 된다. 만료가 다가오면 GitHub가 메일로 알려준다.
+### 2.3 이미 등록된 시크릿 (재작업 불필요)
+
+| 시크릿 | 용도 | 형태 |
+|---|---|---|
+| `TAP_DEPLOY_KEY` | homebrew-tap formula 갱신 | homebrew-tap에 등록된 쓰기 가능 **deploy key**의 비밀키 |
+| `GPG_PRIVATE_KEY` | APT/YUM 저장소 서명 | 패스프레이즈 없는 armored 비밀키 |
+
+- **deploy key를 쓴 이유**: classic PAT(`public_repo`)는 계정의 모든 공개 저장소에
+  쓸 수 있고 만료 갱신이 필요하다. deploy key는 tap 저장소 하나에만 유효하고
+  만료가 없다. 교체하려면 tap 저장소 Settings → Deploy keys에서 지우고
+  새로 만들어 시크릿을 덮어쓴다.
+- **서명 키 백업**: `~/.keymander-release/`에 비밀키(`apt-signing-key.private.asc`)와
+  키링이 있다. 공개키는 저장소의 `dist/keymander-archive-keyring.asc`로 추적된다.
+  **이 비밀키를 잃으면 모든 사용자가 새 키를 다시 임포트해야 한다** — 백업 필수.
+  키 교체 시: 새 키 생성 → `GPG_PRIVATE_KEY` 갱신 → `dist/*.asc` 갱신 →
+  `publish-repos.yml` 재실행 → 사용자에게 재임포트 안내.
 
 ### 2.3 (권장) git 커미터 정보 설정
 
@@ -129,9 +172,39 @@ git config --global user.email "bullpae@gmail.com"
 5. CLA는 계정당 1회 (§2.1)
 6. 머지 후 `update-winget` 잡(winget-releaser)이 이후 버전을 자동 제출
 
-**④ .deb/.rpm** — Rust 프로젝트면 cargo-deb/cargo-generate-rpm 메타데이터 복사·수정
-후 `build-packages` 잡 복사. Rust가 아니면 [nfpm](https://nfpm.goreleaser.com/)이 같은
-역할(설정 파일 하나로 deb/rpm/apk 생성)을 한다.
+**④ .deb/.rpm 패키지** — Rust 프로젝트면 cargo-deb/cargo-generate-rpm 메타데이터
+복사·수정 후 `build-packages` 잡 복사. Rust가 아니면
+[nfpm](https://nfpm.goreleaser.com/)이 같은 역할(설정 파일 하나로 deb/rpm/apk 생성)을
+한다.
+
+**⑤ apt/yum 저장소** — ④까지는 "다운로드해서 설치"만 되고 `apt update`로 **갱신을
+받을 수는 없다**. 저장소를 따로 발행해야 한다.
+
+1. 서명 키 1회 생성 (패스프레이즈 없이 — CI에서 비대화로 서명해야 한다):
+   ```bash
+   export GNUPGHOME=~/.<프로젝트>-release/gnupg   # 경로가 길면 gpg-agent 소켓이 실패한다
+   mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+   gpg --batch --gen-key <<'EOF'
+   %no-protection
+   Key-Type: RSA
+   Key-Length: 4096
+   Key-Usage: sign
+   Name-Real: <프로젝트> archive signing key
+   Expire-Date: 0
+   %commit
+   EOF
+   ```
+   RSA를 쓰는 이유는 오래된 apt/rpm 호환이다 (ed25519는 rpm 4.15+ 필요).
+   만료를 두지 않는 이유는 만료된 저장소 키가 조용한 고장을 만들기 때문이다.
+2. 공개키는 저장소에 커밋, 비밀키는 `gh secret set GPG_PRIVATE_KEY`.
+   **비밀키 백업 필수** — 잃으면 전 사용자가 키를 다시 임포트해야 한다.
+3. `scripts/build-linux-repos.sh` + `.github/workflows/publish-repos.yml` 복사
+   (저장소 이름·아키텍처만 수정). GitHub Pages를 gh-pages 브랜치로 활성화:
+   ```bash
+   gh api -X POST repos/<계정>/<저장소>/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'
+   ```
+4. `gh workflow run publish-repos.yml`로 릴리스 없이 검증한 뒤 릴리스 워크플로에
+   `uses:`로 연결한다.
 
 **릴리스 전 로컬 검증법** (CI가 막히는 걸 예방):
 
@@ -167,3 +240,13 @@ brew install --formula ./Formula/<이름>.rb && brew test <이름> && brew unins
   않는다 (brew 설치 경로는 quarantine 미부착). 직접 다운로드와 다른 점.
 - **MSVC 배포 전제**: Windows 바이너리는 CRT 정적 링크(`crt-static`) 상태여야
   깨끗한 시스템에서 VCRUNTIME140.dll 없이 동작한다 (v0.9.1에서 적용).
+- **winget CLA를 미루면 PR이 닫힌다** — #401304은 매니페스트 검증을 다 통과하고도
+  CLA 미서명으로 CLOSED됐다. 닫힌 PR은 되살릴 수 없고 새 PR을 내야 한다.
+  PR을 열자마자 CLA 코멘트부터 달 것.
+- **gpg-agent "File name too long"** — `GNUPGHOME` 경로가 길면 agent 소켓 생성이
+  실패한다(유닉스 소켓 경로 길이 제한). 홈 디렉터리 바로 아래처럼 짧은 경로를 쓴다.
+- **apt는 서명 없는 저장소를 거부한다** — `Release`에 `InRelease`(클리어서명)나
+  `Release.gpg`가 없으면 `apt update`가 실패한다. `[trusted=yes]`로 우회할 수는
+  있지만 사용자에게 검증 없는 설치를 시키는 것이라 쓰지 않는다.
+- **Jekyll이 저장소 파일을 먹는다** — gh-pages에 `.nojekyll`이 없으면 Pages가
+  `repodata/` 같은 디렉터리를 임의로 처리할 수 있다. 반드시 넣을 것.

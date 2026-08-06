@@ -893,8 +893,8 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
-    let tap_disabled = type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT
-        || type_ == CG_EVENT_TAP_DISABLED_BY_USER_INPUT;
+    let tap_disabled =
+        type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT || type_ == CG_EVENT_TAP_DISABLED_BY_USER_INPUT;
 
     // null 이벤트 방어 (OS 오류 시)
     if event.is_null() && !tap_disabled {
