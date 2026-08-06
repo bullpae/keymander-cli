@@ -14,8 +14,19 @@ on:
   workflow_call:
   workflow_dispatch:
 
+# Pages는 브랜치(gh-pages)가 아니라 Actions 아티팩트로 배포한다.
+# 브랜치 방식은 릴리스마다 수십 MB의 패키지 바이너리를 git 객체로 밀어 넣고,
+# 배포 실패가 저장소 Actions 밖(legacy pages builder)에서 나 진단이 어렵다.
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+# 동시에 두 발행이 겹치지 않게 한다. 취소하지 않고 줄을 세우는 이유는
+# 저장소가 반쯤 갱신된 상태로 남는 걸 막기 위해서다.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 # 최근 몇 개 안정 릴리스를 저장소에 담을지. Pages 용량(1GB)과 롤백 여지의 절충 —
 # 릴리스 하나가 deb+rpm 약 17MB 다.
@@ -26,6 +37,9 @@ jobs:
   publish:
     name: Build and publish apt/yum repos
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
 
@@ -127,20 +141,31 @@ jobs:
           sudo dnf install keymander</pre>
           EOF
 
-      - name: Publish to gh-pages
+      - name: Upload Pages artifact
+        if: steps.key.outputs.has == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        if: steps.key.outputs.has == 'true'
+        uses: actions/deploy-pages@v4
+
+      - name: Smoke test the published repos
         if: steps.key.outputs.has == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.deploy.outputs.page_url }}
         run: |
-          cd site
-          git init -q -b gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "Publish apt/yum repositories ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-          # 저장소는 매번 최근 릴리스로부터 통째로 재생성되므로 이력을 쌓지 않는다.
-          # (패키지 바이너리가 누적되면 Pages 용량을 금방 먹는다)
-          git push -q --force \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
-            gh-pages
-          echo "gh-pages 갱신 완료"
+          # CDN 반영에 잠깐 걸린다. 서명 메타데이터가 실제로 받아지는지까지 본다.
+          for i in $(seq 1 10); do
+            if curl -fsS "${URL%/}/apt/dists/stable/InRelease" -o /tmp/InRelease; then
+              break
+            fi
+            echo "대기 ${i}/10..."; sleep 15
+          done
+          gpg --verify /tmp/InRelease
+          curl -fsS "${URL%/}/yum/x86_64/repodata/repomd.xml" -o /tmp/repomd.xml
+          curl -fsS "${URL%/}/yum/x86_64/repodata/repomd.xml.asc" -o /tmp/repomd.xml.asc
+          gpg --verify /tmp/repomd.xml.asc /tmp/repomd.xml
+          echo "✓ apt/yum 저장소 서명 검증 통과: $URL"
