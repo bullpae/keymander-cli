@@ -1,0 +1,146 @@
+name: Publish Linux Repos
+
+# APT/YUM 저장소를 GitHub Pages(gh-pages 브랜치)로 발행한다.
+#
+# 릴리스 자산으로 .deb/.rpm 을 올려두는 것만으로는 `apt update`/`dnf upgrade` 가
+# 갱신을 찾지 못한다. 인덱스(Packages/repodata)와 서명이 있는 저장소가 필요하다.
+#
+# 릴리스 워크플로가 workflow_call 로 호출하며, 수동 실행(workflow_dispatch)으로
+# 릴리스 없이 재발행/검증할 수도 있다.
+#
+# 필요한 시크릿: GPG_PRIVATE_KEY (armored 비밀키, 패스프레이즈 없음)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 최근 몇 개 안정 릴리스를 저장소에 담을지. Pages 용량(1GB)과 롤백 여지의 절충 —
+# 릴리스 하나가 deb+rpm 약 17MB 다.
+env:
+  KEEP_RELEASES: "3"
+
+jobs:
+  publish:
+    name: Build and publish apt/yum repos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check signing key
+        id: key
+        env:
+          HAS_KEY: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        run: echo "has=$HAS_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Skip notice
+        if: steps.key.outputs.has != 'true'
+        run: |
+          echo "::warning::GPG_PRIVATE_KEY 시크릿이 없어 저장소 발행을 건너뜁니다."
+
+      - name: Install repo tooling
+        if: steps.key.outputs.has == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev apt-utils createrepo-c rpm gnupg
+
+      - name: Import signing key
+        if: steps.key.outputs.has == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+          echo "GPG_KEY_ID=$FPR" >> "$GITHUB_ENV"
+          echo "서명 키: $FPR"
+
+      - name: Collect packages from recent stable releases
+        if: steps.key.outputs.has == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p staging
+          # 프리릴리스(-rc 등)는 안정 저장소에 넣지 않는다.
+          TAGS=$(gh release list --exclude-drafts --exclude-pre-releases \
+                   --limit 50 --json tagName --jq '.[].tagName' \
+                 | grep -v -- '-' | head -n "$KEEP_RELEASES")
+          echo "대상 릴리스:"; echo "$TAGS"
+          for tag in $TAGS; do
+            # v0.9.3 이전 릴리스에는 deb/rpm 자산이 없다 — 없으면 조용히 넘어간다.
+            gh release download "$tag" -D staging --clobber \
+              --pattern '*.deb' --pattern '*.rpm' 2>/dev/null || true
+          done
+          ls -la staging
+
+      - name: Build apt/yum trees
+        if: steps.key.outputs.has == 'true'
+        run: |
+          mkdir -p site
+          scripts/build-linux-repos.sh staging site
+
+      - name: Stage public key, .repo file and landing page
+        if: steps.key.outputs.has == 'true'
+        env:
+          BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          # Jekyll 이 repodata/ 같은 디렉터리를 건드리지 않게 한다.
+          touch site/.nojekyll
+
+          cp dist/keymander-archive-keyring.asc site/
+          gpg --dearmor < dist/keymander-archive-keyring.asc > site/keymander-archive-keyring.gpg
+
+          cat > site/keymander.repo <<EOF
+          [keymander]
+          name=keymander
+          baseurl=${BASE_URL}/yum/\$basearch
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=${BASE_URL}/keymander-archive-keyring.asc
+          EOF
+
+          # 안내 페이지 — 사용자가 URL 을 그냥 열었을 때 설치법이 보이게.
+          cat > site/index.html <<EOF
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>keymander Linux package repositories</title>
+          <style>
+            body{font:16px/1.6 system-ui,sans-serif;max-width:52rem;margin:3rem auto;padding:0 1rem}
+            pre{background:#f4f4f5;padding:1rem;border-radius:6px;overflow-x:auto}
+            @media(prefers-color-scheme:dark){body{background:#18181b;color:#e4e4e7}pre{background:#27272a}}
+          </style>
+          <h1>keymander Linux package repositories</h1>
+          <p>See <a href="https://github.com/${{ github.repository }}">${{ github.repository }}</a>.</p>
+          <h2>Debian / Ubuntu (apt)</h2>
+          <pre>sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL ${BASE_URL}/keymander-archive-keyring.asc \\
+            | sudo gpg --dearmor -o /etc/apt/keyrings/keymander.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/keymander.gpg] ${BASE_URL}/apt stable main" \\
+            | sudo tee /etc/apt/sources.list.d/keymander.list
+          sudo apt update && sudo apt install keymander</pre>
+          <h2>Fedora / RHEL / CentOS (dnf, yum)</h2>
+          <pre>sudo rpm --import ${BASE_URL}/keymander-archive-keyring.asc
+          sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo ${BASE_URL}/keymander.repo
+          sudo dnf install keymander</pre>
+          EOF
+
+      - name: Publish to gh-pages
+        if: steps.key.outputs.has == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish apt/yum repositories ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+          # 저장소는 매번 최근 릴리스로부터 통째로 재생성되므로 이력을 쌓지 않는다.
+          # (패키지 바이너리가 누적되면 Pages 용량을 금방 먹는다)
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            gh-pages
+          echo "gh-pages 갱신 완료"

@@ -271,19 +271,32 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
+  # 릴리스마다 GitHub Pages의 APT/YUM 저장소를 최근 릴리스 기준으로 재발행한다.
+  # 이게 있어야 `apt update`/`dnf upgrade`로 갱신을 받을 수 있다.
+  publish-repos:
+    name: Publish apt/yum repos
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    uses: ./.github/workflows/publish-repos.yml
+    secrets: inherit
+
   # 릴리스마다 bullpae/homebrew-tap의 formula를 자동 갱신한다.
-  # TAP_GITHUB_TOKEN(homebrew-tap 저장소 쓰기 권한 PAT) 시크릿이 없으면 건너뛴다.
+  #
+  # 인증은 PAT가 아니라 homebrew-tap에 등록된 **쓰기 가능 deploy key**를 쓴다.
+  # PAT(public_repo)는 계정의 모든 공개 저장소에 쓸 수 있고 만료 갱신이 필요하지만,
+  # deploy key는 tap 저장소 하나에만 유효하고 만료가 없다.
+  # TAP_DEPLOY_KEY 시크릿이 없으면 잡을 건너뛴다.
   update-tap:
     name: Update Homebrew Tap
     needs: release
     if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
     runs-on: ubuntu-latest
     steps:
-      - name: Check tap token
+      - name: Check tap deploy key
         id: tap
         env:
-          HAS_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN != '' }}
-        run: echo "has=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+          HAS_KEY: ${{ secrets.TAP_DEPLOY_KEY != '' }}
+        run: echo "has=$HAS_KEY" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
         if: steps.tap.outputs.has == 'true'
@@ -296,7 +309,7 @@ jobs:
       - name: Generate and push formula
         if: steps.tap.outputs.has == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sha() { sha256sum "artifacts/$1/$1.tar.gz" | cut -d' ' -f1; }
@@ -306,7 +319,13 @@ jobs:
             "$(sha keymander-portable-x86_64-unknown-linux-gnu)" \
             > keymander.rb
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/bullpae/homebrew-tap.git" tap
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
+
+          git clone git@github.com:bullpae/homebrew-tap.git tap
           mkdir -p tap/Formula
           cp keymander.rb tap/Formula/keymander.rb
           cd tap
