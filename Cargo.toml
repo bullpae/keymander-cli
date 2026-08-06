@@ -13,7 +13,7 @@ name = "keymander"
 version = "0.12.0"
 edition = "2021"
 build = "build.rs"
-description = "?ㅻ낫???섎굹濡?紐⑤뱺 寃껋쓣 吏?섑븳????CLI-first ?щ줈?ㅽ뵆?ロ뤌 ?곗쿂"
+description = "키보드 하나로 모든 것을 지휘한다 — CLI-first 크로스플랫폼 런처"
 license = "MIT"
 repository = "https://github.com/bullpae/keymander-cli"
 keywords = ["cli", "launcher", "tui", "terminal", "productivity"]
@@ -57,8 +57,8 @@ OriginalFilename = "kmd.exe"
 FileDescription = "keymander - keyboard-driven launcher"
 ProductName = "keymander"
 
-# .deb ?⑦궎吏?(cargo-deb) ??由대━???뚰겕?뚮줈?곗쓽 build-packages ?≪씠 ?ъ슜.
-# 諛붿씠?덈━ 3媛쒕? ?④퍡 ?댁쑝誘濡?--no-build濡??몄텧?쒕떎 (?ъ쟾 鍮뚮뱶 ?꾩닔).
+# .deb 패키징 (cargo-deb) — 릴리스 워크플로우의 build-packages 잡이 사용.
+# 바이너리 3개를 함께 담으므로 --no-build로 호출한다 (사전 빌드 필수).
 [package.metadata.deb]
 name = "keymander"
 maintainer = "bullpae <bullpae@gmail.com>"
@@ -76,7 +76,7 @@ assets = [
     ["README.md", "usr/share/doc/keymander/README.md", "644"],
 ]
 
-# .rpm ?⑦궎吏?(cargo-generate-rpm) ???숈씪?섍쾶 ?ъ쟾 鍮뚮뱶 ???몄텧.
+# .rpm 패키징 (cargo-generate-rpm) — 동일하게 사전 빌드 후 호출.
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/kmd", dest = "/usr/bin/kmd", mode = "755" },

@@ -2,7 +2,7 @@
 name = "kmd-daemon"
 version = "0.12.0"
 edition = "2021"
-description = "keymander Daemon ??background service with IPC, global hotkey, key bindings"
+description = "keymander Daemon — background service with IPC, global hotkey, key bindings"
 
 [[bin]]
 name = "kmd-daemon"

@@ -74,8 +74,14 @@ build_apt() {
     info "APT: .deb $n개 배치"
 
     # Packages 안의 Filename 은 저장소 루트 기준 상대 경로여야 한다.
-    ( cd "$root" && dpkg-scanpackages --arch "$DEB_ARCH" pool/ > "$bindir/Packages" )
+    #
+    # --multiversion 이 없으면 dpkg-scanpackages 는 패키지당 **최고 버전 하나만**
+    # 인덱스에 넣는다. pool 에 이전 릴리스를 같이 두는 의미(핀 고정·롤백)가
+    # 사라지므로 반드시 켠다 — `apt install keymander=0.11.3-1` 이 가능해진다.
+    ( cd "$root" && dpkg-scanpackages --multiversion --arch "$DEB_ARCH" pool/ \
+        > "$bindir/Packages" )
     gzip -9kf "$bindir/Packages"
+    info "APT: 인덱스 항목 $(grep -c '^Package:' "$bindir/Packages")개"
 
     ( cd "$root" && apt-ftparchive \
         -o "APT::FTPArchive::Release::Origin=$ORIGIN" \
