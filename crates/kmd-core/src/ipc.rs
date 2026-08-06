@@ -93,6 +93,10 @@ pub enum Response {
         /// 뜻이다 (구버전 데몬 응답에는 없음 → 기본 None)
         #[serde(default)]
         config_error: Option<String>,
+        /// 키보드 훅 설치 실패 메시지 — 있으면 데몬은 살아 있지만 키/핫키가
+        /// 하나도 잡히지 않는 상태다 (구버전 데몬 응답에는 없음 → 기본 None)
+        #[serde(default)]
+        keybind_error: Option<String>,
     },
     /// 자동 시작 등록 상태
     AutostartStatus { installed: bool },
@@ -314,6 +318,7 @@ mod tests {
             pid: 12345,
             keymap_layers: vec!["nav: LAlt".into()],
             config_error: None,
+            keybind_error: None,
         };
         let encoded = encode_response(&res).unwrap();
         let decoded = decode_response(&encoded).unwrap();
@@ -342,10 +347,12 @@ mod tests {
             Response::Status {
                 keymap_layers,
                 config_error,
+                keybind_error,
                 ..
             } => {
                 assert!(keymap_layers.is_empty());
                 assert!(config_error.is_none());
+                assert!(keybind_error.is_none());
             }
             _ => panic!("잘못된 타입"),
         }

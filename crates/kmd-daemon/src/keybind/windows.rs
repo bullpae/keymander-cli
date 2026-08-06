@@ -595,11 +595,15 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 );
 
                 if hook.is_null() {
+                    super::set_hook_error(Some(
+                        "키보드 훅 설치 실패 — SetWindowsHookExW 실패".into(),
+                    ));
                     tracing::error!("SetWindowsHookExW 실패");
                     running.store(false, Ordering::Relaxed);
                     return;
                 }
 
+                super::set_hook_error(None);
                 tracing::info!("키보드 훅 설치 완료");
 
                 // stop()이 WM_QUIT를 보낼 수 있도록 스레드 ID 공개

@@ -85,6 +85,55 @@ restart_daemon() {
     else
         fail "kmd-daemon 시작 실패"
     fi
+
+    # macOS: 접근성 권한이 없으면 데몬은 멀쩡히 뜨지만 CGEventTap 설치가 실패해
+    # Alt+Space 와 모든 레이어가 통째로 죽는다. status 는 여전히 "실행 중"으로
+    # 보이므로 배포 직후 로그로 직접 확인한다.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        sleep 1
+        if grep -q "CGEventTapCreate 실패" "$RUNTIME_DIR/daemon.log" 2>/dev/null; then
+            echo ""
+            warn "접근성(손쉬운 사용) 권한이 없어 키보드 훅이 설치되지 않았습니다."
+            warn "Alt+Space 와 nav/mouse 레이어가 동작하지 않습니다."
+            echo "    시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용 에서"
+            echo "    기존 kmd-daemon 항목을 제거(-)한 뒤 아래 경로를 다시 추가하세요:"
+            echo "      $DEPLOY_DIR/kmd-daemon"
+            echo "    (Finder 열기 후 ⌘⇧G 로 경로 붙여넣기)"
+            echo "    추가한 뒤: ./scripts/deploy-local.sh --restart"
+            echo ""
+        fi
+    fi
+}
+
+# macOS 코드 서명 — 재배포 시 접근성 권한 유지용.
+#
+# 링커의 ad-hoc 서명은 identifier 와 cdhash 가 바이너리 내용에서 파생되므로
+# 빌드할 때마다 바뀐다. TCC 는 ad-hoc 바이너리를 identifier+cdhash 로 매칭하기
+# 때문에, 재배포하면 손쉬운 사용 허용이 조용히 무효화되고 키 훅이 죽는다.
+#
+# KMD_CODESIGN_ID 에 자체 서명 코드 서명 인증서 이름을 주면 요구사항이
+# identifier + 인증서 앵커로 고정되어 재배포해도 권한이 유지된다.
+# (키체인 접근 > 인증서 지원 > 인증서 생성… 에서 "코드 서명" 용도로 1회 생성)
+codesign_binaries() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+
+    local sign_id="${KMD_CODESIGN_ID:--}"
+    local bin
+    for bin in kmd kmd-daemon kmd-desktop; do
+        if ! codesign --force --sign "$sign_id" \
+                --identifier "com.keymander.$bin" \
+                "$DEPLOY_DIR/$bin" 2>/dev/null; then
+            warn "codesign 실패: $bin"
+        fi
+    done
+
+    if [ "$sign_id" = "-" ]; then
+        warn "ad-hoc 서명 — 이번 배포로 접근성 권한이 초기화될 수 있습니다."
+        echo "    고정하려면 코드 서명 인증서를 만든 뒤:"
+        echo "      export KMD_CODESIGN_ID='<인증서 이름>'"
+    else
+        ok "코드 서명 완료 ($sign_id)"
+    fi
 }
 
 if $RESTART_ONLY; then
@@ -144,6 +193,7 @@ else
     info "기존 config.toml 유지 (덮어쓰기 안 함)"
 fi
 chmod +x "$DEPLOY_DIR/kmd" "$DEPLOY_DIR/kmd-desktop" "$DEPLOY_DIR/kmd-daemon"
+codesign_binaries
 
 ok "바이너리 배포 완료"
 

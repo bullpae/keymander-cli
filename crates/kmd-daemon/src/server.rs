@@ -97,9 +97,14 @@ pub fn run() -> color_eyre::Result<()> {
     // 키 바인딩 엔진 시작
     let mut kb_backend = keybind::create_backend();
     let kb_preset = resolve_keybind_preset(&config);
+    // start()는 훅 스레드를 띄우기만 하므로 Ok(())가 "훅 설치 성공"을 뜻하지
+    // 않는다. 실제 설치 결과는 keybind::hook_error()로 확인한다.
     match kb_backend.start(kb_preset) {
-        Ok(()) => tracing::info!("키 바인딩 엔진 시작됨"),
-        Err(e) => tracing::warn!("키 바인딩 시작 실패: {e}"),
+        Ok(()) => tracing::info!("키 바인딩 엔진 기동 (훅 설치 결과는 이후 로그 참조)"),
+        Err(e) => {
+            keybind::set_hook_error(Some(format!("키 바인딩 시작 실패: {e}")));
+            tracing::warn!("키 바인딩 시작 실패: {e}");
+        }
     }
 
     // 인덱스 빌드 + 검색 엔진 초기화
@@ -243,6 +248,7 @@ fn process_request(
                 pid: std::process::id(),
                 keymap_layers: KEYMAP_SUMMARY.lock().map(|g| g.clone()).unwrap_or_default(),
                 config_error: CONFIG_LOAD_ERROR.lock().map(|g| g.clone()).unwrap_or(None),
+                keybind_error: keybind::hook_error(),
             }
         }
 

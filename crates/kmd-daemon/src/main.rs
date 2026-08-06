@@ -65,15 +65,22 @@ fn send_status() -> Result<()> {
             pid,
             keymap_layers,
             config_error,
+            keybind_error,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
             println!("  가동 시간:  {uptime_secs}초");
             println!("  인덱스:     {index_items}개 항목");
+            if keybind_error.is_some() {
+                println!("  키 훅:      ❌ 미동작 (아래 키 입력이 가로채지지 않습니다)");
+            }
             for layer in &keymap_layers {
                 println!("  레이어:     {layer}");
             }
             println!("  자동 시작:  {}", autostart_label());
+            if let Some(err) = &keybind_error {
+                println!("  ⚠ 키 훅:    {err}");
+            }
             if let Some(err) = &config_error {
                 println!("  ⚠ 설정:     {err}");
                 println!("              → 데몬이 기본 설정으로 동작 중입니다. config.toml을 고친 뒤 재시작하세요.");

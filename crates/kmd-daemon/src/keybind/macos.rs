@@ -29,6 +29,9 @@ const CG_EVENT_KEY_DOWN: u32 = 10;
 const CG_EVENT_KEY_UP: u32 = 11;
 const CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+/// 입력 폭주 시 OS가 탭을 꺼버릴 때 오는 타입. 타임아웃과 마찬가지로
+/// 재활성화하지 않으면 재시작 전까지 훅이 조용히 죽는다.
+const CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
 
 const CG_SESSION_EVENT_TAP: u32 = 1;
 const CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
@@ -890,16 +893,24 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
+    let tap_disabled = type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        || type_ == CG_EVENT_TAP_DISABLED_BY_USER_INPUT;
+
     // null 이벤트 방어 (OS 오류 시)
-    if event.is_null() && type_ != CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+    if event.is_null() && !tap_disabled {
         return event;
     }
 
-    // 타임아웃으로 비활성화된 경우 재활성화 + 일시 상태 리셋
-    if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+    // 타임아웃/입력 폭주로 비활성화된 경우 재활성화 + 일시 상태 리셋
+    if tap_disabled {
         let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);
         if !tap.is_null() {
-            tracing::warn!("CGEventTap 타임아웃 감지 — 재활성화 및 상태 리셋");
+            let cause = if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
+                "타임아웃"
+            } else {
+                "입력 폭주"
+            };
+            tracing::warn!("CGEventTap 비활성화 감지({cause}) — 재활성화 및 상태 리셋");
             CGEventTapEnable(tap, true);
         }
         if let Some(state) = HOOK_STATE.get() {
@@ -1270,9 +1281,20 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                 }
 
                 if tap.is_null() {
+                    // 여기서 죽어도 데몬 본체는 계속 산다 — status가 "실행 중"으로
+                    // 보이는 함정을 막으려면 실패 사유를 반드시 남겨야 한다.
+                    let exe = std::env::current_exe()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "kmd-daemon".into());
+                    super::set_hook_error(Some(format!(
+                        "키보드 훅 설치 실패 (AXIsProcessTrusted={trusted}) — \
+                         시스템 설정 > 개인 정보 보호 및 보안 > 손쉬운 사용에서 \
+                         {exe} 을(를) 다시 허용하세요. \
+                         재빌드하면 서명이 바뀌어 기존 허용이 무효화됩니다."
+                    )));
                     tracing::error!(
                         "CGEventTapCreate 실패 — 접근성(손쉬운 사용) 권한을 확인하세요. \
-                         (AXIsProcessTrusted={trusted}, pid={})",
+                         (AXIsProcessTrusted={trusted}, pid={}, exe={exe})",
                         std::process::id()
                     );
                     running.store(false, Ordering::Relaxed);
@@ -1284,6 +1306,9 @@ impl KeyboardBackend for MacOSKeyboardBackend {
 
                 let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
                 if source.is_null() {
+                    super::set_hook_error(Some(
+                        "키보드 훅 설치 실패 — CFMachPortCreateRunLoopSource 실패".into(),
+                    ));
                     tracing::error!("CFMachPortCreateRunLoopSource 실패");
                     CFRelease(tap);
                     running.store(false, Ordering::Relaxed);
@@ -1298,6 +1323,7 @@ impl KeyboardBackend for MacOSKeyboardBackend {
                     *store = Some(SendPtr(rl));
                 }
 
+                super::set_hook_error(None);
                 tracing::info!("CGEventTap 키보드 훅 설치 완료");
 
                 CFRunLoopRun();

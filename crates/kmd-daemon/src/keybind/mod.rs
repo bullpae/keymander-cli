@@ -16,6 +16,29 @@ pub mod macos;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+
+// ── 훅 설치 상태 보고 ────────────────────────────────────────────────────────
+//
+// OS 훅 설치는 백그라운드 스레드에서 일어나므로 start()가 돌려주는 Ok(())는
+// "훅이 살아 있다"는 뜻이 아니다. macOS에서 접근성 권한이 없으면 데몬은 멀쩡히
+// 뜨고 status도 레이어 목록을 그대로 뿌리지만 키는 하나도 잡히지 않는다.
+// 실제 설치 결과를 여기에 기록해 `kmd daemon status`가 조용한 실패를 드러낸다.
+
+/// 훅 설치 실패 사유. None = 정상 동작 중.
+static HOOK_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// 훅 설치 결과 기록 — 성공 시 None, 실패 시 사용자에게 보여줄 사유.
+pub fn set_hook_error(reason: Option<String>) {
+    if let Ok(mut g) = HOOK_ERROR.lock() {
+        *g = reason;
+    }
+}
+
+/// 현재 훅 설치 실패 사유 (없으면 None)
+pub fn hook_error() -> Option<String> {
+    HOOK_ERROR.lock().ok().and_then(|g| g.clone())
+}
 
 // ── 가상 키 코드 (플랫폼 공용) ──────────────────────────────────────────────
 
