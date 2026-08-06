@@ -151,6 +151,10 @@ jobs:
         id: deploy
         if: steps.key.outputs.has == 'true'
         uses: actions/deploy-pages@v4
+        with:
+          # 기본 10분으로는 부족하다 — 사이트가 릴리스 3개분 패키지라 50MB대이고,
+          # deployment_in_progress 단계에서 그대로 타임아웃했다.
+          timeout: 1800000
 
       - name: Smoke test the published repos
         if: steps.key.outputs.has == 'true'
