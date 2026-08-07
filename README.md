@@ -223,7 +223,9 @@ sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
 sudo dnf install keymander
 ```
 
-Upgrades come with `sudo dnf upgrade keymander`.
+`dnf` asks you to accept the repository signing key on first use — the
+fingerprint is `F3B8 2E91 E79C 359C 31C8 D68A 1D8F FE79 02A7 444F`.
+Upgrades then come with `sudo dnf upgrade keymander`.
 
 Both Linux repositories are `x86_64`/`amd64` only, are signed with the
 [archive key](dist/keymander-archive-keyring.asc), and carry the three most

@@ -15,7 +15,7 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
 | apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
-| winget (Windows) | `winget install keymander` | ❌ 미등록 | 최초 등록 PR 재제출 + CLA 서명 (§2.1) |
+| winget (Windows) | `winget install keymander` | 🔶 등록 PR 심사 대기 | **CLA 서명** (§2.1) — 이거 하나 남았다 |
 
 **주의 — 자산 첨부 ≠ 저장소.** `.deb`/`.rpm`을 릴리스 자산으로 올리는 것만으로는
 `apt update`/`dnf upgrade`가 새 버전을 찾지 못한다. 인덱스(`Packages`/`repodata`)와
@@ -36,7 +36,8 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 ### 1.1 Linux 저장소 구조
 
-`https://bullpae.github.io/keymander-cli/` (gh-pages 브랜치)
+`https://bullpae.github.io/keymander-cli/` — GitHub Pages, **Actions 아티팩트 배포**
+(브랜치 방식 아님. 저장소 Settings → Pages → Source = GitHub Actions)
 
 ```
 apt/pool/main/k/keymander/*.deb
@@ -48,42 +49,61 @@ keymander.repo                        # dnf/yum 설정 파일
 ```
 
 - 아키텍처는 `amd64`/`x86_64`만. CI가 리눅스용 deb/rpm을 그것만 만든다.
-- 최근 **안정 릴리스 3개**만 담는다 (`publish-repos.yml`의 `KEEP_RELEASES`).
-  릴리스당 약 17MB라, Pages 용량(1GB)과 롤백 여지의 절충값이다.
-- 저장소는 매 발행마다 릴리스에서 통째로 재생성하고 gh-pages를 force-push한다.
-  상태를 누적하지 않아 자기 치유적이고, 패키지 바이너리로 git 이력이 붓지 않는다.
+- 최근 **안정 릴리스 2개**만 담는다 (`publish-repos.yml`의 `KEEP_RELEASES`).
+  현재+직전 버전이면 `apt install keymander=<직전버전>` 롤백이 되고, 사이트가
+  작아야 Pages 배포가 제때 끝난다(아래 참고).
+- 저장소는 매 발행마다 릴리스에서 통째로 재생성한다. 상태를 누적하지 않아
+  자기 치유적이다 — 한 번 깨져도 다음 발행이 정상화한다.
 - 릴리스 없이 재발행/검증하려면: `gh workflow run publish-repos.yml`.
+
+**`Deploy to GitHub Pages` 스텝이 빨간불이어도 실패가 아니다.**
+`actions/deploy-pages`는 배포 완료를 최대 10분만 기다리고 포기한다(`timeout`
+입력을 더 크게 줘도 `600000`ms로 잘린다). 이 사이트는 패키지 바이너리 때문에
+그보다 오래 걸리지만 배포 자체는 뒤이어 성공한다. 그래서 그 스텝은
+`continue-on-error`로 두고, **바로 다음 스모크 테스트가 실제 게이트**다.
+스모크 테스트는 URL이 200을 주는지가 아니라 *이번 빌드의 버전이 인덱스에
+들어 있는지*로 판정한다 — 배포가 실패하면 이전 저장소가 그대로 200을 주기 때문에
+단순 도달성 검사로는 조용한 실패를 못 잡는다.
 
 ---
 
 ## 2. 직접 해야 하는 작업 (1회성)
 
-### 2.1 winget 최초 등록 — 재제출 + CLA 서명
+### 2.1 winget 최초 등록 — CLA 서명 ⚠️ 남은 유일한 수동 작업
 
-**현재 미등록 상태다.** 최초 등록 PR
-[#401304](https://github.com/microsoft/winget-pkgs/pull/401304)은 매니페스트 검증
-(`Validation-Completed`, `Azure-Pipeline-Passed`)까지 통과했지만 **CLA가 끝내
-서명되지 않아 `Needs-CLA` 라벨이 붙은 채 CLOSED**됐다. 되살릴 수 없으므로 새 PR을
-내야 한다.
+등록 PR은 제출돼 있다:
+**[winget-pkgs#413755](https://github.com/microsoft/winget-pkgs/pull/413755)**
+(`bullpae.keymander` 0.12.0).
 
-1. 최신 버전 매니페스트 생성:
-   ```bash
-   scripts/gen-winget-manifests.sh 0.12.0 /tmp/winget
-   ```
-2. `microsoft/winget-pkgs`를 fork하고 새 브랜치에 3개 파일을 올린다
-   (`manifests/b/bullpae/keymander/0.12.0/`). 저장소가 거대해서 clone보다
-   GitHub contents API로 올리는 게 훨씬 빠르다.
-3. PR 제목: `New package: bullpae.keymander version 0.12.0`
-4. **PR에 코멘트로 CLA 서명** — 이게 지난번에 빠진 단계다. 계정당 1회면 되고
-   이후 모든 PR(자동 갱신 포함)에 적용된다:
-   ```
-   @microsoft-github-policy-service agree
-   ```
-5. `Validation-Completed` 라벨 후 모더레이터 승인 대기 (신규 패키지는 보통 며칠).
-6. 머지 확인: Windows에서 `winget search keymander` → `winget install keymander`.
+**PR 본인 계정으로 아래 코멘트를 달아야 한다.** 법적 동의라 대리 서명 불가:
+
+```
+@microsoft-github-policy-service agree
+```
+
+계정당 1회면 되고 이후 모든 PR(자동 갱신 포함)에 적용된다. 그다음:
+
+1. 자동 검증(Azure) → `Validation-Completed` 라벨
+2. 모더레이터 승인 대기 (신규 패키지는 보통 며칠)
+3. 머지 확인: Windows에서 `winget search keymander` → `winget install keymander`
 
 문제가 생기면 PR에 봇이 라벨/코멘트로 원인을 남긴다
 (예: `Validation-Installation-Error`, `Manifest-Validation-Error`).
+
+**이전 시도가 왜 실패했나** — [#401304](https://github.com/microsoft/winget-pkgs/pull/401304)은
+매니페스트 검증(`Validation-Completed`, `Azure-Pipeline-Passed`)을 다 통과하고도
+CLA가 끝내 서명되지 않아 `Needs-CLA` 라벨이 붙은 채 CLOSED됐다. 닫힌 PR은
+되살릴 수 없다. **PR을 열면 바로 CLA부터 달 것.**
+
+**재제출이 필요해지면**:
+
+```bash
+scripts/gen-winget-manifests.sh <버전> /tmp/winget
+```
+로 매니페스트 3종을 만들고, fork한 `winget-pkgs`의 새 브랜치에
+`manifests/b/bullpae/keymander/<버전>/` 으로 올린 뒤 PR을 낸다.
+저장소가 거대해서 clone보다 GitHub contents API로 올리는 게 훨씬 빠르다.
+PR 제목 관례: `New package: bullpae.keymander version X.Y.Z`
 
 ### 2.2 winget 자동 갱신용 PAT
 
@@ -248,5 +268,15 @@ brew install --formula ./Formula/<이름>.rb && brew test <이름> && brew unins
 - **apt는 서명 없는 저장소를 거부한다** — `Release`에 `InRelease`(클리어서명)나
   `Release.gpg`가 없으면 `apt update`가 실패한다. `[trusted=yes]`로 우회할 수는
   있지만 사용자에게 검증 없는 설치를 시키는 것이라 쓰지 않는다.
-- **Jekyll이 저장소 파일을 먹는다** — gh-pages에 `.nojekyll`이 없으면 Pages가
+- **Jekyll이 저장소 파일을 먹는다** — 배포 산출물에 `.nojekyll`이 없으면 Pages가
   `repodata/` 같은 디렉터리를 임의로 처리할 수 있다. 반드시 넣을 것.
+- **`dpkg-scanpackages`는 기본이 최신 버전 1개** — `--multiversion` 없이는 pool에
+  이전 릴리스를 둬도 인덱스에 안 들어가 버전 고정·롤백이 안 된다.
+- **dnf는 repo 키를 따로 묻는다** — `rpm --import`를 미리 했어도 `repo_gpgcheck=1`
+  때문에 첫 사용 시 키 수락 프롬프트가 뜬다(정상). 비대화 환경은 `-y` 필요.
+- **컨테이너로 끝까지 검증할 것** — 서명 검증만으로는 `Filename` 경로 오류나
+  아키텍처 불일치를 못 잡는다. 실제 설치까지 돌려보는 게 확실하다:
+  ```bash
+  podman run --rm --platform linux/amd64 ubuntu:24.04 bash -c '<위 apt 설치 절차>'
+  podman run --rm --platform linux/amd64 fedora:41   bash -c '<위 dnf 설치 절차>'
+  ```
