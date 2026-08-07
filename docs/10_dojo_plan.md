@@ -1,6 +1,7 @@
 # kmd dojo — 인터랙티브 키맵 트레이너 구현 계획
 
-> 상태: 계획 (v0.11 이후 목표) · 관련: README "Missions" 섹션, [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md)
+> **상태: 미구현 계획** (2026-08-08 확인 — 현재 v0.12.0, 관련 코드 없음) ·
+> 관련: README "Missions" 섹션, [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md)
 
 ## 1. 목표와 컨셉
 

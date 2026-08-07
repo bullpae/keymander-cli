@@ -288,6 +288,13 @@ RAlt 홀드 마우스 레이어 추가.
   매칭 포함). Windows(SendInput)/macOS(CGEvent, 드래그 이벤트 합성) 네이티브
   구현 + kanata 프리셋(`movemouse-accel-*`) 동일 배치. 레이어 트리거 해제·
   keymap 토글 시 이동/버튼 전체 정지(stuck-mouse 방지).
+- **LLM 오토파일럿 (Windows)** — `@gpt`/`@claude`/`@gemini` 프리픽스로 연 창에
+  키를 주입해 프롬프트를 자동 제출한다. URL `?q=`로는 프리필만 되고 실행이 안 되는
+  서비스를 확장 설치 없이 처리한다. 안전 장치로 **전경창이 알려진 브라우저이고
+  기대 타이틀 마커를 포함할 때만** 주입하며, 조건이 어긋나면 조용히 포기해
+  프리필/클립보드 상태로 남긴다(회귀 없음). `@@`로 기억된 여러 LLM 창에 후속
+  질문을 이어서 전달. Windows 외 플랫폼은 스텁이라 기존 URL 폴백을 쓴다.
+  설계 근거는 [docs/09_llm_autopilot_plan.md](docs/09_llm_autopilot_plan.md).
 
 ## [0.9.5] — 2026-07-13
 
@@ -547,4 +554,5 @@ Stability & security release — 코드 전반 감사에서 발견된 실버그�
 
 ## [0.3.x] and earlier
 
-See git log for earlier history.
+상세 내역은 [docs/v03-changelog.md](docs/v03-changelog.md)에 있다.
+그보다 앞선 이력은 git log를 참고할 것.
