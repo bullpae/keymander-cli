@@ -101,6 +101,7 @@ fn check_status() -> Result<()> {
             pid,
             keymap_layers,
             config_error,
+            hook_health,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
@@ -108,6 +109,9 @@ fn check_status() -> Result<()> {
             println!("  인덱스:     {index_items}개 항목");
             for layer in &keymap_layers {
                 println!("  레이어:     {layer}");
+            }
+            if let Some(hook) = &hook_health {
+                println!("  키보드 훅:  {hook}");
             }
             println!("  로그:       {}", daemon_log_path().display());
             if let Some(err) = &config_error {

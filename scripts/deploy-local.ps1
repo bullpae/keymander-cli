@@ -111,10 +111,32 @@ function Start-Daemon {
     if (-not (Test-Path $daemonExe)) {
         Write-Fail "kmd-daemon.exe 를 찾을 수 없습니다: $daemonExe"
     }
-    Start-Process -FilePath $daemonExe -WindowStyle Hidden
-    Start-Sleep -Seconds 1
-
-    $proc = Get-Process -Name "kmd-daemon" -ErrorAction SilentlyContinue
+    # kmd.exe 경유로 띄운다 — `kmd daemon start`가 stdout/stderr를
+    # %APPDATA%\kmd\daemon.log 로 리다이렉트한다. 예전처럼 exe를 직접
+    # Start-Process 하면 로그가 통째로 버려져, 훅 재설치 경고 같은 진단
+    # 정보를 재발 시 확인할 수 없다.
+    #
+    # 기다리지 않고 띄운다. 이 자리에서 블로킹하면 배포가 영영 안 끝난다:
+    #   - `& kmd.exe | ...` → DETACHED 데몬이 kmd.exe의 stdout 파이프 핸들을
+    #     상속해, PowerShell이 파이프가 닫히기를 무한 대기
+    #   - `Start-Process -Wait` → PS 5.1은 job 객체로 자손 프로세스까지
+    #     기다리므로 상시 실행 데몬에서 역시 무한 대기
+    # 시작 확인은 아래 Get-Process 검증이 담당한다.
+    $cliExe = Join-Path $DeployDir "kmd.exe"
+    if (Test-Path $cliExe) {
+        Start-Process -FilePath $cliExe -ArgumentList 'daemon', 'start' -WindowStyle Hidden
+    } else {
+        Write-Info "kmd.exe 없음 — 데몬을 직접 실행합니다 (로그 미기록)"
+        Start-Process -FilePath $daemonExe -WindowStyle Hidden
+    }
+    # kmd.exe 경유라 기동이 한 단계 늘었다 — 고정 1초 대기로는 아직
+    # 데몬이 안 떠 있어 멀쩡한 배포가 "시작 실패"로 보고됐다. 폴링으로 확인한다.
+    $proc = $null
+    foreach ($i in 1..20) {
+        Start-Sleep -Milliseconds 500
+        $proc = Get-Process -Name "kmd-daemon" -ErrorAction SilentlyContinue
+        if ($proc) { break }
+    }
     if ($proc) {
         Write-Ok "kmd-daemon 실행 중 (PID: $($proc.Id))"
     } else {

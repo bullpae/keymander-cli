@@ -93,6 +93,11 @@ pub enum Response {
         /// 뜻이다 (구버전 데몬 응답에는 없음 → 기본 None)
         #[serde(default)]
         config_error: Option<String>,
+        /// 키보드 훅 생존 요약 (예: "정상 · 마지막 이벤트 0.4초 전 · 재설치 2회").
+        /// OS가 LL 훅을 조용히 제거하면 데몬은 살아 있는데 키맵만 죽으므로,
+        /// "실행 중" 표시만으로는 진단이 안 된다 (구버전 데몬 → 기본 None).
+        #[serde(default)]
+        hook_health: Option<String>,
     },
     /// 자동 시작 등록 상태
     AutostartStatus { installed: bool },
@@ -314,6 +319,7 @@ mod tests {
             pid: 12345,
             keymap_layers: vec!["nav: LAlt".into()],
             config_error: None,
+            hook_health: None,
         };
         let encoded = encode_response(&res).unwrap();
         let decoded = decode_response(&encoded).unwrap();

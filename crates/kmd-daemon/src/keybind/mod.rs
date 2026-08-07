@@ -880,6 +880,32 @@ pub trait KeyboardBackend: Send {
     fn stop(&mut self) -> Result<(), String>;
 }
 
+/// 키보드 훅 생존 요약 — `kmd daemon status`로 노출한다.
+///
+/// Windows는 LL 훅을 조용히 제거하므로(Modern Standby 복귀, 콜백 타임아웃 등)
+/// "데몬 실행 중"만으로는 키맵이 살아 있는지 알 수 없다. 훅 워치독이 남기는
+/// 하트비트/재설치 횟수를 그대로 보여준다.
+pub fn hook_health_summary() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let reinstalls = windows::hook_reinstall_count();
+        let idle_ms = windows::hook_idle_ms()?;
+        let reinstall_note = if reinstalls == 0 {
+            String::new()
+        } else {
+            format!(" · 재설치 {reinstalls}회")
+        };
+        Some(format!(
+            "설치됨 · 마지막 키 이벤트 {:.1}초 전{reinstall_note}",
+            idle_ms as f64 / 1000.0
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// 현재 플랫폼에 맞는 KeyboardBackend 생성
 pub fn create_backend() -> Box<dyn KeyboardBackend> {
     #[cfg(windows)]

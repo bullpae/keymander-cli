@@ -243,6 +243,7 @@ fn process_request(
                 pid: std::process::id(),
                 keymap_layers: KEYMAP_SUMMARY.lock().map(|g| g.clone()).unwrap_or_default(),
                 config_error: CONFIG_LOAD_ERROR.lock().map(|g| g.clone()).unwrap_or(None),
+                hook_health: keybind::hook_health_summary(),
             }
         }
 
