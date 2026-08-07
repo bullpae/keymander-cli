@@ -261,8 +261,30 @@ brew install --formula ./Formula/<이름>.rb && brew test <이름> && brew unins
 - **MSVC 배포 전제**: Windows 바이너리는 CRT 정적 링크(`crt-static`) 상태여야
   깨끗한 시스템에서 VCRUNTIME140.dll 없이 동작한다 (v0.9.1에서 적용).
 - **winget CLA를 미루면 PR이 닫힌다** — #401304은 매니페스트 검증을 다 통과하고도
-  CLA 미서명으로 CLOSED됐다. 닫힌 PR은 되살릴 수 없고 새 PR을 내야 한다.
-  PR을 열자마자 CLA 코멘트부터 달 것.
+  CLA 미서명으로 CLOSED됐다. PR을 열자마자 CLA 코멘트부터 달 것.
+  **CLA 코멘트는 `@microsoft-github-policy-service agree` 한 줄을 그대로** 달아야
+  한다. 다른 문구(예: "Ver 0.12.0")를 달면 봇이 인식하지 못하고 `Needs-CLA`가
+  그대로 남는다 — #413755에서 실제로 이렇게 헛돌았다. 서명 여부는 라벨이 아니라
+  `license/cla` 체크로 확인하는 게 확실하다:
+  ```bash
+  gh api repos/microsoft/winget-pkgs/commits/$(gh api repos/microsoft/winget-pkgs/pulls/<번호> --jq .head.sha)/check-runs \
+    --jq '.check_runs[] | select(.name=="license/cla") | .conclusion'   # null = 미서명
+  ```
+  (닫힌 PR은 브랜치가 남아 있으면 `gh pr reopen`으로 되살릴 수 있다.)
+- **`Validation-Installation-Error`가 곧 패키지 문제는 아니다** — 실패 상세는 PR
+  코멘트에 안 붙고 Azure 파이프라인 아티팩트에만 있다. 반드시 받아서 볼 것:
+  ```bash
+  # PR 첫 코멘트의 파이프라인 링크에서 buildId 확인 후
+  BASE=https://dev.azure.com/shine-oss/8b78618a-7973-49d8-9174-4360829d979b/_apis/build/builds/<buildId>
+  curl -s "$BASE/timeline?api-version=7.0"      # 실패한 태스크와 log id
+  curl -sfL -o ivl.zip "$BASE/artifacts?artifactName=InstallationVerificationLogs&api-version=7.0&\$format=zip"
+  ```
+  #413755(0.12.0)의 실패는 검증 VM의 Defender 시그니처 업데이트 실패
+  (`hr=0x80070652`) → MotW 첨부 스캔이 `0x80004005` 반환 → winget이
+  `0x8A15002D`(보안 검사 실패)로 중단한 **환경 문제**였다. 위협 탐지 기록은
+  전혀 없었고 매니페스트/URL/정책/카탈로그 검증은 모두 통과했다.
+  `0x8A15002D`는 "악성 판정"이 아니라 "스캔을 수행하지 못함"이다 — 탐지
+  판정인지 아닌지는 로그에 threat/quarantine 기록이 있는지로 가른다.
 - **gpg-agent "File name too long"** — `GNUPGHOME` 경로가 길면 agent 소켓 생성이
   실패한다(유닉스 소켓 경로 길이 제한). 홈 디렉터리 바로 아래처럼 짧은 경로를 쓴다.
 - **apt는 서명 없는 저장소를 거부한다** — `Release`에 `InRelease`(클리어서명)나
