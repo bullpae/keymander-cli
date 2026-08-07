@@ -258,21 +258,40 @@ mod tests {
         assert!(rx.try_recv().is_err(), "stop_all 후 이동 없음");
     }
 
-    #[test]
-    fn slow_mode_reduces_step() {
+    /// 주어진 시간 동안 오른쪽으로 이동시키고 누적 이동량을 돌려준다.
+    fn distance_moved(window: Duration, slow: bool) -> i32 {
         let (tx, rx) = mpsc::channel();
         let worker = MouseWorker::start(RecordingSink(tx));
-
-        // slow 모드에서 초기 틱 이동량은 일반 모드보다 작아야 한다
-        worker.engage(MouseBind::Slow);
-        worker.engage(MouseBind::MoveRight);
-        let mut slow_first = 0;
-        for _ in 0..3 {
-            let (dx, _) = rx.recv_timeout(Duration::from_millis(500)).expect("이동");
-            slow_first += dx;
+        if slow {
+            worker.engage(MouseBind::Slow);
         }
+        worker.engage(MouseBind::MoveRight);
+        std::thread::sleep(window);
         worker.stop_all();
-        // slow: 180*0.25 = 45px/s → 8ms 틱당 0.36px → 3틱에 1px 안팎
-        assert!(slow_first <= 3, "저속 3틱 누적 {slow_first}px");
+
+        let mut total = 0;
+        while let Ok((dx, _)) = rx.try_recv() {
+            total += dx;
+        }
+        total
+    }
+
+    #[test]
+    fn slow_mode_reduces_step() {
+        // "N틱 동안의 절대 이동량"으로 재면 안 된다 — 틱당 이동은 고정 dt를 쓰지만
+        // 가속 램프는 벽시계 기준이라, 러너가 느려 틱 간격이 벌어지면 같은 틱 수에도
+        // 가속이 더 붙어 이동량이 커진다(CI에서 이 테스트가 그렇게 깨졌다).
+        //
+        // 대신 같은 벽시계 구간을 두 모드로 재서 비율을 본다. 램프 진행이 양쪽 모두
+        // 같은 시간 축을 타므로 부하가 걸려도 SLOW_FACTOR(0.25)만큼의 차이는 남는다.
+        const WINDOW: Duration = Duration::from_millis(120);
+        let normal = distance_moved(WINDOW, false);
+        let slow = distance_moved(WINDOW, true);
+
+        assert!(normal > 0, "일반 모드에서 이동이 있어야 함");
+        assert!(
+            slow * 2 < normal,
+            "저속 {slow}px 는 같은 시간 일반 {normal}px 의 절반 미만이어야 함"
+        );
     }
 }
