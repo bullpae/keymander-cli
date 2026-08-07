@@ -7,3 +7,19 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 keymander-portable-*.zip
+
+# 비밀정보 — 공개 저장소라 한 번 커밋되면 지워도 이미 노출이다.
+# 저장소 서명 비밀키는 ~/.keymander-release/ 에 두고 여기엔 절대 두지 않는다.
+# (배포용 공개키 dist/keymander-archive-keyring.asc 는 예외로 추적한다)
+*.pem
+*.key
+*.p12
+*.pfx
+*.private.asc
+id_rsa
+id_ed25519
+*_deploy_key
+.env
+.env.*
+!.env.example
+secrets.toml

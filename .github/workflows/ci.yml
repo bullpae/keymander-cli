@@ -10,6 +10,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # 공개 저장소라 비밀정보는 커밋되는 순간 노출이고, 파일을 지워도 이력에 남는다.
+  # GitHub push protection은 공급자 토큰(ghp_ 등)만 막고 개인키 블록 같은
+  # 비공급자 패턴은 저장소 설정을 따로 켜야 잡히므로, 그 사각지대를 여기서 막는다.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # 이력 전수 검사에 필요
+      - run: scripts/scan-secrets.sh --history
+
   check:
     name: Check
     runs-on: ${{ matrix.os }}

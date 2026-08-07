@@ -3,7 +3,7 @@
 keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 파이프라인의
 **남은 수동 작업**과, **다른 프로젝트에 동일하게 적용하기 위한 체크리스트**.
 
-갱신: 2026-08-06 (v0.12.0 기준)
+갱신: 2026-08-08 (v0.12.0 기준)
 
 ---
 
@@ -15,7 +15,7 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | Homebrew | `brew install bullpae/tap/keymander` | ✅ 설치·갱신 자동 | 없음 |
 | apt (Debian/Ubuntu) | `apt install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
-| winget (Windows) | `winget install keymander` | 🔶 등록 PR 심사 대기 | **CLA 서명** (§2.1) — 이거 하나 남았다 |
+| winget (Windows) | `winget install keymander` | 🔶 등록 PR 검증·승인 대기 | 없음 — CLA 서명 완료(2026-08-08), 모더레이터 승인 대기 |
 
 **주의 — 자산 첨부 ≠ 저장소.** `.deb`/`.rpm`을 릴리스 자산으로 올리는 것만으로는
 `apt update`/`dnf upgrade`가 새 버전을 찾지 못한다. 인덱스(`Packages`/`repodata`)와
@@ -69,13 +69,13 @@ keymander.repo                        # dnf/yum 설정 파일
 
 ## 2. 직접 해야 하는 작업 (1회성)
 
-### 2.1 winget 최초 등록 — CLA 서명 ⚠️ 남은 유일한 수동 작업
+### 2.1 winget 최초 등록 — CLA 서명 ✅ 완료 (승인 대기 중)
 
-등록 PR은 제출돼 있다:
-**[winget-pkgs#413755](https://github.com/microsoft/winget-pkgs/pull/413755)**
-(`bullpae.keymander` 0.12.0).
+등록 PR: **[winget-pkgs#413755](https://github.com/microsoft/winget-pkgs/pull/413755)**
+(`bullpae.keymander` 0.12.0). 2026-08-08에 CLA 서명이 확인됐다
+(`license/cla` = success, `Needs-CLA` 라벨 해제).
 
-**PR 본인 계정으로 아래 코멘트를 달아야 한다.** 법적 동의라 대리 서명 불가:
+CLA는 **PR 본인 계정으로** 아래 코멘트를 다는 것이다. 법적 동의라 대리 서명 불가:
 
 ```
 @microsoft-github-policy-service agree
@@ -137,14 +137,19 @@ fork하고 PR을 내야 하므로 deploy key로는 안 되고 사용자 PAT가 �
   키 교체 시: 새 키 생성 → `GPG_PRIVATE_KEY` 갱신 → `dist/*.asc` 갱신 →
   `publish-repos.yml` 재실행 → 사용자에게 재임포트 안내.
 
-### 2.3 (권장) git 커미터 정보 설정
+### 2.4 git 커미터 정보 ✅ 설정 완료
 
-현재 로컬 커밋이 `ATOM <atom@ATOM-MacBook-Pro.local>`로 기록되고 있다:
+한동안 로컬 커밋이 `ATOM <atom@ATOM-MacBook-Pro.local>`로 기록돼 기기 이름이
+이력에 남았다(커밋 182개). 2026-08-08에 아래로 설정해 이후 커밋은 정상이다:
 
 ```bash
 git config --global user.name  "bullpae"
 git config --global user.email "bullpae@gmail.com"
 ```
+
+이미 남은 182개는 **되돌리지 않기로 했다.** 이력을 재작성하면 모든 커밋 해시가
+바뀌어 배포된 태그·릴리스·포크와 어긋나는데, 얻는 것은 기기 이름을 가리는 것뿐이라
+비용이 이득을 넘는다.
 
 ---
 
@@ -173,7 +178,15 @@ git config --global user.email "bullpae@gmail.com"
 1. 프로젝트에 `scripts/gen-homebrew-formula.sh` 복사 후 수정
 2. 릴리스 산출물의 SHA를 넣어 초기 formula 생성 → tap 저장소에 커밋
 3. `brew install bullpae/tap/<이름>`으로 설치 검증 (`brew test <이름>`까지)
-4. `update-tap` 잡 복사, `TAP_GITHUB_TOKEN` 시크릿 등록 (기존 토큰 재사용 가능)
+4. `update-tap` 잡 복사. 인증은 **PAT가 아니라 tap 저장소 deploy key**를 쓴다 —
+   계정 전체에 쓰이는 classic PAT보다 범위가 좁고 만료가 없다:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C "<프로젝트> release automation" -f /tmp/tapkey
+   gh api -X POST repos/<계정>/homebrew-tap/keys \
+     -f title="<프로젝트> release automation" -f key="$(cat /tmp/tapkey.pub)" -F read_only=false
+   gh secret set TAP_DEPLOY_KEY --repo <계정>/<저장소> < /tmp/tapkey
+   shred -u /tmp/tapkey /tmp/tapkey.pub
+   ```
 
 **③ winget** — 최초 1회 수동 등록 + 이후 자동:
 
@@ -302,3 +315,55 @@ brew install --formula ./Formula/<이름>.rb && brew test <이름> && brew unins
   podman run --rm --platform linux/amd64 ubuntu:24.04 bash -c '<위 apt 설치 절차>'
   podman run --rm --platform linux/amd64 fedora:41   bash -c '<위 dnf 설치 절차>'
   ```
+
+---
+
+## 5. 공개 저장소 위생
+
+이 저장소는 2026-02-11 생성 시점부터 **public**이다. 즉 커밋된 순간 노출이고,
+나중에 파일을 지우거나 이력을 재작성해도 이미 클론·포크·캐시된 것은 되돌릴 수
+없다. **비밀정보가 들어갔다면 삭제가 아니라 폐기·교체가 답이다.**
+
+### 5.1 방어선
+
+| 층 | 무엇을 막나 | 상태 |
+|---|---|---|
+| GitHub push protection | 공급자 토큰(`ghp_`, AWS 키 등) 푸시 차단 | ✅ 켜짐 |
+| GitHub secret scanning | 위와 동일 패턴 사후 탐지 | ✅ 켜짐 |
+| 비공급자 패턴 스캔 | **개인키 블록** 등 | ⚠️ 꺼짐 — §5.2 |
+| `scripts/scan-secrets.sh` (CI `secrets` 잡) | 개인키·토큰, **이력 전수** | ✅ 켜짐 |
+| `.gitignore` | `*.pem` `*.key` `*.private.asc` `.env` 등 | ✅ |
+
+CI 잡은 `--history`로 돌아 **삭제된 파일까지** 검사한다. 지운다고 노출이 사라지지
+않으므로 현재 트리만 보는 것은 의미가 약하다.
+
+로컬에서도 같은 검사를 돌릴 수 있다:
+
+```bash
+scripts/scan-secrets.sh            # 추적 파일만 (빠름)
+scripts/scan-secrets.sh --history  # 전체 이력 (느림, CI와 동일)
+```
+
+> 스크립트 패턴은 `-----`로 시작하므로 grep에 반드시 `-e`로 넘겨야 한다.
+> 그냥 넘기면 옵션으로 파싱돼 **아무것도 못 잡고 조용히 통과한다** — 실제로
+> 그렇게 만들었다가 심어둔 개인키를 놓쳤다. 가드를 고칠 때는 반드시
+> 가짜 비밀정보를 심어 잡히는지부터 확인할 것.
+
+### 5.2 남은 수동 작업 — 비공급자 패턴 스캔 켜기
+
+REST API(`PATCH /repos/{o}/{r}`)는 이 설정을 200으로 받고도 **조용히 무시한다**.
+웹 UI에서만 켜진다:
+
+**Settings → Advanced Security → Secret Protection →
+"Scan for non-provider patterns" → Enable**
+
+켜면 GitHub이 개인키 블록 같은 범용 패턴도 푸시 차단 대상으로 잡아준다.
+CI 잡이 이미 같은 역할을 하므로 중복 방어이지, 이게 없다고 뚫리는 건 아니다.
+
+### 5.3 공개돼 있는 신원 정보 (의도된 것)
+
+- `bullpae@gmail.com` — `Cargo.toml`의 maintainer, GPG 키 UID, 커밋 작성자.
+  패키지 메인테이너 연락처는 `apt show`/`dnf info`에 노출되는 게 정상이다.
+- `dist/keymander-archive-keyring.asc` — 저장소 서명 **공개키**. 배포하라고 있는
+  것이라 추적이 정상이며 `.gitignore` 예외로 지정돼 있다.
+- 서명 **비밀키**는 `~/.keymander-release/`에만 있고 저장소에 없다. 절대 넣지 말 것.
