@@ -322,6 +322,13 @@ impl MouseSink for WinMouseSink {
     }
 }
 
+/// [P3 스파이크] 현재 전경 앱에 Ctrl+V 주입 — 클립보드 붙여넣기 확장의 핵심 능력.
+pub(super) fn inject_paste() {
+    const VK_CONTROL: u16 = 0x11;
+    const VK_V: u16 = 0x56;
+    send_combo(&[VK_CONTROL], VK_V);
+}
+
 fn send_combo(modifier_vks: &[u16], key_vk: u16) {
     for &m in modifier_vks {
         send_key_down(m);

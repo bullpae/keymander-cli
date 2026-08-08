@@ -354,6 +354,13 @@ fn process_request(
                 message: "이어서 질문 전달 중".into(),
             }
         }
+
+        Request::InjectPaste => {
+            keybind::inject_paste();
+            Response::Ok {
+                message: "붙여넣기 주입".into(),
+            }
+        }
     }
 }
 
