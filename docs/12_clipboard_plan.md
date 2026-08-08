@@ -108,8 +108,9 @@ Nucleo 엔진 재사용). 각 항목은 첫 줄 미리보기 + 복사 시각 + �
   이 흐름의 유일한 전제) 그 앱을 활성화하고 주입한다.
 - `Cmd+Enter` = 클립보드에 복사만 (붙여넣기는 내가 알아서).
 - prefix는 `;` — 한 글자(빈도 높은 기능은 짧게), 기존 문법(`:calc`,
-  `:e`, `!`, `@gpt`)과 충돌 없음. alias `:clip`, `:v` 병행 등록
+  `:e`, `!`, `@gpt`)과 충돌 없음. alias `:clip` 병행 등록
   (query_prefix.rs COMMANDS — 단일 진실 소스).
+  ⚠️ `:v`는 이미 Version이 쓰므로 클립보드 별칭으로 쓰지 않는다.
 - nav 레이어 `V` = 런처를 `;` 프리필로 실행 (`launch:kmd-desktop` 확장,
   홈로우에서 히스토리 탐색까지 두 키). — Y(yank)·P(paste) 옆의 V, vim의
   visual 선택 니모닉.
@@ -129,16 +130,27 @@ Request::InjectPaste                        → (기존, R3-1) ClipPaste의 기�
 (calc/emoji)도 "결과를 이전 앱에 바로 붙여넣기"를 쓸 수 있게 되는 부수 효과
 (예: `:calc 3*7` → Enter가 복사가 아니라 **붙여넣기**).
 
-## 6. 구현 순서 (각 단계가 독립적으로 유용)
+## 6. 구현 순서 및 진행 상태
 
-1. **P1 — 수집 + 흐름 A** (R3-2 불필요, 지금 가능): 데몬 클립보드 감시 링
-   버퍼 + `BindAction::ClipPaste(n)` + 클립보드 스왑·복원. 이것만으로
-   "LAlt+2 = 두 번 전 복사 붙여넣기"가 동작한다.
-2. **P2 — R3-2 전경창 캡처**: 데몬 Launch 경로에서 전경 앱 스냅샷
-   (autopilot의 창 추적 재사용).
-3. **P3 — 흐름 B**: `;` prefix + `ClipHistory`/`ClipPaste` IPC + 런처 통합
-   + nav `V`.
-4. **v2**: 레지스터(a–z), 이미지, 출처 앱 표시, `:calc` 결과 직접 붙여넣기.
+1. ✅ **P1 — 수집 + 흐름 A**: 데몬 감시 링 버퍼 + `BindAction::ClipPaste(n)` +
+   스왑·복원. E2E 검증. `LAlt+n` 즉시 붙여넣기 동작.
+2. ✅ **P1.1 — 프라이버시**: Concealed(비번) 제외 + changeCount 감시 (macOS).
+3. ✅ **P2 — 전경창 캡처 + 흐름 B 데몬 능력**: NSWorkspace 전경 PID 캡처/활성화,
+   `paste_slot_to_previous`, IPC(`ClipHistory`/`ClipPaste{to_previous}`).
+   E2E 검증(캡처→다른 앱→복귀 붙여넣기).
+4. ⬜ **P3 — 흐름 B 런처 UI** (남은 마지막 조각, 대화형 테스트 필요):
+   - `query_prefix.rs`: `QueryPrefix::Clipboard` + alias `;`, `:clip` 추가
+     (COMMANDS). `;`는 `:` 아닌 선행문자라 `prefix_of`/`normalize_slash_command`
+     처리 확인 필요.
+   - `search_routing.rs`: `handle_clip_query` — 데몬에 `ClipHistory` IPC(블로킹,
+     localhost sub-ms) → `ClipHit`를 결과 아이템으로. 로컬 확장과 달리 IPC 소스.
+   - 결과 실행: `ItemKind::Clipboard`(kmd-core) 추가 + `launch.rs`에서 Enter 시
+     `ClipPaste{slot, to_previous:true}` IPC 전송 후 창 닫기 → 데몬이 이전 앱
+     활성화+붙여넣기(이미 검증된 경로). `Cmd+Enter`=복사만.
+   - (선택) nav `V` = `;` 프리필 런처 실행.
+   - **GUI 상호작용이라 헤드리스 E2E 불가** — 구현 후 실기기에서 alt+space →
+     `;검색` → Enter → 이전 앱 붙여넣기 흐름을 사용자가 확인해야 한다.
+5. ⬜ **v2**: 레지스터(a–z), 이미지, 출처 앱 표시, `:calc` 결과 직접 붙여넣기.
 
 ## 7. 검증 계획
 
