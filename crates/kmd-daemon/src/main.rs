@@ -5,6 +5,7 @@
 
 mod autopilot;
 mod autostart;
+mod clipboard;
 mod keybind;
 mod server;
 

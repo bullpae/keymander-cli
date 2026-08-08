@@ -11,6 +11,7 @@ pub enum Action {
     Install,
     Uninstall,
     PasteTest { delay_ms: u64 },
+    ClipTest { slot: usize, delay_ms: u64 },
 }
 
 pub fn run(action: Action) -> Result<()> {
@@ -21,7 +22,17 @@ pub fn run(action: Action) -> Result<()> {
         Action::Install => run_daemon_cmd("install"),
         Action::Uninstall => run_daemon_cmd("uninstall"),
         Action::PasteTest { delay_ms } => paste_test(delay_ms),
+        Action::ClipTest { slot, delay_ms } => clip_test(slot, delay_ms),
     }
+}
+
+/// [P1 검증] 지연 후 데몬에 클립보드 슬롯 붙여넣기를 요청한다.
+fn clip_test(slot: usize, delay_ms: u64) -> Result<()> {
+    println!(
+        "{delay_ms}ms 후 클립보드 슬롯 {slot}을 전경 앱에 붙여넣습니다 — 대상 앱으로 전환하세요..."
+    );
+    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    send_command(ipc::Request::ClipPaste { slot }, "clip-test")
 }
 
 /// [P3 스파이크] 지연 후 데몬에 붙여넣기 주입을 요청한다.

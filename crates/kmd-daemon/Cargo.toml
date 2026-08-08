@@ -22,6 +22,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Error handling
 color-eyre = "0.6"
 
+# 클립보드 — 히스토리 감시/붙여넣기(docs/12, 크로스플랫폼) + LLM 오토파일럿 주입
+arboard = "3.6.1"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
@@ -32,5 +35,3 @@ windows-sys = { version = "0.59", features = [
     # 훅 워치독의 GetTickCount (훅 생존 하트비트)
     "Win32_System_SystemInformation",
 ] }
-# LLM 오토파일럿의 클립보드 주입 (Gemini PasteEnter 등)
-arboard = "3.6.1"

@@ -416,6 +416,8 @@ pub enum BindAction {
     /// 마우스 조작 — 키 down/up이 시작/정지에 대응하는 상태형 액션.
     /// 엔진이 [`engine::KeyDecision::MouseEngage`]/`MouseRelease`로 변환한다.
     Mouse(MouseBind),
+    /// 클립보드 히스토리 n번째(1-기반) 항목을 전경 앱에 붙여넣기 (docs/12 흐름 A).
+    ClipPaste(usize),
 }
 
 /// 마우스 바인딩 종류
@@ -799,6 +801,16 @@ fn parse_action(s: &str) -> Option<BindAction> {
 
     if let Some(mouse_str) = s.strip_prefix("mouse:") {
         return parse_mouse_bind(mouse_str).map(BindAction::Mouse);
+    }
+
+    // 클립보드 히스토리 n번째 붙여넣기 (예: "clip:2")
+    if let Some(n_str) = s.strip_prefix("clip:") {
+        return n_str
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n >= 1)
+            .map(BindAction::ClipPaste);
     }
 
     // 수정자+키 콤보 (예: "Ctrl+Left", "Ctrl+Shift+End")

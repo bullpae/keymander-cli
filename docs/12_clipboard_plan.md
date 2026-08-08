@@ -77,10 +77,17 @@ nav 레이어에는 이미 vim의 복사/붙여넣기 문법이 있다:
   주입 이벤트는 MAGIC_USER_DATA로 자체 탭 재처리 방지 — 기존 인프라).
 - 구현: 엔진에 `BindAction::ClipPaste(n)` 추가, 매핑 문법 `"clip:2"`.
 
-**트레이드오프 (명시)**: nav 레이어가 `unmapped=passthrough`인 프로필에서
-`Alt+1..9`를 레이어가 가로채게 된다 — Windows 브라우저의 Alt+숫자 탭 전환과
-충돌. 매핑이므로 사용자가 config에서 빼면 원복된다. 기본 프리셋에 넣되
-주석으로 끄는 법을 안내한다. (macOS는 Cmd+숫자가 탭 전환이라 충돌 없음.)
+**트레이드오프 (구현 시 결정)**: `clip:N`을 **기본 프리셋에 넣지 않기로 했다.**
+넣으면 (a) 히스토리가 opt-in(기본 off)인데도 Alt+숫자를 가로채고, (b) Windows
+브라우저의 Alt+숫자 탭 전환과 충돌한다. 대신 히스토리를 켤 때 사용자가 원하는
+슬롯만 직접 매핑한다 (docs/06 §4.7). opt-in 기능에는 opt-in 매핑이 맞다.
+(macOS는 Cmd+숫자가 탭 전환이라 Alt+숫자가 비어 충돌 없음.)
+
+**구현 상태 (2026-08-08, P1 완료)**: 데몬 수집(arboard 폴링 250ms · dedup ·
+1MB 상한 · 메모리 전용) + `BindAction::ClipPaste(n)` + 스왑→주입→복원 구현.
+E2E 검증: 표식 3개 순차 복사 → `clip-test --slot 2`로 두 번째 항목 정확히
+붙여넣기 + 원래 클립보드 복원 확인. 남은 것: Concealed 마크 제외(P1.1,
+NSPasteboard FFI), NSPasteboard changeCount 기반 감시(현재는 get_text 폴링).
 
 인체공학 노트: LAlt(왼엄지)+왼손 숫자(1–5)는 "홀드 손 ≠ 조작 손" 원칙에서
 벗어나지만, "n번째"라는 니모닉 가치가 원칙을 이긴다고 판단. 오른손 숫자

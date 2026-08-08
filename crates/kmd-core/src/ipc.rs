@@ -48,6 +48,9 @@ pub enum Request {
     /// 데스크톱이 클립보드를 세팅한 뒤 호출한다 — 클립보드 확장의 핵심 능력을
     /// 분리 구조에서 실증하기 위한 것 (docs/11).
     InjectPaste,
+    /// 클립보드 히스토리 n번째(1-기반) 항목을 전경 앱에 붙여넣기 (docs/12).
+    /// clip:N 레이어 바인딩과 같은 경로 — 검증/스크립팅용 IPC 표면.
+    ClipPaste { slot: usize },
 }
 
 fn default_limit() -> usize {

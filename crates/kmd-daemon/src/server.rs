@@ -126,6 +126,12 @@ pub fn run() -> color_eyre::Result<()> {
     // 백그라운드 인덱스 리프레셔 — 인덱싱 비용을 데몬이 소유한다
     spawn_index_refresher(engine.clone(), shutdown.clone());
 
+    // 클립보드 히스토리 감시 (opt-in) — clip:N 붙여넣기의 데이터 소스
+    crate::clipboard::spawn_watcher(
+        config.clipboard.history_enabled,
+        config.clipboard.history_size,
+    );
+
     // TCP 서버 시작 (OS가 빈 포트 자동 할당)
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -360,6 +366,18 @@ fn process_request(
             keybind::inject_paste();
             Response::Ok {
                 message: "붙여넣기 주입".into(),
+            }
+        }
+
+        Request::ClipPaste { slot } => {
+            // 워커가 아니라 여기서 직접 실행 — RESTORE_DELAY(300ms)만큼 블로킹하나
+            // 이 커넥션 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
+            crate::clipboard::paste_slot(slot);
+            Response::Ok {
+                message: format!(
+                    "클립보드 슬롯 {slot} 붙여넣기 (히스토리 {}건)",
+                    crate::clipboard::len()
+                ),
             }
         }
     }

@@ -14,10 +14,32 @@ pub struct Config {
     pub general: GeneralConfig,
     pub launcher: LauncherConfig,
     pub keybindings: KeybindingsConfig,
+    pub clipboard: ClipboardConfig,
 
     /// Config file path (excluded from serialization)
     #[serde(skip)]
     pub config_path: Option<PathBuf>,
+}
+
+/// 클립보드 히스토리 설정 (docs/12). 데몬이 시스템 클립보드를 감시해 링 버퍼에
+/// 쌓고, `clip:N` 레이어 바인딩이 n번째 최근 항목을 붙여넣는다.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ClipboardConfig {
+    /// 히스토리 수집 활성화. 기본 false(opt-in) — 비밀번호 관리자의 Concealed
+    /// 마크 제외가 아직 없어(P1.1), 사용자가 명시적으로 켜야 한다.
+    pub history_enabled: bool,
+    /// 링 버퍼 상한. 초과 시 오래된 것부터 밀려난다.
+    pub history_size: usize,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            history_enabled: false,
+            history_size: 50,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

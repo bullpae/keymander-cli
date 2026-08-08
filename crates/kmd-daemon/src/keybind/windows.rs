@@ -462,6 +462,7 @@ fn execute_action(action: &BindAction) {
             MouseBind::MoveRight => send_mouse_move(25, 0),
             MouseBind::Slow => {}
         },
+        BindAction::ClipPaste(n) => crate::clipboard::paste_slot(*n),
     }
 }
 

@@ -161,6 +161,17 @@ enum DaemonAction {
         #[arg(long, default_value_t = 3000)]
         delay_ms: u64,
     },
+    /// [실험] 클립보드 히스토리 n번째 항목을 지연 후 전경 앱에 붙여넣는다.
+    /// 클립보드 P1(docs/12 흐름 A) 검증용.
+    #[command(hide = true)]
+    ClipTest {
+        /// 붙여넣을 슬롯 (1=최신). 기본 1.
+        #[arg(long, default_value_t = 1)]
+        slot: usize,
+        /// 주입 전 대기(ms).
+        #[arg(long, default_value_t = 3000)]
+        delay_ms: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -309,6 +320,9 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Install => cmd::daemon::Action::Install,
                 DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,
                 DaemonAction::PasteTest { delay_ms } => cmd::daemon::Action::PasteTest { delay_ms },
+                DaemonAction::ClipTest { slot, delay_ms } => {
+                    cmd::daemon::Action::ClipTest { slot, delay_ms }
+                }
             })?;
         }
         Some(Commands::Portable { action }) => {
