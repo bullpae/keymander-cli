@@ -81,9 +81,15 @@ restart_daemon() {
     # 귀속이 깨끗하다. (kmd daemon install 로 LaunchAgent 등록)
     local agent="$HOME/Library/LaunchAgents/com.keymander.daemon.plist"
     if [ "$(uname -s)" = "Darwin" ] && [ -f "$agent" ]; then
-        info "데몬 재시작 중 (launchd)..."
-        launchctl kickstart -k "gui/$(id -u)/com.keymander.daemon" 2>/dev/null \
-            || { launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null || true; }
+        info "데몬 재시작 중 (launchd 재등록)..."
+        # kickstart 가 아니라 bootout+bootstrap 을 쓴다. launchd 는 서비스에
+        # 바이너리 서명 신원을 고정(pin)해 두는데, 배포로 바이너리가 바뀐 뒤
+        # kickstart 하면 신원 불일치로 새 프로세스를 OS_REASON_CODESIGNING 으로
+        # 즉사시킨다 (2026-08-08 실측 — 직접 실행은 되는데 kickstart 만 죽음).
+        # 재등록은 고정된 신원을 갱신하므로 항상 안전하다.
+        launchctl bootout "gui/$(id -u)/com.keymander.daemon" 2>/dev/null || true
+        sleep 1
+        launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null || true
     else
         info "데몬 시작 중..."
         if [ "$(uname -s)" = "Darwin" ]; then
