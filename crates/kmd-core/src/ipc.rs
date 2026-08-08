@@ -48,9 +48,24 @@ pub enum Request {
     /// 데스크톱이 클립보드를 세팅한 뒤 호출한다 — 클립보드 확장의 핵심 능력을
     /// 분리 구조에서 실증하기 위한 것 (docs/11).
     InjectPaste,
-    /// 클립보드 히스토리 n번째(1-기반) 항목을 전경 앱에 붙여넣기 (docs/12).
-    /// clip:N 레이어 바인딩과 같은 경로 — 검증/스크립팅용 IPC 표면.
-    ClipPaste { slot: usize },
+    /// 클립보드 히스토리 n번째(1-기반) 항목을 붙여넣기 (docs/12).
+    /// `to_previous=false`: 현재 전경 앱(흐름 A). `true`: 런처 열기 전 앱으로
+    /// 포커스를 되돌린 뒤(흐름 B — 런처가 결과 선택 시 사용).
+    ClipPaste {
+        slot: usize,
+        #[serde(default)]
+        to_previous: bool,
+    },
+    /// 클립보드 히스토리 검색 (흐름 B 런처). 빈 쿼리는 전체(최신순).
+    ClipHistory {
+        #[serde(default)]
+        query: String,
+        #[serde(default = "default_limit")]
+        limit: usize,
+    },
+    /// [검증용] 현재 전경 앱을 흐름 B 붙여넣기 대상으로 기억한다.
+    /// 실사용에서는 데몬이 런처 실행(Launch) 시점에 자동 캡처하므로 불필요.
+    ClipCaptureForeground,
 }
 
 fn default_limit() -> usize {
@@ -83,11 +98,22 @@ pub struct LlmJob {
 
 // ── 응답 ─────────────────────────────────────────────────────────────────────
 
+/// 클립보드 히스토리 검색 결과 항목 (docs/12 흐름 B).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipHit {
+    /// 1-기반 슬롯 번호 (붙여넣기 시 ClipPaste.slot으로 그대로 넘긴다)
+    pub slot: usize,
+    /// 첫 줄 미리보기 (최대 200자). 전체 내용은 응답에 담지 않는다.
+    pub preview: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Response {
     /// 검색 결과
     SearchResults { items: Vec<SearchHit> },
+    /// 클립보드 히스토리 검색 결과 (흐름 B)
+    ClipHistory { hits: Vec<ClipHit> },
     /// 데몬 상태
     Status {
         uptime_secs: u64,

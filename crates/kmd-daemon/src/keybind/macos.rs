@@ -733,6 +733,10 @@ fn execute_action(action: &BindAction) {
             }
         }
         BindAction::Launch(cmd) => {
+            // 런처가 포커스를 뺏기 전에 현재 전경 앱을 기억한다 (docs/12 흐름 B —
+            // 나중에 클립보드 항목을 그 앱에 붙여넣기 위함). kmd-desktop 실행에만
+            // 의미가 있으나 캡처 비용이 작아 모든 Launch에 둔다.
+            crate::clipboard::capture_foreground_app();
             let resolved = resolve_launch_cmd(cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {

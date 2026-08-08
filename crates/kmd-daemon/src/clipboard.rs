@@ -133,17 +133,83 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
 /// 붙여넣기 주입 동안 수집을 멈추는 플래그 (슬롯 스왑이 새 복사로 잡히지 않게).
 static SUPPRESS_CAPTURE: AtomicBool = AtomicBool::new(false);
 
-/// n번째 최근 항목을 현재 전경 앱에 붙여넣는다 (docs/12 흐름 A).
-///
-/// 1) 현재 클립보드 저장 → 2) 슬롯 내용으로 교체 → 3) Cmd+V/Ctrl+V 주입 →
-/// 4) 원래 클립보드 복원. 스왑 구간에는 수집을 멈춘다.
-///
-/// **액션 워커 스레드에서 호출** — RESTORE_DELAY 만큼 블로킹한다.
+/// 런처를 열기 직전의 전경 앱 PID (docs/12 흐름 B의 붙여넣기 대상).
+/// 0 = 없음. 런처가 포커스를 뺏기 전에 데몬이 스냅샷한다.
+static PREV_APP_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// 런처(kmd-desktop)를 띄우기 직전에 호출 — 현재 전경 앱을 기억한다.
+/// Launch 액션 경로에서 불러, 전역 핫키/레이어 어느 쪽으로 열든 캡처된다.
+pub fn capture_foreground_app() {
+    let pid = macos::frontmost_pid();
+    if pid > 0 {
+        PREV_APP_PID.store(pid, Ordering::Relaxed);
+    }
+}
+
+/// 히스토리를 쿼리로 필터링해 돌려준다 (흐름 B 런처 검색).
+/// 빈 쿼리는 전체(최신순). 대소문자 무시 부분일치 — 데몬은 후보만 넘기고
+/// 정교한 랭킹은 UI(Nucleo)가 한다. 슬롯 번호는 붙여넣기 시 그대로 쓴다.
+pub fn search(query: &str, limit: usize) -> Vec<kmd_core::ipc::ClipHit> {
+    let q = query.trim().to_lowercase();
+    let Ok(h) = HISTORY.lock() else {
+        return Vec::new();
+    };
+    h.iter()
+        .enumerate()
+        .filter(|(_, text)| q.is_empty() || text.to_lowercase().contains(&q))
+        .take(limit)
+        .map(|(i, text)| kmd_core::ipc::ClipHit {
+            slot: i + 1,
+            preview: preview_line(text),
+        })
+        .collect()
+}
+
+/// 첫 줄 + 길이 제한 미리보기 (UI 표시용, 내용 로그엔 안 남김).
+fn preview_line(text: &str) -> String {
+    let first = text.lines().next().unwrap_or("").trim();
+    if first.chars().count() > 200 {
+        first.chars().take(200).collect::<String>() + "…"
+    } else {
+        first.to_string()
+    }
+}
+
+/// n번째 최근 항목을 **현재 전경 앱**에 붙여넣는다 (docs/12 흐름 A — 레이어).
+/// 포커스가 이미 대상 앱에 있으므로 앱 전환 없이 바로 주입한다.
 pub fn paste_slot(n: usize) {
+    paste_impl(n, false);
+}
+
+/// n번째 항목을 **런처 열기 전 앱**으로 포커스를 되돌린 뒤 붙여넣는다
+/// (docs/12 흐름 B — 런처 검색 결과 선택). capture_foreground_app으로
+/// 기억해 둔 PID를 활성화한다.
+pub fn paste_slot_to_previous(n: usize) {
+    paste_impl(n, true);
+}
+
+/// 슬롯 붙여넣기 공통 구현.
+/// `to_previous`면 먼저 이전 전경 앱으로 포커스를 되돌린다.
+///
+/// 1) (선택) 이전 앱 활성화 → 2) 현재 클립보드 저장 → 3) 슬롯 내용으로 교체 →
+/// 4) Cmd+V/Ctrl+V 주입 → 5) 원래 클립보드 복원. 스왑 구간엔 수집을 멈춘다.
+///
+/// **액션 워커/커넥션 스레드에서 호출** — RESTORE_DELAY 만큼 블로킹한다.
+fn paste_impl(n: usize, to_previous: bool) {
     let Some(content) = slot(n) else {
         tracing::warn!("클립보드 슬롯 {n} 비어 있음 — 붙여넣기 생략");
         return;
     };
+
+    if to_previous {
+        let pid = PREV_APP_PID.load(Ordering::Relaxed);
+        if pid > 0 && macos::activate_pid(pid) {
+            // 앱 전환이 반영될 시간을 준다 (포커스가 도착해야 Cmd+V가 먹는다).
+            std::thread::sleep(Duration::from_millis(120));
+        } else {
+            tracing::warn!("이전 전경 앱 활성화 실패 (pid={pid}) — 현재 포커스에 붙여넣기");
+        }
+    }
 
     let mut board = match arboard::Clipboard::new() {
         Ok(b) => b,
@@ -223,6 +289,43 @@ mod macos {
             !found.is_null()
         }
     }
+
+    /// 현재 전경 앱의 PID. `[[NSWorkspace sharedWorkspace] frontmostApplication]`.
+    /// 없으면 0. (docs/12 흐름 B — 런처가 포커스를 뺏기 전에 캡처)
+    pub fn frontmost_pid() -> i32 {
+        unsafe {
+            let Some(ws_cls) = AnyClass::get(c"NSWorkspace") else {
+                return 0;
+            };
+            let ws: *mut AnyObject = msg_send![ws_cls, sharedWorkspace];
+            if ws.is_null() {
+                return 0;
+            }
+            let app: *mut AnyObject = msg_send![ws, frontmostApplication];
+            if app.is_null() {
+                return 0;
+            }
+            msg_send![app, processIdentifier]
+        }
+    }
+
+    /// PID로 앱을 전면 활성화. 성공하면 true.
+    /// `[[NSRunningApplication runningApplicationWithProcessIdentifier:] activateWithOptions:]`
+    pub fn activate_pid(pid: i32) -> bool {
+        // NSApplicationActivateIgnoringOtherApps
+        const ACTIVATE_IGNORING_OTHER_APPS: usize = 1 << 1;
+        unsafe {
+            let Some(cls) = AnyClass::get(c"NSRunningApplication") else {
+                return false;
+            };
+            let app: *mut AnyObject = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+            if app.is_null() {
+                return false;
+            }
+            let ok: bool = msg_send![app, activateWithOptions: ACTIVATE_IGNORING_OTHER_APPS];
+            ok
+        }
+    }
 }
 
 // 비-macOS: changeCount 개념이 없어 0 고정(감시 루프가 get_text diff로 폴백),
@@ -233,6 +336,12 @@ mod macos {
         0
     }
     pub fn is_concealed() -> bool {
+        false
+    }
+    pub fn frontmost_pid() -> i32 {
+        0
+    }
+    pub fn activate_pid(_pid: i32) -> bool {
         false
     }
 }

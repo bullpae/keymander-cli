@@ -10,8 +10,15 @@ pub enum Action {
     Status,
     Install,
     Uninstall,
-    PasteTest { delay_ms: u64 },
-    ClipTest { slot: usize, delay_ms: u64 },
+    PasteTest {
+        delay_ms: u64,
+    },
+    ClipTest {
+        slot: usize,
+        delay_ms: u64,
+        to_previous: bool,
+    },
+    ClipCapture,
 }
 
 pub fn run(action: Action) -> Result<()> {
@@ -22,17 +29,26 @@ pub fn run(action: Action) -> Result<()> {
         Action::Install => run_daemon_cmd("install"),
         Action::Uninstall => run_daemon_cmd("uninstall"),
         Action::PasteTest { delay_ms } => paste_test(delay_ms),
-        Action::ClipTest { slot, delay_ms } => clip_test(slot, delay_ms),
+        Action::ClipTest {
+            slot,
+            delay_ms,
+            to_previous,
+        } => clip_test(slot, delay_ms, to_previous),
+        Action::ClipCapture => send_command(ipc::Request::ClipCaptureForeground, "clip-capture"),
     }
 }
 
-/// [P1 검증] 지연 후 데몬에 클립보드 슬롯 붙여넣기를 요청한다.
-fn clip_test(slot: usize, delay_ms: u64) -> Result<()> {
-    println!(
-        "{delay_ms}ms 후 클립보드 슬롯 {slot}을 전경 앱에 붙여넣습니다 — 대상 앱으로 전환하세요..."
-    );
+/// [P1/P2 검증] 지연 후 데몬에 클립보드 슬롯 붙여넣기를 요청한다.
+/// `to_previous`면 런처 열기 전 앱으로 포커스를 되돌린 뒤 붙여넣는다(흐름 B).
+fn clip_test(slot: usize, delay_ms: u64, to_previous: bool) -> Result<()> {
+    let where_ = if to_previous {
+        "이전 전경 앱"
+    } else {
+        "현재 전경 앱"
+    };
+    println!("{delay_ms}ms 후 슬롯 {slot}을 {where_}에 붙여넣습니다...");
     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-    send_command(ipc::Request::ClipPaste { slot }, "clip-test")
+    send_command(ipc::Request::ClipPaste { slot, to_previous }, "clip-test")
 }
 
 /// [P3 스파이크] 지연 후 데몬에 붙여넣기 주입을 요청한다.

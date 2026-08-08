@@ -171,7 +171,13 @@ enum DaemonAction {
         /// 주입 전 대기(ms).
         #[arg(long, default_value_t = 3000)]
         delay_ms: u64,
+        /// 런처 열기 전 앱으로 포커스를 되돌린 뒤 붙여넣기 (흐름 B).
+        #[arg(long)]
+        to_previous: bool,
     },
+    /// [실험] 현재 전경 앱을 흐름 B 붙여넣기 대상으로 기억 (검증용).
+    #[command(hide = true)]
+    ClipCapture,
 }
 
 #[derive(Subcommand)]
@@ -320,9 +326,16 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Install => cmd::daemon::Action::Install,
                 DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,
                 DaemonAction::PasteTest { delay_ms } => cmd::daemon::Action::PasteTest { delay_ms },
-                DaemonAction::ClipTest { slot, delay_ms } => {
-                    cmd::daemon::Action::ClipTest { slot, delay_ms }
-                }
+                DaemonAction::ClipTest {
+                    slot,
+                    delay_ms,
+                    to_previous,
+                } => cmd::daemon::Action::ClipTest {
+                    slot,
+                    delay_ms,
+                    to_previous,
+                },
+                DaemonAction::ClipCapture => cmd::daemon::Action::ClipCapture,
             })?;
         }
         Some(Commands::Portable { action }) => {
