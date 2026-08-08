@@ -86,6 +86,21 @@ impl App {
             return Task::none();
         };
 
+        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 슬롯을 런처 열기 전 앱에
+        // 붙여넣어라"고 요청하고 창을 닫는다. 데몬이 이전 앱을 활성화한 뒤 주입한다.
+        if let Some(slot_str) = result.item.keywords.strip_prefix("kmd:clip:") {
+            if slot_str == "notice" {
+                return Task::none(); // 안내 항목 — 실행 대상 아님
+            }
+            if let Ok(slot) = slot_str.parse::<usize>() {
+                let _ = kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::ClipPaste {
+                    slot,
+                    to_previous: true,
+                });
+            }
+            return iced::exit();
+        }
+
         // Help entries act like quick templates — 선택 시 시작 쿼리로 전환.
         if result.item.keywords.starts_with("kmd:help:") {
             if let Some(seed) = kmd_core::query_prefix::help_query_seed(&result.item.name) {

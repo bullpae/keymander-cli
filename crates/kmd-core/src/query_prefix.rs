@@ -37,6 +37,8 @@ pub enum QueryPrefix {
     Keys,
     /// `:f` — 특정 폴더 내 즉석 파일 검색
     FolderSearch,
+    /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B)
+    Clipboard,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
     General,
 }
@@ -138,6 +140,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":version",
         icon_emoji: "\u{1F4E6}",
         icon_ascii: "[VER]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::Clipboard,
+        aliases: &[":clip"],
+        title: ";  Clipboard History",
+        usage: "Type ;query or :clip query  (paste a past copy into the previous app)",
+        seed: ";",
+        icon_emoji: "\u{1F4CB}",
+        icon_ascii: "[CLIP]",
     },
     CommandSpec {
         prefix: QueryPrefix::Help,
@@ -282,6 +293,10 @@ pub fn prefix_of(query: &str) -> QueryPrefix {
     // `>`는 런처 생태계(PowerToys Run, Flow Launcher, Alfred)의 셸 관례 별칭
     if query.starts_with('!') || query.starts_with('>') {
         return QueryPrefix::Shell;
+    }
+    // `;` — 클립보드 히스토리 (고빈도 기능은 한 글자 시길, docs/12)
+    if query.starts_with(';') {
+        return QueryPrefix::Clipboard;
     }
     if query.starts_with(':') {
         for spec in COMMANDS {
@@ -469,6 +484,13 @@ mod tests {
         assert_eq!(prefix_of("@"), QueryPrefix::Web);
         assert_eq!(prefix_of("!ip"), QueryPrefix::Shell);
         assert_eq!(prefix_of(">ip"), QueryPrefix::Shell);
+        // 클립보드 히스토리 (docs/12 흐름 B) — 시길 `;`와 `:clip` 별칭
+        assert_eq!(prefix_of(";"), QueryPrefix::Clipboard);
+        assert_eq!(prefix_of(";계좌"), QueryPrefix::Clipboard);
+        assert_eq!(prefix_of(":clip"), QueryPrefix::Clipboard);
+        assert_eq!(prefix_of(":clip foo"), QueryPrefix::Clipboard);
+        // 토큰 경계 — :clipboard 는 :clip 오인이 아니어야 (별칭 뒤 공백/끝만 매칭)
+        assert_ne!(prefix_of(":clipx"), QueryPrefix::Clipboard);
     }
 
     #[test]

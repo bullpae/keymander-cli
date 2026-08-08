@@ -990,6 +990,9 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
+        // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
+        // TUI에서는 일반 검색으로 흘려보낸다.
+        QueryPrefix::Clipboard => handle_main_search(&query, state, engine, db),
         QueryPrefix::General => {
             handle_main_search(&query, state, engine, db);
             // 오타/미지원 : 명령 안내를 최상단에 표시 (검색 폴스루는 유지)

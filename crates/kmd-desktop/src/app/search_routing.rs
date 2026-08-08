@@ -35,6 +35,7 @@ impl App {
             Prefix::Keymap => self.handle_keymap_query(trimmed),
             Prefix::Keys => self.handle_keys_query(),
             Prefix::FolderSearch => self.handle_folder_search(trimmed),
+            Prefix::Clipboard => self.handle_clip_query(trimmed),
             Prefix::General => self.handle_main_search(trimmed),
         }
 
@@ -320,6 +321,46 @@ impl App {
         self.apply_contains_items(items);
     }
 
+    /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B).
+    /// 히스토리는 데몬에 있으므로 IPC로 조회한다(localhost, sub-ms). 결과 항목은
+    /// `kmd:clip:<slot>` 키워드 마커를 달아, Enter 시 launch_selected가 이전 앱
+    /// 붙여넣기로 라우팅한다. 데몬 미실행/미수집 시 안내 항목을 보여준다.
+    pub(super) fn handle_clip_query(&mut self, query: &str) {
+        let q = query
+            .strip_prefix(';')
+            .or_else(|| query.strip_prefix(":clip"))
+            .unwrap_or("")
+            .trim();
+
+        let req = kmd_core::ipc::Request::ClipHistory {
+            query: q.to_string(),
+            limit: 30,
+        };
+        let items = match kmd_core::ipc::send_request_result(&req) {
+            Ok(kmd_core::ipc::Response::ClipHistory { hits }) if !hits.is_empty() => hits
+                .into_iter()
+                .map(|h| clip_item(&h, self.use_emoji))
+                .collect(),
+            Ok(kmd_core::ipc::Response::ClipHistory { .. }) => {
+                vec![clip_notice(
+                    if q.is_empty() {
+                        "클립보드 히스토리가 비어 있습니다"
+                    } else {
+                        "일치하는 항목이 없습니다"
+                    },
+                    "복사를 하면 여기에 쌓입니다 (설정: [clipboard] history_enabled)",
+                    self.use_emoji,
+                )]
+            }
+            _ => vec![clip_notice(
+                "클립보드 히스토리를 사용할 수 없습니다",
+                "데몬이 실행 중인지, [clipboard] history_enabled=true 인지 확인하세요",
+                self.use_emoji,
+            )],
+        };
+        self.apply_contains_items(items);
+    }
+
     /// :keys / :k — 키 맵핑 치트시트
     pub(super) fn handle_keys_query(&mut self) {
         let items = kmd_core::keymap::keybinding_cheatsheet(
@@ -454,5 +495,36 @@ impl App {
         });
 
         items
+    }
+}
+
+/// 클립보드 히스토리 항목 → 런처 결과. 키워드에 `kmd:clip:<slot>` 마커를 담아
+/// Enter 시 launch_selected가 이전 앱 붙여넣기로 라우팅한다.
+fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
+    IndexItem {
+        name: if hit.preview.is_empty() {
+            "(빈 줄)".to_string()
+        } else {
+            hit.preview.clone()
+        },
+        path: hit.preview.clone(),
+        icon: if use_emoji { "\u{1F4CB}" } else { "[CLIP]" }.to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        keywords: format!("kmd:clip:{}", hit.slot),
+        icon_path: None,
+    }
+}
+
+/// 클립보드 안내 항목 (히스토리 비었거나 데몬 미사용) — Enter해도 아무 일 없음.
+fn clip_notice(title: &str, usage: &str, use_emoji: bool) -> IndexItem {
+    IndexItem {
+        name: title.to_string(),
+        path: usage.to_string(),
+        icon: if use_emoji { "\u{1F4CB}" } else { "[CLIP]" }.to_string(),
+        kind: ItemKind::SystemCommand,
+        source: Source::Plugin,
+        keywords: "kmd:clip:notice".to_string(),
+        icon_path: None,
     }
 }
