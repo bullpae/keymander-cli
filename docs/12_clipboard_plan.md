@@ -53,7 +53,8 @@ nav 레이어에는 이미 vim의 복사/붙여넣기 문법이 있다:
 
 복사는 평소처럼 한다 (`Cmd+C`, nav `Y`, 어디서든). 데몬이 상주하며 수집한다:
 
-- macOS: `NSPasteboard.changeCount` 폴링 (250ms — 유휴 비용 무시 가능)
+- macOS: `NSPasteboard.changeCount` 폴링 (250ms) — ✅ 구현. 값이 바뀔 때만
+  get_text 호출(경합·비용 최소화). `ConcealedType` 마크 항목은 수집 제외 ✅
 - Windows: `AddClipboardFormatListener` (이벤트 기반, 폴링 없음)
 
 히스토리가 데몬에 사는 이유(docs/11 R3 배경): 클립보드 감시는 상주

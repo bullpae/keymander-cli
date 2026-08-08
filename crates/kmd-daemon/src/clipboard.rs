@@ -10,8 +10,8 @@
 //! - **메모리에만** 산다. 디스크 비저장.
 //! - 1MB 초과 텍스트는 수집 제외 (메모리 보호).
 //! - 내용은 로그에 절대 남기지 않는다 (keycode 불로깅 원칙과 동일).
-//! - 수집은 기본 **비활성**(opt-in) — 비밀번호 관리자의 Concealed 마크 제외가
-//!   아직 없어(P1.1, NSPasteboard FFI 필요), 사용자가 명시적으로 켜야 한다.
+//! - **비밀번호 제외**: macOS는 `org.nspasteboard.ConcealedType` 마크가 붙은
+//!   항목(1Password 등 비번 관리자 관례)을 수집하지 않는다 (P1.1).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -86,9 +86,17 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
                 return;
             }
         };
-        // 시작 시점의 클립보드는 "직전 항목"이므로 한 번 수집한다.
-        let mut last = board.get_text().unwrap_or_default();
-        record(last.clone());
+        // changeCount(macOS)로 실제 변화만 감지한다 — get_text를 매 폴링마다
+        // 부르면 다른 클립보드 관리자와 경합하고 비용도 크다. 비-macOS는
+        // change_count가 항상 0이라 get_text diff로 자연 폴백한다.
+        let mut last_change = macos::change_count();
+        let mut last_text = String::new();
+        if !macos::is_concealed() {
+            if let Ok(t) = board.get_text() {
+                record(t.clone()); // 시작 시점 클립보드는 "직전 항목"
+                last_text = t;
+            }
+        }
         tracing::info!(
             "클립보드 히스토리 수집 시작 (상한 {})",
             CAP.load(Ordering::Relaxed)
@@ -101,10 +109,21 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
             if SUPPRESS_CAPTURE.load(Ordering::Relaxed) {
                 continue;
             }
+            // macOS: changeCount가 그대로면 변화 없음 — get_text 생략.
+            // 비-macOS: change_count가 0 고정이라 이 가드를 통과해 diff로 판정.
+            let cc = macos::change_count();
+            if cc != 0 && cc == last_change {
+                continue;
+            }
+            last_change = cc;
+            // 비밀번호 관리자가 Concealed로 표시한 항목은 수집하지 않는다.
+            if macos::is_concealed() {
+                continue;
+            }
             if let Ok(cur) = board.get_text() {
-                if cur != last && !cur.is_empty() {
+                if cur != last_text && !cur.is_empty() {
                     record(cur.clone());
-                    last = cur;
+                    last_text = cur;
                 }
             }
         }
@@ -150,6 +169,72 @@ pub fn paste_slot(n: usize) {
         let _ = board.set_text(prev);
     }
     SUPPRESS_CAPTURE.store(false, Ordering::Relaxed);
+}
+
+// ── macOS NSPasteboard ──────────────────────────────────────────────────────
+//
+// changeCount: 클립보드가 바뀔 때마다 증가하는 정수 — 실제 변화만 싸게 감지.
+// Concealed: `org.nspasteboard.ConcealedType` 마크(비번 관리자 관례)가 있으면
+// 민감 항목이므로 수집하지 않는다. NSPasteboard는 스레드 제약이 없어 감시
+// 스레드에서 직접 호출해도 된다.
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    /// `[[NSPasteboard generalPasteboard] changeCount]`. 실패 시 0.
+    pub fn change_count() -> isize {
+        unsafe {
+            let Some(cls) = AnyClass::get(c"NSPasteboard") else {
+                return 0;
+            };
+            let pb: *mut AnyObject = msg_send![cls, generalPasteboard];
+            if pb.is_null() {
+                return 0;
+            }
+            msg_send![pb, changeCount]
+        }
+    }
+
+    /// 현재 클립보드에 Concealed(비밀번호) 마크가 있으면 true.
+    /// `[pb availableTypeFromArray:@[@"org.nspasteboard.ConcealedType"]]` != nil.
+    pub fn is_concealed() -> bool {
+        unsafe {
+            let (Some(pb_cls), Some(str_cls), Some(arr_cls)) = (
+                AnyClass::get(c"NSPasteboard"),
+                AnyClass::get(c"NSString"),
+                AnyClass::get(c"NSArray"),
+            ) else {
+                return false;
+            };
+            let pb: *mut AnyObject = msg_send![pb_cls, generalPasteboard];
+            if pb.is_null() {
+                return false;
+            }
+            let ty: *mut AnyObject = msg_send![str_cls, stringWithUTF8String: c"org.nspasteboard.ConcealedType".as_ptr()];
+            if ty.is_null() {
+                return false;
+            }
+            let arr: *mut AnyObject = msg_send![arr_cls, arrayWithObject: ty];
+            if arr.is_null() {
+                return false;
+            }
+            let found: *mut AnyObject = msg_send![pb, availableTypeFromArray: arr];
+            !found.is_null()
+        }
+    }
+}
+
+// 비-macOS: changeCount 개념이 없어 0 고정(감시 루프가 get_text diff로 폴백),
+// Concealed 판정도 아직 없음(추후 Windows CF_CLIPBOARD_VIEWER_IGNORE 등).
+#[cfg(not(target_os = "macos"))]
+mod macos {
+    pub fn change_count() -> isize {
+        0
+    }
+    pub fn is_concealed() -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
