@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 const LOCK_FILE: &str = "kmd.lock";
 const QUIT_SIGNAL: &str = "kmd.quit";
+/// 창이 실제로 표시됐음을 알리는 마커 — 이게 있어야 토글(핫키로 닫기) 대상이 된다
+const SHOWN_MARKER: &str = "kmd.shown";
 
 /// How many iterations to wait for the other instance to exit.
 const TOGGLE_WAIT_ITERATIONS: u32 = 40;
@@ -23,6 +25,10 @@ const TOGGLE_WAIT_ITERATIONS: u32 = 40;
 const TOGGLE_WAIT_MS: u64 = 50;
 /// Ignore ultra-fast repeated launches to avoid accidental immediate toggle-off.
 const RECENT_LOCK_DEBOUNCE_MS: u64 = 700;
+/// 기동 유예 — 창 표시 마커가 없는 인스턴스는 이 시간 동안 토글하지 않는다.
+/// 콜드 스타트(GPU 초기화 등)가 이 안에 끝나지 못하면 멈춘 것으로 보고
+/// 토글(회수)을 허용한다.
+const STARTUP_GRACE_MS: u64 = 10_000;
 
 /// Result of attempting to acquire the single-instance lock.
 pub enum InstanceAction {
@@ -59,6 +65,14 @@ impl Guard {
     pub fn consume_quit_signal(&self) {
         let _ = fs::remove_file(&self.quit_signal_path);
     }
+
+    /// 창이 실제로 표시된 뒤 호출 — 이때부터 이 인스턴스가 토글(핫키로 닫기)
+    /// 대상이 된다. 이 마커가 없으면 두 번째 실행은 부팅 중으로 보고 종료
+    /// 신호를 보내지 않는다 (콜드 스타트 중 재-핫키가 창을 죽이는 레이스 방지).
+    /// 멱등이므로 포커스 이벤트마다 불러도 된다.
+    pub fn mark_window_shown(&self) {
+        let _ = fs::write(self.lock_path.with_file_name(SHOWN_MARKER), b"1");
+    }
 }
 
 impl Drop for Guard {
@@ -66,6 +80,7 @@ impl Drop for Guard {
         // lock file 삭제 (flock은 _lock_file Drop 시 자동 해제)
         let _ = fs::remove_file(&self.lock_path);
         let _ = fs::remove_file(&self.quit_signal_path);
+        let _ = fs::remove_file(self.lock_path.with_file_name(SHOWN_MARKER));
         #[cfg(windows)]
         if self.win_mutex != 0 {
             unsafe {
@@ -150,6 +165,7 @@ fn acquire_or_toggle_mutex(
     let wait = unsafe { WaitForSingleObject(handle, 0) };
     if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
         // 소유 성공 → 우리가 단일 인스턴스. PID는 진단/디바운스용으로 기록.
+        let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER)); // 크래시 잔여물
         let _ = fs::write(lock_path, std::process::id().to_string());
         return Some(InstanceAction::Acquired(Guard {
             lock_path: lock_path.to_path_buf(),
@@ -168,6 +184,10 @@ fn acquire_or_toggle_mutex(
     if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
         unsafe { CloseHandle(handle) };
         return Some(InstanceAction::SignalledExisting);
+    }
+    if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
+        unsafe { CloseHandle(handle) };
+        return Some(InstanceAction::SignalledExisting); // 부팅 중 — 종료 신호 없이 물러남
     }
 
     let _ = fs::write(quit_signal_path, "quit");
@@ -210,6 +230,9 @@ fn acquire_or_toggle_flock(
 
     if try_flock_nonblocking(&lock_file) {
         // flock 획득 → 다른 인스턴스 없음 (또는 이전 인스턴스 크래시)
+        // 크래시가 남긴 표시 마커는 여기서 청소한다 (살아있는 인스턴스가 있으면
+        // 이 분기에 못 들어오므로 남의 마커를 지울 일이 없다).
+        let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER));
         let mut f = &lock_file;
         let _ = lock_file.set_len(0);
         let _ = f.seek(std::io::SeekFrom::Start(0));
@@ -224,6 +247,9 @@ fn acquire_or_toggle_flock(
     // flock 실패 → 다른 인스턴스가 확실히 살아있음
     if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
         return Some(InstanceAction::SignalledExisting);
+    }
+    if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
+        return Some(InstanceAction::SignalledExisting); // 부팅 중 — 종료 신호 없이 물러남
     }
 
     let _ = fs::write(quit_signal_path, "quit");
@@ -251,6 +277,9 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
                 if is_recent_lock(lock_path, RECENT_LOCK_DEBOUNCE_MS) {
                     return InstanceAction::SignalledExisting;
                 }
+                if should_defer_toggle(lock_path, STARTUP_GRACE_MS) {
+                    return InstanceAction::SignalledExisting; // 부팅 중 — 종료 신호 없이 물러남
+                }
 
                 let _ = fs::write(quit_signal_path, "quit");
 
@@ -272,6 +301,7 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
     }
 
     let our_pid = std::process::id();
+    let _ = fs::remove_file(lock_path.with_file_name(SHOWN_MARKER)); // 크래시 잔여물
     let _ = fs::write(lock_path, our_pid.to_string());
 
     InstanceAction::Acquired(Guard {
@@ -281,6 +311,17 @@ fn acquire_or_toggle_pid(lock_path: &PathBuf, quit_signal_path: &PathBuf) -> Ins
         #[cfg(windows)]
         win_mutex: 0,
     })
+}
+
+/// 창을 아직 표시하지 못한(부팅 중) 인스턴스는 토글 대상이 아니다.
+///
+/// 콜드 스타트(GPU 초기화 수 초) 동안 핫키를 다시 누르면 두 번째 프로세스가
+/// 부팅 중인 첫 인스턴스에 종료 신호를 보내 둘 다 사라진다 — "창이 영영
+/// 안 뜨는" 레이스의 근본 원인. 표시 마커가 없고 잠금이 기동 유예 안이면
+/// 토글하지 않고 조용히 물러난다. 유예를 넘겼는데도 마커가 없으면 멈춘
+/// 인스턴스로 보고 토글(회수)을 허용한다.
+fn should_defer_toggle(lock_path: &Path, grace_ms: u64) -> bool {
+    !lock_path.with_file_name(SHOWN_MARKER).exists() && is_recent_lock(lock_path, grace_ms)
 }
 
 fn is_recent_lock(lock_path: &Path, threshold_ms: u64) -> bool {
@@ -344,6 +385,70 @@ fn is_process_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// 콜드 스타트 레이스 방지: 창 표시 마커가 없는 살아있는 인스턴스에는
+    /// 종료 신호를 보내지 않는다 (부팅 중인 창을 죽이지 않음).
+    #[test]
+    #[cfg(unix)]
+    fn 부팅_중_인스턴스는_토글하지_않는다() {
+        let dir = std::env::temp_dir().join("kmd_test_boot_grace");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+
+        let guard = match acquire_or_toggle(&dir) {
+            InstanceAction::Acquired(g) => g,
+            _ => panic!("첫 인스턴스는 획득해야 함"),
+        };
+
+        // 디바운스(700ms)를 지나 "부팅 중" 판정 구간으로 진입
+        std::thread::sleep(std::time::Duration::from_millis(750));
+
+        // 마커 없음 + 기동 유예 안 → 종료 신호 없이 물러나야 함
+        match acquire_or_toggle(&dir) {
+            InstanceAction::SignalledExisting => {}
+            _ => panic!("두 번째 실행은 물러나야 함"),
+        }
+        assert!(
+            !guard.should_quit(),
+            "부팅 중(마커 없음)에는 종료 신호가 오면 안 됨"
+        );
+
+        // 창 표시 후에는 정상 토글 — 종료 신호가 와야 함
+        guard.mark_window_shown();
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        match acquire_or_toggle(&dir) {
+            InstanceAction::SignalledExisting => {}
+            _ => panic!("토글 요청은 SignalledExisting"),
+        }
+        assert!(guard.should_quit(), "창 표시 후에는 종료 신호가 와야 함");
+
+        drop(guard);
+        assert!(
+            !dir.join(SHOWN_MARKER).exists(),
+            "Guard drop 시 표시 마커도 정리돼야 함"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 기동_유예를_넘긴_미표시_인스턴스는_토글_허용() {
+        let dir = std::env::temp_dir().join("kmd_test_boot_grace_expired");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        let lock = dir.join(LOCK_FILE);
+        fs::write(&lock, "1").unwrap();
+
+        // 마커 없음 + 잠금이 유예(grace) 안 → 연기
+        assert!(should_defer_toggle(&lock, 60_000));
+        // 잠금이 유예보다 오래됨 → 멈춘 인스턴스로 보고 토글 허용
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert!(!should_defer_toggle(&lock, 5));
+        // 마커 있으면 유예와 무관하게 토글 허용
+        fs::write(dir.join(SHOWN_MARKER), "1").unwrap();
+        assert!(!should_defer_toggle(&lock, 60_000));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_acquire_new_instance() {
