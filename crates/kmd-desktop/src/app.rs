@@ -357,7 +357,9 @@ pub enum Message {
     UncloakWindow(u64),
     /// macOS CAMetalLayer 리사이즈 고정 재시도 (레이어 생성이 늦을 때)
     StabilizeSurfaceLayer(u8),
-    /// view 재렌더 후 1프레임 뒤 포커스 재요청 (트리 변경 후 포커스 유실 복구)
+    /// view 재렌더 후 1프레임 뒤 포커스 재요청 (트리 변경 후 포커스 유실 복구).
+    // 생성처가 cfg(windows) 뒤라 macOS 빌드에서만 미생성으로 보인다 — 삭제 금지.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     DelayedRefocus,
     /// 백그라운드 아이콘 프리워밍 완료 → 캐시된 아이콘으로 리렌더 유도
     IconsReady,

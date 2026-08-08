@@ -237,7 +237,7 @@ mod tests {
             format_epoch_as_iso(secs)
         };
         let score = frecency_score(10, &old_iso);
-        assert_eq!(score, 10 * 1, "60일 이전 → weight 1");
+        assert_eq!(score, 10, "60일 이전 → weight 1");
     }
 
     #[test]

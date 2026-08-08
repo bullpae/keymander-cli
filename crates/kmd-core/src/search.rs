@@ -750,7 +750,7 @@ mod tests {
         ]);
 
         let results = engine.search_with_mode(SearchMode::Contains, "2026 출장이력", 10);
-        assert!(results.len() >= 1);
+        assert!(!results.is_empty());
         // 세그먼트 정확 일치 항목이 더 높은 점수
         assert_eq!(
             results[0].item.path, r"c:\2026\work\출장이력",
@@ -828,7 +828,7 @@ mod tests {
         ]);
 
         let results = engine.search_with_mode(SearchMode::Contains, "2026 work", 10);
-        assert!(results.len() >= 1);
+        assert!(!results.is_empty());
         // 두 토큰 모두 세그먼트 정확 일치한 항목이 보너스로 1등
         assert_eq!(results[0].item.name, "work");
         if results.len() >= 2 {

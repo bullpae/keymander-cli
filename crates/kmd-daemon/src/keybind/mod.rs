@@ -141,6 +141,9 @@ impl VKey {
     /// 자동 생성하는 데 쓴다 (거울상 match 이중 유지 방지).
     /// 변형을 추가하면 이 목록에도 추가한다. 정방향 변환(match)은 컴파일러가
     /// 누락을 잡아주고, 이 목록의 누락은 각 플랫폼의 왕복 테스트가 잡는다.
+    // 현재 사용처(windows.rs의 역방향 맵·왕복 테스트)가 cfg(windows) 뒤에 있어
+    // macOS 빌드에서만 dead_code로 보인다 — 삭제하면 Windows가 깨진다.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub const ALL: &'static [VKey] = &[
         VKey::A,
         VKey::B,
@@ -966,8 +969,10 @@ mod tests {
 
     /// kmd-core effective_keymap(단일 소스) 경유로 프리셋 → 엔진 설정 변환
     fn preset_config(profile: &str) -> Option<KeybindConfig> {
-        let mut keymap = kmd_core::config::KeymapConfig::default();
-        keymap.active_profile = profile.to_string();
+        let keymap = kmd_core::config::KeymapConfig {
+            active_profile: profile.to_string(),
+            ..Default::default()
+        };
         let effective = kmd_core::keymap::effective_keymap(&keymap);
         KeybindConfig::from_config(&effective)
     }
@@ -1181,8 +1186,10 @@ mod tests {
     #[test]
     fn test_from_config_custom() {
         use kmd_core::config::*;
-        let mut keymap = KeymapConfig::default();
-        keymap.active_profile = "custom".to_string();
+        let mut keymap = KeymapConfig {
+            active_profile: "custom".to_string(),
+            ..Default::default()
+        };
         keymap.remaps.insert("CapsLock".into(), "Escape".into());
         keymap.combos.push(ComboToml {
             trigger: "Shift+Space".into(),
@@ -1194,9 +1201,11 @@ mod tests {
             timeout_ms: Some(300),
         });
 
-        let mut layer = LayerToml::default();
-        layer.trigger = "LAlt".into();
-        layer.tap_action = Some("Escape".into());
+        let mut layer = LayerToml {
+            trigger: "LAlt".into(),
+            tap_action: Some("Escape".into()),
+            ..Default::default()
+        };
         layer.mappings.insert("H".into(), "Left".into());
         layer.mappings.insert("J".into(), "Down".into());
         layer.double_taps.insert(

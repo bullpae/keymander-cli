@@ -478,7 +478,7 @@ impl App {
             .collect();
 
         let section_count = header_indices.len();
-        let mid = (section_count + 1) / 2;
+        let mid = section_count.div_ceil(2);
 
         let mut left_col = Column::new().spacing(8).width(Fill);
         let mut right_col = Column::new().spacing(8).width(Fill);
@@ -716,7 +716,7 @@ impl App {
         let actions = context_actions_for(item.kind);
         let mut action_list = Column::new().spacing(1);
         for (i, action) in actions.iter().enumerate() {
-            let action_clone = action.clone();
+            let action_clone = *action;
             let label_text = action.label_for_kind(item.kind).to_string();
             let shortcut_text = action.shortcut().to_string();
             let is_primary = i == 0;

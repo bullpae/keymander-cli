@@ -31,7 +31,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| **R2-1. clippy 20건 정리** | 기계적: field-assignment-outside-Default 9건, 죽은 코드(`VKey::ALL`, `DelayedRefocus`), manual div_ceil/is_multiple_of, 불필요 clone/return 등. `cargo clippy --fix` + 수동 마무리 |
+| **R2-1. clippy 20건 정리** | ✅ 2026-08-08 — 경고 0건. 주의: `VKey::ALL`·`DelayedRefocus`는 죽은 코드가 아니라 **cfg(windows) 전용 코드의 사용처**였다(macOS 빌드에서만 미사용으로 보임) — 삭제 대신 `cfg_attr(not(windows), allow(dead_code))` 처리. 삭제했으면 Windows가 깨졌다 |
 | **R2-2. 대형 파일** | `kmd-desktop/app.rs` **2449줄**(app/ 서브모듈 분리가 이미 진행 중 — 계속), `tui/app.rs` 1651줄. `keybind/engine.rs` 1844줄은 순수 상태머신으로 응집돼 있어 분할 신중히 |
 | **R2-3. CLI/TUI 테스트 공백** | `src/` 테스트 **4개뿐** (코어 171개와 대비). 최소한 cmd 라우팅·TUI 상태 전이에 스모크 테스트 |
 | **R2-4. cargo-deb 한글 재발 방지** | Cargo.toml UTF-8 손상은 복구됐으나(87955e0) 원인(CP949 혼용 편집 환경) 재발 여지 — CI Secret scan처럼 인코딩 검사 한 줄 추가 검토 |
@@ -43,7 +43,7 @@
 
 | 항목 | 상태 |
 |---|---|
-| **R3-1. InjectPaste 능력** | ✅ 커밋됨 — IPC `InjectPaste` + `kmd daemon paste-test`(숨김). **E2E 검증 미완** (훅 복구 후 TextEdit 자동 테스트) |
+| **R3-1. InjectPaste 능력** | ✅ E2E 검증 완료 (2026-08-08) — 데몬이 IPC로 전경 앱(TextEdit)에 Cmd+V 주입, 표식 문자열 붙여넣기 실증. 분리 구조에서 붙여넣기류 확장이 가능함이 증명됨 |
 | **R3-2. 전경창 캡처** | ⬜ 핫키 시점에 데몬이 전경 앱 스냅샷 → 붙여넣기 대상. 이게 없으면 붙여넣기류 확장 원천 불가 (autopilot의 창 추적 재사용 후보) |
 | **R3-3. 삼중 중복 정리** | ⬜ calc/emoji/shell 확장과 SearchEngine 배선이 desktop·tui·daemon 3곳에 중복 — 단일 등록 지점으로 |
 | **R3-4. ExtensionAction 확장** | ⬜ `Paste`/`Inject` 추가 + 순수형(클라이언트)/능력형(데몬 IPC) 경계 도입 |

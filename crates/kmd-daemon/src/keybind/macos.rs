@@ -283,6 +283,7 @@ fn vkey_to_cg(key: VKey) -> u16 {
 ///   임의로 한쪽을 고르면 안 되므로 의도적으로 제외
 /// - Insert(0x72=Help)/PrintScreen/ScrollLock/Pause 등은 주입(정방향)용으로만
 ///   두고, 물리 입력 가로채기(역방향)에서는 의도적으로 제외
+///
 /// 즉 이 match의 "누락"은 실수가 아니라 정책이다. 키를 추가할 때는
 /// 양방향 모두 필요한지 판단해서 각각 넣는다.
 fn cg_to_vkey(keycode: u16) -> Option<VKey> {

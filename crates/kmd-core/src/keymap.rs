@@ -1201,9 +1201,10 @@ mod tests {
     }
 
     fn keymap_with_profile(profile: &str) -> KeymapConfig {
-        let mut km = KeymapConfig::default();
-        km.active_profile = profile.to_string();
-        km
+        KeymapConfig {
+            active_profile: profile.to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1228,8 +1229,10 @@ mod tests {
     #[test]
     fn 사용자_매핑은_기본을_보존하며_덮어쓴다() {
         let mut km = keymap_with_profile("vim-nav");
-        let mut layer = LayerToml::default();
-        layer.trigger = "LAlt".into();
+        let mut layer = LayerToml {
+            trigger: "LAlt".into(),
+            ..Default::default()
+        };
         layer.mappings.insert("H".into(), "Right".into());
         km.layers.insert("nav".into(), layer);
 
@@ -1247,8 +1250,10 @@ mod tests {
     #[test]
     fn 생략된_필드는_기본값을_유지한다() {
         let mut km = keymap_with_profile("vim-nav");
-        let mut layer = LayerToml::default();
-        layer.trigger = "LAlt".into();
+        let layer = LayerToml {
+            trigger: "LAlt".into(),
+            ..Default::default()
+        };
         // tap_action / tap_hold_ms / unmapped 전부 생략
         km.layers.insert("nav".into(), layer);
 
@@ -1259,10 +1264,12 @@ mod tests {
 
         // 명시하면 반영
         let mut km2 = keymap_with_profile("vim-nav");
-        let mut layer2 = LayerToml::default();
-        layer2.trigger = "LAlt".into();
-        layer2.unmapped = Some("passthrough".into());
-        layer2.tap_hold_ms = Some(300);
+        let layer2 = LayerToml {
+            trigger: "LAlt".into(),
+            unmapped: Some("passthrough".into()),
+            tap_hold_ms: Some(300),
+            ..Default::default()
+        };
         km2.layers.insert("nav".into(), layer2);
 
         let e2 = effective_keymap(&km2);
@@ -1362,8 +1369,10 @@ mod tests {
     #[test]
     fn none은_사용자_정의까지_전부_비활성() {
         let mut km = keymap_with_profile("none");
-        let mut layer = LayerToml::default();
-        layer.trigger = "LAlt".into();
+        let layer = LayerToml {
+            trigger: "LAlt".into(),
+            ..Default::default()
+        };
         km.layers.insert("nav".into(), layer);
         km.remaps.insert("CapsLock".into(), "Escape".into());
         km.tap_holds.insert(
@@ -1386,8 +1395,10 @@ mod tests {
     #[test]
     fn 새_레이어_추가() {
         let mut km = keymap_with_profile("vim-nav");
-        let mut layer = LayerToml::default();
-        layer.trigger = "RAlt".into();
+        let mut layer = LayerToml {
+            trigger: "RAlt".into(),
+            ..Default::default()
+        };
         layer.mappings.insert("A".into(), "B".into());
         km.layers.insert("sym".into(), layer);
 

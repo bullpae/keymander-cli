@@ -58,7 +58,7 @@ fn spawn_index_refresher(engine: Arc<Mutex<SearchEngine>>, shutdown: Arc<AtomicB
             elapsed_secs += 1;
 
             // 1분마다 설정 재로드 — 주기 변경/비활성화를 재시작 없이 반영
-            if elapsed_secs % 60 == 0 {
+            if elapsed_secs.is_multiple_of(60) {
                 interval_min = load_config().launcher.index_refresh_minutes;
             }
             if interval_min == 0 || elapsed_secs < interval_min * 60 {

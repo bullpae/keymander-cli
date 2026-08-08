@@ -96,7 +96,6 @@ fn init_window_transparency(config: &kmd_core::Config) {
             "투명 창 비활성 (요청={requested}, 킬스위치={killed}, 소프트웨어렌더러={software}) \
              — 불투명 창 + 리사이즈 방식으로 동작"
         );
-        return;
     }
 
     // Windows: wgpu 가 DirectComposition 스왑체인을 쓰도록 지정한다. 기본값
