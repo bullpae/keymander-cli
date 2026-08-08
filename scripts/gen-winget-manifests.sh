@@ -19,7 +19,12 @@ set -euo pipefail
 VERSION="${1:?사용법: gen-winget-manifests.sh <버전> [출력디렉터리]}"
 OUT_ROOT="${2:-./winget-manifests}"
 
-REPO="bullpae/keymander-cli"
+# 저장소 이름은 유도한다 — 개명하면 InstallerUrl이 죽은 주소가 되고, 그 사실이
+# winget 검증 실패로만 드러난다. PackageIdentifier는 winget 카탈로그의 고유 키라
+# 저장소를 개명해도 절대 바뀌면 안 되므로 이쪽만 고정한다.
+REPO="${GITHUB_REPOSITORY:-$(git remote get-url origin 2>/dev/null |
+    sed -E 's#(git@github\.com:|https://github\.com/)##; s#\.git$##')}"
+: "${REPO:?저장소를 알 수 없습니다 — GITHUB_REPOSITORY를 지정하거나 git 저장소 안에서 실행하세요}"
 PKG_ID="bullpae.keymander"
 # winget-pkgs가 요구하는 스키마 버전. 올릴 때는 3개 파일을 함께 맞춰야 한다.
 SCHEMA="1.9.0"

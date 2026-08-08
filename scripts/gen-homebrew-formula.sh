@@ -8,14 +8,23 @@ VERSION="$1"
 SHA_ARM_MAC="$2"
 SHA_X86_MAC="$3"
 SHA_X86_LINUX="$4"
-BASE="https://github.com/bullpae/keymander-cli/releases/download/v${VERSION}"
+
+# 저장소 이름을 하드코딩하지 않는다 — 저장소를 개명하면 formula가 죽은 URL을
+# 가리키게 되고, 그 사실이 사용자의 `brew install` 실패로만 드러난다.
+# CI에서는 GITHUB_REPOSITORY, 로컬에서는 origin 리모트에서 유도한다.
+REPO="${GITHUB_REPOSITORY:-$(git remote get-url origin 2>/dev/null |
+    sed -E 's#(git@github\.com:|https://github\.com/)##; s#\.git$##')}"
+: "${REPO:?저장소를 알 수 없습니다 — GITHUB_REPOSITORY를 지정하거나 git 저장소 안에서 실행하세요}"
+
+HOMEPAGE="https://github.com/${REPO}"
+BASE="${HOMEPAGE}/releases/download/v${VERSION}"
 
 cat <<EOF
 # 자동 생성 파일 — 직접 수정하지 마세요.
-# keymander-cli의 scripts/gen-homebrew-formula.sh가 릴리스마다 갱신합니다.
+# ${REPO}의 scripts/gen-homebrew-formula.sh가 릴리스마다 갱신합니다.
 class Keymander < Formula
   desc "Keyboard-driven cross-platform launcher (TUI + desktop + key-remap daemon)"
-  homepage "https://github.com/bullpae/keymander-cli"
+  homepage "${HOMEPAGE}"
   version "${VERSION}"
   license "MIT"
 

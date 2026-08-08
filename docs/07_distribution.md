@@ -367,3 +367,77 @@ CI 잡이 이미 같은 역할을 하므로 중복 방어이지, 이게 없다�
 - `dist/keymander-archive-keyring.asc` — 저장소 서명 **공개키**. 배포하라고 있는
   것이라 추적이 정상이며 `.gitignore` 예외로 지정돼 있다.
 - 서명 **비밀키**는 `~/.keymander-release/`에만 있고 저장소에 없다. 절대 넣지 말 것.
+
+---
+
+## 6. 저장소 개명 런북 (`keymander-cli` → `keymander`)
+
+이름이 사실과 어긋나 있다 — 이 저장소에는 GPU 데스크톱 앱(`kmd-desktop`)과
+시스템 데몬(`kmd-daemon`)이 들어 있어 "cli"가 아니다. 개명은 정확성 교정이다.
+
+**언제 하나** — winget 최초 등록 PR이 **머지된 뒤**. 심사 중에 릴리스 자산 URL이
+바뀌면 검증이 흔들린다. 반대로 **미룰수록 비싸진다**: 아래 ⚠️ 항목의 영향 범위가
+사용자 수에 비례한다. 스타·포크가 붙기 전이 가장 싼 시점이다.
+
+### 6.1 개명이 깨는 것 / 안 깨는 것
+
+| 대상 | 개명 후 |
+|---|---|
+| git remote, 이슈, PR, 릴리스 다운로드 URL | ✅ GitHub이 리다이렉트 |
+| winget 기존 매니페스트의 `InstallerUrl` | ✅ 리다이렉트로 계속 동작 |
+| `PackageIdentifier` (`bullpae.keymander`) | ✅ 불변 — 저장소명과 무관 |
+| `publish-repos.yml`의 Pages 경로 | ✅ `github.event.repository.name`으로 자동 적응 |
+| **GitHub Pages URL** | ⚠️ **리다이렉트 안 됨** — `…/keymander-cli/` 가 죽는다 |
+| **사용자의 apt `sources.list` / yum `.repo`** | ⚠️ 위 때문에 **사용자가 직접 고쳐야 함** |
+
+### 6.2 절차
+
+```bash
+# 1) 개명 (keymander 이름은 keymander-tui-prototype 이 비워둠)
+gh api -X PATCH repos/bullpae/keymander-cli -f name=keymander
+
+# 2) 로컬 리모트 갱신
+git remote set-url origin https://github.com/bullpae/keymander.git
+
+# 3) 문서·메타데이터의 하드코딩 치환
+#    (생성기 2종은 GITHUB_REPOSITORY/origin에서 유도하므로 손댈 필요 없다)
+git grep -l keymander-cli | xargs sed -i '' 's#keymander-cli#keymander#g'
+git grep -n keymander-cli   # 남은 게 없어야 한다
+
+# 4) Pages 재발행 → 새 URL로 apt/yum 저장소 생성
+gh workflow run publish-repos.yml
+
+# 5) Homebrew formula 재생성 (URL이 새 저장소를 가리키게)
+#    최신 릴리스 SHA는 SHA256SUMS.txt 또는 릴리스 자산의 digest에서 가져온다
+scripts/gen-homebrew-formula.sh <버전> <sha_arm_mac> <sha_x86_mac> <sha_x86_linux>
+#    → bullpae/homebrew-tap 의 Formula/keymander.rb 에 반영
+```
+
+### 6.3 개명 후 반드시 공지할 것
+
+apt/yum 사용자는 저장소 주소를 직접 바꿔야 한다. README와 릴리스 노트에 넣을 문구:
+
+```bash
+# apt
+sudo sed -i 's#/keymander-cli/#/keymander/#' /etc/apt/sources.list.d/keymander.list
+sudo apt update
+
+# yum/dnf
+sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
+  https://bullpae.github.io/keymander/keymander.repo
+```
+
+낡은 `keymander-cli` Pages 주소는 404가 되므로, 옛 주소를 쓰는 클라이언트는
+`apt update`가 실패한다. 조용히 낡은 버전에 머무는 게 아니라 눈에 띄게 실패하므로
+사용자가 알아차리기는 한다.
+
+### 6.4 저장소 가족 정리 상태 (2026-08-08)
+
+| 저장소 | 상태 | 비고 |
+|---|---|---|
+| `keymander-cli` | PUBLIC, 활성 | 본체. 개명 대기 |
+| `keymander-tui-prototype` | PRIVATE, archived | 원형(2026-02-07~02-11, 44커밋). 이름을 비우려고 개명 |
+| `keymander-desktop` | PRIVATE, archived | 커밋 0개 빈 저장소. 삭제하려면 `delete_repo` 스코프 필요 |
+
+`keymander-tui-prototype`은 git 조상을 공유하지 않는 **별개 계보**다. 다만 실행
+이름 `kmd`와 태그라인 "키보드 하나로 모든 것을 지휘한다"는 원형부터 이어져 있다.
