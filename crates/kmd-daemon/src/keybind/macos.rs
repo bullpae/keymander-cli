@@ -11,7 +11,7 @@ use super::{
     resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
 };
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -411,6 +411,12 @@ fn send_key_event(keycode: u16, key_down: bool, flags: u64) {
 fn send_key_press(keycode: u16) {
     send_key_event(keycode, true, 0);
     send_key_event(keycode, false, 0);
+}
+
+/// [P3 스파이크] 현재 전경 앱에 Cmd+V 주입 — 클립보드 붙여넣기 확장의 핵심 능력.
+/// 주입 이벤트는 MAGIC_USER_DATA가 붙어 자체 탭이 재처리하지 않는다.
+pub(super) fn inject_paste() {
+    send_combo(&[VKey::LWin], VKey::V); // macOS: LWin=Command → Cmd+V
 }
 
 fn send_combo(modifier_vkeys: &[VKey], key: VKey) {
@@ -821,6 +827,12 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
 static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
 /// CGEventTap 포인터 — 타임아웃 후 재활성화에 사용
+/// 탭 타임아웃 서킷 브레이커 — 이 시간(ms) 안에 MAX_RETRIES를 넘으면 재활성화 포기
+const TAP_TIMEOUT_WINDOW_MS: u32 = 10_000;
+const TAP_TIMEOUT_MAX_RETRIES: u32 = 5;
+static TAP_TIMEOUT_WINDOW_START: AtomicU32 = AtomicU32::new(0);
+static TAP_TIMEOUT_COUNT: AtomicU32 = AtomicU32::new(0);
+
 static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
@@ -917,6 +929,43 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
 
     // 타임아웃/입력 폭주로 비활성화된 경우 재활성화 + 일시 상태 리셋
     if tap_disabled {
+        // ── 서킷 브레이커 ──────────────────────────────────────────────
+        // 이 탭은 활성 탭이라 모든 키 입력이 이 콜백을 동기로 거친다. 데몬이
+        // CPU 기아 상태(대형 빌드 등)면 콜백이 밀려 OS가 탭을 끄는데, 그때마다
+        // 무조건 되살리면 "굶주린 탭"이 계속 입력 경로를 붙들어 시스템 전체
+        // 타이핑이 멈춘 것처럼 된다 (2026-08-08 실제 사고 — 사용자가 리부팅).
+        // 짧은 시간에 타임아웃이 반복되면 기아 상태로 판단하고 재활성화를
+        // 포기한다: 탭이 꺼진 채면 키 입력은 OS 네이티브로 즉시 정상화되고,
+        // 리맵만 꺼진다. 복구는 데몬 재시작 (status가 사유를 보여준다).
+        let now = tick_ms();
+        let start = TAP_TIMEOUT_WINDOW_START.load(Ordering::Relaxed);
+        let count = if now.saturating_sub(start) > TAP_TIMEOUT_WINDOW_MS {
+            TAP_TIMEOUT_WINDOW_START.store(now, Ordering::Relaxed);
+            TAP_TIMEOUT_COUNT.store(1, Ordering::Relaxed);
+            1
+        } else {
+            TAP_TIMEOUT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+        };
+
+        // 어느 경로든 일시 상태는 리셋 (stuck modifier 방지)
+        if let Some(state) = HOOK_STATE.get() {
+            if let Ok(mut guard) = state.lock() {
+                guard.reset_transient_state();
+            }
+        }
+
+        if count > TAP_TIMEOUT_MAX_RETRIES {
+            super::set_hook_error(Some(format!(
+                "키 이벤트 처리 지연으로 훅을 중단했습니다 ({TAP_TIMEOUT_WINDOW_MS}ms 내 \
+                 타임아웃 {count}회 — CPU 과부하 의심). 키 입력은 OS 기본 동작으로 \
+                 정상이며 리맵만 꺼진 상태입니다. 복구: kmd daemon stop 후 start"
+            )));
+            tracing::error!(
+                "CGEventTap 타임아웃 {count}회/{TAP_TIMEOUT_WINDOW_MS}ms — 재활성화 중단 (기아 상태)"
+            );
+            return event;
+        }
+
         let tap = EVENT_TAP_PTR.load(Ordering::Relaxed);
         if !tap.is_null() {
             let cause = if type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT {
@@ -926,11 +975,6 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
             };
             tracing::warn!("CGEventTap 비활성화 감지({cause}) — 재활성화 및 상태 리셋");
             CGEventTapEnable(tap, true);
-        }
-        if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                guard.reset_transient_state();
-            }
         }
         return event;
     }
