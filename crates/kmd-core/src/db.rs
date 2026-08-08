@@ -14,6 +14,16 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(DbError::Io)?;
+            // 이 DB는 실행/검색 히스토리를 담고, WAL 모드라 kmd.db-wal/-shm
+            // 사이드카까지 같은 디렉터리에 생긴다. 포터블 설치 위치는 상위 경로가
+            // 0755라 다른 사용자가 읽을 수 있으므로, 데이터 디렉터리를 0700으로
+            // 막는다. 파일마다 0600을 거는 대신 디렉터리 하나로 사이드카까지
+            // 전부 덮는다. 이미 존재하는 0755 디렉터리도 idempotent하게 교정된다.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
         }
 
         let conn = Connection::open(path).map_err(DbError::Sqlite)?;

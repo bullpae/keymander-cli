@@ -18,9 +18,36 @@ pub fn save_index(index: &Index, path: &Path) -> Result<(), StoreError> {
 
 /// tmp 파일에 쓴 뒤 rename — 데몬이 백그라운드로 캐시를 갱신하는 동안
 /// 데스크톱이 같은 파일을 읽어도 잘린(torn) 파일을 보지 않게 한다.
+///
+/// 인덱스는 사용자의 파일 경로 목록(Desktop/Documents/Downloads 등)을 담으므로
+/// 공유 머신에서 다른 사용자가 읽지 못하도록 Unix에서 **0600으로 생성**한다.
+/// chmod로 사후 변경하면 그 사이에 다른 사용자가 읽을 수 있어, 처음부터 0600으로
+/// 만든다. rename은 권한을 보존하므로 최종 파일도 0600을 유지한다.
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
+    use std::io::Write;
+
+    // 프로세스별 고유 tmp — 데몬과 데스크톱이 동시에 캐시를 써도 같은 tmp를
+    // 밟지 않는다(기존 고정 tmp 이름은 동시 쓰기 시 파일이 섞일 수 있었다).
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp); // 같은 pid의 이전 크래시 잔여물 제거
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(bytes)
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
     std::fs::rename(&tmp, path)
 }
 
