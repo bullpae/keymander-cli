@@ -441,3 +441,52 @@ sudo curl -fsSL -o /etc/yum.repos.d/keymander.repo \
 
 `keymander-tui-prototype`은 git 조상을 공유하지 않는 **별개 계보**다. 다만 실행
 이름 `kmd`와 태그라인 "키보드 하나로 모든 것을 지휘한다"는 원형부터 이어져 있다.
+
+---
+
+## 7. 로컬 개발 서명 — macOS 전용 키체인
+
+로컬 재배포마다 접근성 권한이 풀리는 것(ad-hoc cdhash churn, §5 아님 —
+`deploy-local.sh` 주석 참조)을 막으려면 안정된 서명 신원이 필요하다.
+
+**로그인 키체인에 서명 키를 두면 안 된다.** codesign이 그 키를 쓸 때마다
+macOS가 암호 프롬프트를 띄우는데, 스크립트/에이전트 같은 비대화 세션에서는
+응답할 수 없어 `errSecInternalComponent`로 실패하고, 사용자 화면에는 맥락 없는
+서명 요청 창만 뜬다 — 2026-08-08 키보드 먹통 사고의 한 원인이었다.
+
+대신 **전용 키체인**을 만들어 암호 파일(0600)로 스크립트가 직접 잠금해제한다.
+프롬프트가 원천적으로 없고, 로그인 키체인은 일절 건드리지 않는다.
+
+1회 구성 (재현 절차):
+
+```bash
+DIR="$HOME/.keymander-release"; KC="$DIR/kmd-codesign.keychain-db"
+mkdir -p "$DIR" && openssl rand -hex 24 > "$DIR/keychain-pass" && chmod 600 "$DIR/keychain-pass"
+PASS="$(cat "$DIR/keychain-pass")"
+
+security create-keychain -p "$PASS" "$KC"
+security set-keychain-settings "$KC"                     # 자동잠금 없음
+
+# 인증서 생성 — p12는 legacy 옵션이 없으면 Apple Security가 임포트를 거부한다
+openssl req -x509 -newkey rsa:2048 -keyout "$DIR/key.pem" -out "$DIR/cert.pem" \
+  -days 3650 -nodes -subj "/CN=keymander-local-codesign" \
+  -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=critical,codeSigning"
+openssl pkcs12 -export -inkey "$DIR/key.pem" -in "$DIR/cert.pem" -out "$DIR/kmd.p12" \
+  -passout "pass:$PASS" -name keymander-local-codesign \
+  -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES
+
+security import "$DIR/kmd.p12" -k "$KC" -P "$PASS" -T /usr/bin/codesign
+# 핵심 — 이게 없으면 codesign이 키를 쓸 때마다 프롬프트가 뜬다
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASS" "$KC"
+# codesign은 검색 목록에 있는 키체인만 뒤진다 (--keychain 만으로는 못 찾음)
+security list-keychains -d user -s login.keychain-db "$KC"
+rm -f "$DIR/kmd.p12" "$DIR/key.pem"
+```
+
+이후는 자동: `deploy-local.sh`의 `codesign_binaries()`가 키체인·암호 파일을
+감지해 잠금해제 후 서명한다. 잠금해제에 실패하면 **프롬프트를 띄우지 않기 위해**
+ad-hoc으로 강등하고 경고한다.
+
+키 교체/폐기: `security delete-keychain "$KC"` 후 위 절차 재실행 → 접근성 1회
+재부여. 위협 모델: 이 키의 유일한 권능은 로컬 TCC 신원 연속성이다 — 배포 자산
+서명에는 쓰이지 않으며(그건 CI/GPG), 유출돼도 이 머신의 TCC 항목 외엔 영향 없다.

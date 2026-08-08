@@ -129,13 +129,32 @@ restart_daemon() {
 # 빌드할 때마다 바뀐다. TCC 는 ad-hoc 바이너리를 identifier+cdhash 로 매칭하기
 # 때문에, 재배포하면 손쉬운 사용 허용이 조용히 무효화되고 키 훅이 죽는다.
 #
-# KMD_CODESIGN_ID 에 자체 서명 코드 서명 인증서 이름을 주면 요구사항이
-# identifier + 인증서 앵커로 고정되어 재배포해도 권한이 유지된다.
-# (키체인 접근 > 인증서 지원 > 인증서 생성… 에서 "코드 서명" 용도로 1회 생성)
+# 서명 키는 로그인 키체인이 아니라 **전용 키체인**(~/.keymander-release/)에 둔다.
+# 로그인 키체인의 키는 codesign 이 쓸 때마다 암호 프롬프트를 띄우는데, 비대화
+# 세션에서는 응답할 수 없어 실패하고 사용자 화면에는 뜬금없는 서명 요청 창만
+# 뜬다 (2026-08-08 사고 원인 중 하나). 전용 키체인은 암호 파일(0600)로
+# 스크립트가 직접 잠금해제하므로 프롬프트가 없다. 구성 절차: docs/07 §7
+KMD_KEYCHAIN="$HOME/.keymander-release/kmd-codesign.keychain-db"
+KMD_KEYCHAIN_PASS_FILE="$HOME/.keymander-release/keychain-pass"
+
 codesign_binaries() {
     [ "$(uname -s)" = "Darwin" ] || return 0
 
-    local sign_id="${KMD_CODESIGN_ID:--}"
+    local sign_id="${KMD_CODESIGN_ID:-}"
+    if [ -z "$sign_id" ] && [ -f "$KMD_KEYCHAIN" ] && [ -f "$KMD_KEYCHAIN_PASS_FILE" ]; then
+        sign_id="keymander-local-codesign"
+    fi
+    if [ "$sign_id" != "" ] && [ "$sign_id" != "-" ] && [ -f "$KMD_KEYCHAIN_PASS_FILE" ]; then
+        # 잠금해제 실패 시 서명이 프롬프트를 띄울 수 있으므로 ad-hoc 으로 강등.
+        # (프롬프트를 띄우지 않는 것이 서명 유지보다 우선이다)
+        if ! security unlock-keychain \
+                -p "$(cat "$KMD_KEYCHAIN_PASS_FILE")" "$KMD_KEYCHAIN" 2>/dev/null; then
+            warn "전용 키체인 잠금해제 실패 — ad-hoc 서명으로 진행"
+            sign_id="-"
+        fi
+    fi
+    : "${sign_id:=-}"
+
     local bin
     for bin in kmd kmd-daemon kmd-desktop; do
         if ! codesign --force --sign "$sign_id" \
@@ -147,10 +166,9 @@ codesign_binaries() {
 
     if [ "$sign_id" = "-" ]; then
         warn "ad-hoc 서명 — 이번 배포로 접근성 권한이 초기화될 수 있습니다."
-        echo "    고정하려면 코드 서명 인증서를 만든 뒤:"
-        echo "      export KMD_CODESIGN_ID='<인증서 이름>'"
+        echo "    안정 서명 구성: docs/07_distribution.md §7 (전용 키체인)"
     else
-        ok "코드 서명 완료 ($sign_id)"
+        ok "코드 서명 완료 ($sign_id, 전용 키체인)"
     fi
 }
 
