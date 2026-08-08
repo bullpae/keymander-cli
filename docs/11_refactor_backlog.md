@@ -47,7 +47,7 @@
 | **클립보드 P1 (docs/12 흐름 A)** | ✅ 2026-08-08 — 데몬 수집 + clip:N 즉시 붙여넣기, E2E 검증. R3-2 불필요(전경 앱에 이미 포커스). |
 | **R3-2. 전경창 캡처** | ✅ 2026-08-08 — NSWorkspace 전경 PID 캡처/활성화, Launch 시점 캡처, E2E 검증(캡처→타앱→복귀 붙여넣기). docs/12 P2 |
 | **클립보드 P1.1 프라이버시** | ✅ Concealed(비번) 제외 + changeCount 감시(macOS) |
-| **클립보드 P3 런처 UI** | ⬜ 마지막 조각 — `;` prefix 런처 검색→Enter=이전 앱 붙여넣기. 데몬 능력은 완비, GUI 통합만 남음(대화형 테스트 필요). docs/12 §6.4 |
+| **클립보드 P3 런처 UI** | ✅ 2026-08-08 구현 — `;`/`:clip` 검색→Enter=이전 앱 붙여넣기. 라우팅·IPC 검증, GUI 상호작용만 실기기 확인 대상. docs/12 §6 |
 | **R3-3. 삼중 중복 정리** | ⬜ calc/emoji/shell 확장과 SearchEngine 배선이 desktop·tui·daemon 3곳에 중복 — 단일 등록 지점으로 |
 | **R3-4. ExtensionAction 확장** | ⬜ `Paste`/`Inject` 추가 + 순수형(클라이언트)/능력형(데몬 IPC) 경계 도입 |
 

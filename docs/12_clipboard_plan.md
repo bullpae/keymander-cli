@@ -138,7 +138,7 @@ Request::InjectPaste                        → (기존, R3-1) ClipPaste의 기�
 3. ✅ **P2 — 전경창 캡처 + 흐름 B 데몬 능력**: NSWorkspace 전경 PID 캡처/활성화,
    `paste_slot_to_previous`, IPC(`ClipHistory`/`ClipPaste{to_previous}`).
    E2E 검증(캡처→다른 앱→복귀 붙여넣기).
-4. ⬜ **P3 — 흐름 B 런처 UI** (남은 마지막 조각, 대화형 테스트 필요):
+4. ✅ **P3 — 흐름 B 런처 UI** (구현 완료, GUI 상호작용은 실기기 확인 대상):
    - `query_prefix.rs`: `QueryPrefix::Clipboard` + alias `;`, `:clip` 추가
      (COMMANDS). `;`는 `:` 아닌 선행문자라 `prefix_of`/`normalize_slash_command`
      처리 확인 필요.
@@ -148,8 +148,11 @@ Request::InjectPaste                        → (기존, R3-1) ClipPaste의 기�
      `ClipPaste{slot, to_previous:true}` IPC 전송 후 창 닫기 → 데몬이 이전 앱
      활성화+붙여넣기(이미 검증된 경로). `Cmd+Enter`=복사만.
    - (선택) nav `V` = `;` 프리필 런처 실행.
-   - **GUI 상호작용이라 헤드리스 E2E 불가** — 구현 후 실기기에서 alt+space →
-     `;검색` → Enter → 이전 앱 붙여넣기 흐름을 사용자가 확인해야 한다.
+   - 구현됨: `;`/`:clip` prefix, handle_clip_query(ClipHistory IPC),
+     launch_selected의 kmd:clip:<slot> → ClipPaste{to_previous}. 검증: 라우팅
+     단위 테스트 + ClipHistory IPC 와이어 확인 + 붙여넣기 P2 E2E.
+   - **남은 확인(사용자)**: 실기기에서 alt+space → `;검색` → Enter → 이전 앱
+     붙여넣기 GUI 흐름. 헤드리스로는 iced 렌더/Enter를 검증할 수 없다.
 5. ⬜ **v2**: 레지스터(a–z), 이미지, 출처 앱 표시, `:calc` 결과 직접 붙여넣기.
 
 ## 7. 검증 계획
