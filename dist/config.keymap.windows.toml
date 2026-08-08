@@ -1,6 +1,11 @@
 # ── 키맵 설정 (Windows + 데몬) ─────────────────────────────────
 # LAlt 홀드 = 네비 레이어. 단어 단위 이동은 Windows 표준대로 Ctrl+화살표 (Alt+화살표 아님).
-# 붙여넣기 P=Ctrl+V, 줄복사 Y=Home→Shift+End→Ctrl+C
+# 붙여넣기 P=Ctrl+V, 줄복사 Y=Home→Shift+End→Ctrl+C, 줄삭제 U
+#
+# 더블탭 원칙: 연타 개념이 없는 키에만 건다.
+# Backspace(.)/Delete(/)는 연타 빈도가 가장 높은 키라 더블탭을 걸면
+# "두 글자 지우기"가 줄 삭제로 오발사된다 → 삭제키는 평범한 매핑으로 둔다.
+# I/O 단어 이동은 연타가 곧 "더 멀리"라 더블탭(줄 처음/끝)이 잘 맞는다.
 
 [launcher.keymap]
 active_profile = "vim-nav"
@@ -21,9 +26,12 @@ L = "Right"
 N = "PageUp"
 M = "PageDown"
 "." = "Backspace"
+"/" = "Delete"
+"," = "Ctrl+Backspace"                  # 앞 단어 통째 삭제
 Space = "launch:kmd-desktop"
 P = "Ctrl+V"
-Y = "macro:Home;Shift+End;Ctrl+C"
+Y = "macro:Home;Shift+End;Ctrl+C"       # 줄 복사 (vim yy)
+U = "macro:Home;Shift+End;Delete"       # 줄 삭제 (vim dd)
 
 [launcher.keymap.layers.nav.double_taps.I]
 single = "Ctrl+Left"
@@ -35,10 +43,22 @@ single = "Ctrl+Right"
 double = "End"
 timeout_ms = 300
 
-[launcher.keymap.layers.nav.double_taps.Slash]
-single = "Delete"
-double = "macro:Home;Shift+End;Delete"
-timeout_ms = 300
+# ── 마우스 레이어 (RAlt 홀드) ────────────────────────────────
+# 기본 배치는 코드 내장이라 아래 블록 없이도 동작한다. 값을 바꾸고 싶을 때만
+# 주석을 풀면 기본 위에 병합된다(미지정 키는 기본 유지).
+#
+#   E/S/D/F = 포인터 ↑←↓→   — 타이핑 홈포지션(검지 F)을 그대로 유지
+#   R/V     = 휠 ↑/↓        — 검지 세로열 R-F-V, 이동(중지)과 손가락 분리
+#   Space   = 좌클릭(홀드=드래그)   C/G = 우/중 클릭
+#   J/K/L   = 좌/우/중 클릭 (오른손 병행용)   LShift = 저속 정밀
+#
+# [launcher.keymap.layers.mouse.mappings]
+# E = "mouse:up"
+# S = "mouse:left"
+# D = "mouse:down"
+# F = "mouse:right"
+# R = "mouse:wheel-up"
+# V = "mouse:wheel-down"
 
 # Shift+Space 한영: 데몬이 기본 등록. 재정의하려면 아래 주석 해제.
 # [[launcher.keymap.combos]]

@@ -249,6 +249,7 @@ fn process_request(
                 keymap_layers: KEYMAP_SUMMARY.lock().map(|g| g.clone()).unwrap_or_default(),
                 config_error: CONFIG_LOAD_ERROR.lock().map(|g| g.clone()).unwrap_or(None),
                 keybind_error: keybind::hook_error(),
+                hook_health: keybind::hook_health_summary(),
             }
         }
 

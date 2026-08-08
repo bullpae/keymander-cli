@@ -923,6 +923,32 @@ pub trait KeyboardBackend: Send {
     fn stop(&mut self) -> Result<(), String>;
 }
 
+/// 키보드 훅 생존 요약 — `kmd daemon status`로 노출한다.
+///
+/// Windows는 LL 훅을 조용히 제거하므로(Modern Standby 복귀, 콜백 타임아웃 등)
+/// "데몬 실행 중"만으로는 키맵이 살아 있는지 알 수 없다. 훅 워치독이 남기는
+/// 하트비트/재설치 횟수를 그대로 보여준다.
+pub fn hook_health_summary() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let reinstalls = windows::hook_reinstall_count();
+        let idle_ms = windows::hook_idle_ms()?;
+        let reinstall_note = if reinstalls == 0 {
+            String::new()
+        } else {
+            format!(" · 재설치 {reinstalls}회")
+        };
+        Some(format!(
+            "설치됨 · 마지막 키 이벤트 {:.1}초 전{reinstall_note}",
+            idle_ms as f64 / 1000.0
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// 현재 플랫폼에 맞는 KeyboardBackend 생성
 pub fn create_backend() -> Box<dyn KeyboardBackend> {
     #[cfg(windows)]
@@ -982,7 +1008,7 @@ mod tests {
         let config = preset_config("vim-nav").expect("vim-nav 프리셋은 항상 레이어를 가진다");
         assert_eq!(config.layers.len(), 2, "nav + mouse 레이어");
 
-        // ── 마우스 레이어 (RAlt 홀드, 왼손 WASD + Space/J/K/L 클릭) ──
+        // ── 마우스 레이어 (RAlt 홀드, 왼손 ESDF + Space/C/G 클릭 + R/V 휠) ──
         let mouse = config
             .layers
             .iter()
@@ -991,9 +1017,25 @@ mod tests {
         assert!(mouse.trigger_aliases.contains(&VKey::Hangul), "한/영 별칭");
         assert_eq!(mouse.unmapped, UnmappedBehavior::Block);
         assert!(matches!(
-            mouse.mappings.get(&VKey::W),
+            mouse.mappings.get(&VKey::E),
             Some(BindAction::Mouse(MouseBind::MoveUp))
         ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::F),
+            Some(BindAction::Mouse(MouseBind::MoveRight))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::R),
+            Some(BindAction::Mouse(MouseBind::WheelUp))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::V),
+            Some(BindAction::Mouse(MouseBind::WheelDown))
+        ));
+        assert!(
+            !mouse.mappings.contains_key(&VKey::W),
+            "WASD 배치 폐기 — ESDF와 S/D 의미가 충돌해 병행 불가"
+        );
         assert!(matches!(
             mouse.mappings.get(&VKey::Space),
             Some(BindAction::Mouse(MouseBind::BtnLeft))
@@ -1018,9 +1060,10 @@ mod tests {
         assert!(layer.mappings.contains_key(&VKey::J));
         assert!(layer.mappings.contains_key(&VKey::N), "Alt+N은 PageUp 매핑");
         assert!(
-            !layer.mappings.contains_key(&VKey::Slash),
-            "/는 double_tap_mappings로 이동"
+            layer.mappings.contains_key(&VKey::Slash),
+            "/는 더블탭 없는 평범한 Delete — 탭 연타 보존"
         );
+        assert!(layer.mappings.contains_key(&VKey::U), "줄 삭제는 U 전용 키");
         assert!(
             !layer.mappings.contains_key(&VKey::I),
             "I는 double_tap_mappings로 이동"
@@ -1038,8 +1081,8 @@ mod tests {
             "Alt+O 더블탭"
         );
         assert!(
-            layer.double_tap_mappings.contains_key(&VKey::Slash),
-            "Alt+/ 더블탭"
+            !layer.double_tap_mappings.contains_key(&VKey::Slash),
+            "삭제키 더블탭 제거 — 연타로 지우다 줄 삭제가 오발사되던 문제"
         );
         #[cfg(target_os = "windows")]
         {

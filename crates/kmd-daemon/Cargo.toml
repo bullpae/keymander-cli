@@ -29,6 +29,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    # 훅 워치독의 GetTickCount (훅 생존 하트비트)
+    "Win32_System_SystemInformation",
 ] }
 # LLM 오토파일럿의 클립보드 주입 (Gemini PasteEnter 등)
 arboard = "3.6.1"

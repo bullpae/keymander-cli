@@ -66,6 +66,7 @@ fn send_status() -> Result<()> {
             keymap_layers,
             config_error,
             keybind_error,
+            hook_health,
         }) => {
             println!("데몬 상태: 실행 중");
             println!("  PID:        {pid}");
@@ -76,6 +77,9 @@ fn send_status() -> Result<()> {
             }
             for layer in &keymap_layers {
                 println!("  레이어:     {layer}");
+            }
+            if let Some(hook) = &hook_health {
+                println!("  키보드 훅:  {hook}");
             }
             println!("  자동 시작:  {}", autostart_label());
             if let Some(err) = &keybind_error {

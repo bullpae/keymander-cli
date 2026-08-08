@@ -11,6 +11,7 @@ use super::{
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -30,6 +31,74 @@ static HOOK_STATE: OnceLock<Arc<Mutex<EngineState>>> = OnceLock::new();
 
 /// 메시지 루프 스레드 ID — stop() 시 WM_QUIT를 보내 GetMessageW를 깨운다
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+// ── 훅 생존 감시 (워치독) ───────────────────────────────────────────────────
+//
+// Windows는 LL 훅을 **조용히** 제거한다. 콜백이 LowLevelHooksTimeout(기본
+// 300ms)을 넘기거나, Modern Standby(S0 저전력 대기) 복귀 과정에서 훅 스레드가
+// 스로틀/서스펜드되면 OS가 훅을 체인에서 떼어낸다. 이때 통지는 없다 —
+// HHOOK 핸들은 그대로 유효해 보이고, GetMessageW는 계속 블로킹하며,
+// 프로세스는 멀쩡히 살아 있다. 결과적으로 "데몬은 실행 중인데 키맵만 죽는"
+// 상태가 되고, 재시작 전까지 영구히 복구되지 않았다.
+//
+// 대응: 훅 콜백이 하트비트를 남기고, 워치독이 "사용자는 입력 중인데 훅은
+// 조용한" 상태를 감지하면 무해한 키(VK_NONAME)를 주입해 생존을 확인한 뒤,
+// 죽었으면 훅 스레드에 재설치를 요청한다.
+
+/// 훅 콜백이 마지막으로 호출된 시각 (GetTickCount). 콜백 최상단에서 갱신하므로
+/// 주입 이벤트로도 갱신된다 — 워치독의 생존 프로브가 성립하는 근거.
+static HOOK_LAST_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// 훅 재설치 누적 횟수 (진단용 — `kmd daemon status`로 노출)
+static HOOK_REINSTALLS: AtomicU32 = AtomicU32::new(0);
+
+/// 훅 스레드에 재설치를 요청하는 커스텀 메시지.
+/// LL 훅은 설치한 스레드의 메시지 큐로 디스패치되므로 재설치도 그 스레드에서
+/// 해야 한다 (다른 스레드에서 SetWindowsHookExW를 부르면 훅이 그쪽에 붙는다).
+const WM_KMD_REINSTALL_HOOK: u32 = WM_APP + 0x10;
+
+/// 워치독 점검 주기
+const WATCHDOG_INTERVAL_MS: u64 = 2000;
+
+/// 시스템 입력보다 훅 하트비트가 이만큼 뒤처지면 "의심" 상태
+const HOOK_STALE_MS: i32 = 1500;
+
+/// 시스템 전체 입력이 이보다 오래 없으면 판단을 보류한다.
+/// 사용자가 자리를 비운 상태에서 프로브를 쏘면 유휴 타이머가 리셋돼
+/// 화면 꺼짐·절전이 영영 걸리지 않는다 — 이 가드가 그걸 막는다.
+const IDLE_SKIP_MS: i32 = 5000;
+
+/// 프로브 최소 간격 — 마우스만 쓰는 구간에서 매 주기 주입하지 않도록 제한
+const PROBE_MIN_INTERVAL_MS: i32 = 10_000;
+
+/// 프로브 주입 후 훅 콜백을 기다리는 시간
+const PROBE_WAIT_MS: u64 = 120;
+
+/// 훅 재설치 누적 횟수 (진단용)
+pub fn hook_reinstall_count() -> u32 {
+    HOOK_REINSTALLS.load(Ordering::Relaxed)
+}
+
+/// 마지막 훅 이벤트 이후 경과 ms. 훅 미설치면 None.
+pub fn hook_idle_ms() -> Option<u32> {
+    let last = HOOK_LAST_SEEN.load(Ordering::Relaxed);
+    if last == 0 {
+        return None;
+    }
+    Some(unsafe { GetTickCount() }.wrapping_sub(last))
+}
+
+/// 시스템 전체 마지막 입력 시각 (키보드+마우스, GetTickCount 기준)
+fn last_system_input_tick() -> Option<u32> {
+    unsafe {
+        let mut lii: LASTINPUTINFO = std::mem::zeroed();
+        lii.cbSize = std::mem::size_of::<LASTINPUTINFO>() as u32;
+        if GetLastInputInfo(&mut lii) == 0 {
+            return None;
+        }
+        Some(lii.dwTime)
+    }
+}
 
 /// 워커 스레드 작업 — 일회성 액션 또는 코드(chord) 모드 주입/해제
 enum WorkerJob {
@@ -403,6 +472,11 @@ unsafe extern "system" fn keyboard_hook_proc(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    // 생존 하트비트 — 콜백이 호출됐다는 사실 자체가 훅이 체인에 살아 있다는
+    // 증거다. 주입(INJECTED) 이벤트와 code<0도 포함해 최상단에서 기록해야
+    // 워치독의 프로브가 성립한다. (catch_unwind 밖 — 원자 저장은 패닉 불가)
+    HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
+
     // `extern "system"` 경계를 넘는 패닉은 정의되지 않은 동작이고, 현대 Rust는
     // 이를 감지하면 프로세스를 abort시킨다 — 이 콜백이 유일한 키 이벤트 처리
     // 지점이라 그 순간 키보드 전체가 잠긴다. 어떤 패닉도 여기서 격리하고,
@@ -512,12 +586,125 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
     }
 }
 
+// ── 훅 재설치 / 워치독 ──────────────────────────────────────────────────────
+
+/// 죽은 훅을 떼고 다시 설치한다 (훅 스레드에서만 호출).
+///
+/// 훅이 사라진 동안의 keyup을 놓쳤을 수 있으므로 엔진의 일시 상태도 함께
+/// 리셋한다 — 그러지 않으면 "LAlt를 누른 채 훅이 죽었다가 되살아난" 경우
+/// 레이어가 계속 활성으로 남아 모든 키가 화살표로 나간다.
+unsafe fn reinstall_hook(hook: &mut HHOOK) {
+    // 코드 모드로 주입해 둔 트리거가 있으면 먼저 해제 (stuck-Alt 방지)
+    if let Some(state) = HOOK_STATE.get() {
+        if let Ok(mut guard) = state.lock() {
+            if let Some(trigger) = guard.engaged_chord_trigger() {
+                send_key_up(vkey_to_vk(trigger));
+            }
+            guard.reset_transient_state();
+        }
+    }
+
+    UnhookWindowsHookEx(*hook);
+    let fresh = SetWindowsHookExW(
+        WH_KEYBOARD_LL,
+        Some(keyboard_hook_proc),
+        std::ptr::null_mut(),
+        0,
+    );
+    if fresh.is_null() {
+        tracing::error!("키보드 훅 재설치 실패 — SetWindowsHookExW가 NULL 반환");
+        return;
+    }
+    *hook = fresh;
+    HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
+    let n = HOOK_REINSTALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    tracing::warn!(
+        "키보드 훅 재설치 완료 (누적 {n}회) — OS가 훅을 조용히 제거했음 \
+         (Modern Standby 복귀 / LowLevelHooksTimeout 초과 등)"
+    );
+}
+
+/// 훅 생존 워치독.
+///
+/// "사용자는 입력 중인데(GetLastInputInfo가 최신) 우리 훅만 조용하다"를
+/// 의심 신호로 삼고, 무해한 키(VK_NONAME = 0xFC, 예약된 no-op)를 주입해
+/// 콜백이 도는지 확인한다. 콜백 최상단에서 주입 이벤트로도 하트비트를
+/// 남기므로 이 프로브는 훅 생존 여부를 확정적으로 알려준다.
+///
+/// 프로브는 **시스템에 최근 입력이 있을 때만** 쏜다. 유휴 상태에서 주입하면
+/// 유휴 타이머가 리셋돼 화면 꺼짐·절전이 걸리지 않기 때문이다.
+fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut last_probe: Option<u32> = None;
+        while running.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(WATCHDOG_INTERVAL_MS));
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let now = unsafe { GetTickCount() };
+            let last_hook = HOOK_LAST_SEEN.load(Ordering::Relaxed);
+            let Some(last_input) = last_system_input_tick() else {
+                continue;
+            };
+            if !should_probe_hook(now, last_hook, last_input, last_probe) {
+                continue;
+            }
+            last_probe = Some(now);
+
+            // ── 생존 프로브 ──
+            // 콜백은 주입 이벤트로도 하트비트를 남기므로, 이 주입 뒤에도
+            // HOOK_LAST_SEEN이 그대로면 훅이 체인에서 빠진 것이 확정된다.
+            let before = HOOK_LAST_SEEN.load(Ordering::Relaxed);
+            send_key_press(VK_NONAME);
+            std::thread::sleep(std::time::Duration::from_millis(PROBE_WAIT_MS));
+            if HOOK_LAST_SEEN.load(Ordering::Relaxed) != before {
+                continue; // 살아 있다
+            }
+
+            tracing::warn!("키보드 훅 무응답 감지 — 재설치 요청");
+            let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
+            if tid != 0 {
+                unsafe {
+                    PostThreadMessageW(tid, WM_KMD_REINSTALL_HOOK, 0, 0);
+                }
+            }
+        }
+    })
+}
+
+/// 워치독 판정 (순수 함수 — 시각 산술만 담당해 단위 테스트 가능).
+///
+/// `last_hook == 0`은 훅 미설치를 뜻한다. 모든 시각은 GetTickCount 기반
+/// u32로 49.7일마다 랩어라운드하므로, 차이는 `wrapping_sub` 후 `i32`로
+/// 해석해 부호를 살린다 (훅이 시스템 입력보다 **앞선** 경우도 음수로 나온다).
+fn should_probe_hook(now: u32, last_hook: u32, last_input: u32, last_probe: Option<u32>) -> bool {
+    if last_hook == 0 {
+        return false; // 훅 미설치 — 판단 대상 아님
+    }
+    // 훅이 시스템 입력보다 뒤처진 정도
+    if (last_input.wrapping_sub(last_hook) as i32) < HOOK_STALE_MS {
+        return false; // 정상 — 훅이 최근 입력을 보고 있다
+    }
+    // 사용자가 자리를 비웠으면 판단 보류. 유휴 상태에서 프로브를 주입하면
+    // 시스템 유휴 타이머가 리셋돼 화면 꺼짐·절전이 걸리지 않는다.
+    if (now.wrapping_sub(last_input) as i32) > IDLE_SKIP_MS {
+        return false;
+    }
+    // 프로브 레이트 제한 — 마우스만 쓰는 구간에서 매 주기 주입하지 않도록
+    match last_probe {
+        Some(prev) if (now.wrapping_sub(prev) as i32) < PROBE_MIN_INTERVAL_MS => false,
+        _ => true,
+    }
+}
+
 // ── Backend 구현 ────────────────────────────────────────────────────────────
 
 pub struct WindowsKeyboardBackend {
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     action_worker: Option<std::thread::JoinHandle<()>>,
+    watchdog: Option<std::thread::JoinHandle<()>>,
 }
 
 impl WindowsKeyboardBackend {
@@ -526,6 +713,7 @@ impl WindowsKeyboardBackend {
             running: Arc::new(AtomicBool::new(false)),
             thread: None,
             action_worker: None,
+            watchdog: None,
         }
     }
 }
@@ -608,7 +796,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
         let thread = std::thread::spawn(move || {
             unsafe {
-                let hook = SetWindowsHookExW(
+                let mut hook = SetWindowsHookExW(
                     WH_KEYBOARD_LL,
                     Some(keyboard_hook_proc),
                     std::ptr::null_mut(),
@@ -626,6 +814,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
                 super::set_hook_error(None);
                 tracing::info!("키보드 훅 설치 완료");
+                HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
 
                 // stop()이 WM_QUIT를 보낼 수 있도록 스레드 ID 공개
                 HOOK_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
@@ -640,6 +829,12 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                     if ret == 0 || ret == -1 {
                         break;
                     }
+                    // 워치독이 훅 사망을 확인하면 이 메시지로 재설치를 요청한다.
+                    // (LL 훅은 설치한 스레드에 묶이므로 반드시 여기서 처리)
+                    if msg.message == WM_KMD_REINSTALL_HOOK {
+                        reinstall_hook(&mut hook);
+                        continue;
+                    }
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -647,11 +842,13 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 HOOK_THREAD_ID.store(0, Ordering::SeqCst);
                 running.store(false, Ordering::Relaxed);
                 UnhookWindowsHookEx(hook);
+                HOOK_LAST_SEEN.store(0, Ordering::Relaxed);
                 tracing::info!("키보드 훅 해제 완료");
             }
         });
 
         self.thread = Some(thread);
+        self.watchdog = Some(spawn_hook_watchdog(self.running.clone()));
         Ok(())
     }
 
@@ -666,6 +863,10 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        // 워치독은 running=false를 보고 다음 주기에 빠져나온다
+        if let Some(watchdog) = self.watchdog.take() {
+            let _ = watchdog.join();
         }
         // 센더를 드롭하면 워커의 recv 루프가 끝난다
         if let Ok(mut g) = ACTION_TX.lock() {
@@ -699,5 +900,82 @@ mod tests {
         for &k in VKey::ALL {
             assert_eq!(vk_to_vkey(vkey_to_vk(k)), Some(k), "{k:?} 왕복 불일치");
         }
+    }
+
+    // ── 훅 워치독 판정 ──
+    //
+    // OS가 LL 훅을 조용히 제거하는 사고(Modern Standby 복귀 등)를 감지하는
+    // 조건식. 시각 산술이 전부라 여기서 검증한다.
+
+    #[test]
+    fn 훅이_최근_입력을_보고_있으면_프로브_안함() {
+        // 사용자가 방금 친 키를 훅도 봤다 → 정상
+        let now = 100_000;
+        assert!(!should_probe_hook(now, now - 100, now - 100, None));
+    }
+
+    #[test]
+    fn 입력은_있는데_훅만_조용하면_프로브() {
+        // 시스템은 0.2초 전 입력을 봤는데 훅은 10초째 조용 → 사망 의심
+        let now = 100_000;
+        assert!(should_probe_hook(now, now - 10_000, now - 200, None));
+    }
+
+    #[test]
+    fn 훅_미설치면_판단_대상_아님() {
+        let now = 100_000;
+        assert!(!should_probe_hook(now, 0, now - 200, None));
+    }
+
+    #[test]
+    fn 자리비움_상태에서는_프로브_금지() {
+        // 유휴 상태에서 키를 주입하면 시스템 유휴 타이머가 리셋돼
+        // 화면 꺼짐·절전이 영영 안 걸린다 — 반드시 걸러야 한다.
+        let now = 100_000;
+        let last_input = now - (IDLE_SKIP_MS as u32) - 1_000;
+        assert!(!should_probe_hook(
+            now,
+            last_input - 10_000,
+            last_input,
+            None
+        ));
+    }
+
+    #[test]
+    fn 프로브_레이트_제한() {
+        let now = 100_000;
+        let stale_hook = now - 10_000;
+        let fresh_input = now - 200;
+        // 직전 프로브 직후 → 억제
+        assert!(!should_probe_hook(
+            now,
+            stale_hook,
+            fresh_input,
+            Some(now - 1_000)
+        ));
+        // 최소 간격 경과 → 허용
+        assert!(should_probe_hook(
+            now,
+            stale_hook,
+            fresh_input,
+            Some(now - (PROBE_MIN_INTERVAL_MS as u32) - 1)
+        ));
+    }
+
+    #[test]
+    fn 틱_랩어라운드_구간에서도_정상_판정() {
+        // GetTickCount는 49.7일마다 0으로 되감긴다. 그 경계에서 뺄셈이
+        // 거대한 양수가 되면 "멀쩡한 훅"을 죽은 것으로 오판한다.
+        let now = 500u32; // 랩어라운드 직후
+        let last_hook = u32::MAX - 500; // 되감기 직전 (실제로는 1초 전)
+        let last_input = u32::MAX - 400;
+        assert!(
+            !should_probe_hook(now, last_hook, last_input, None),
+            "랩어라운드 경계에서 정상 훅을 사망으로 오판하면 안 된다"
+        );
+
+        // 같은 경계에서 진짜로 뒤처진 경우는 정상적으로 잡아낸다
+        let stale_hook = u32::MAX - 20_000;
+        assert!(should_probe_hook(now, stale_hook, now - 200, None));
     }
 }

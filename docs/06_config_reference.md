@@ -194,11 +194,22 @@ active_profile = "vim-nav"
 
 | 키 | 기능 |
 |----|------|
-| W / A / S / D | 포인터 ↑ ← ↓ → (시간 가속: 180→1300px/s) |
+| E / S / D / F | 포인터 ↑ ← ↓ → (시간 가속: 180→1300px/s) |
+| R / V | 휠 ↑ / ↓ |
 | Space | 좌클릭 — 누르고 있으면 드래그 |
-| J / K / L | 좌 / 우 / 중 클릭 |
+| C / G | 우 / 중 클릭 |
+| J / K / L | 좌 / 우 / 중 클릭 (오른손 병행용 별칭) |
 | LShift 홀드 | 저속 정밀 모드 (×0.25) |
 | 그 외 | 차단 (오타 방지) |
+
+이동축이 **ESDF**인 이유: WASD는 검지를 D에 묶어 타이핑 홈포지션(검지 F)을
+한 칸 어긋나게 만든다. ESDF는 손을 홈에 둔 채로 조작되고, 덤으로
+Q/W/R/T/A/G/Z/X/C/V/B가 확장 자리로 열려 클릭·휠을 같은 손에 붙일 수 있다.
+휠을 R/V에 둔 것은 검지 세로열(R-F-V)이라 이동(중지)과 손가락이 갈리기
+때문 — 포인터를 움직이면서 스크롤할 수 있다.
+
+> WASD와 ESDF는 병행할 수 없다. S가 (아래 → 왼쪽), D가 (오른쪽 → 아래)로
+> 의미가 뒤집혀 서로 덮어쓴다. 되돌리는 방법은 아래 커스터마이징 절 참고.
 
 #### tap-hold(모드탭) 커스터마이징
 
@@ -215,12 +226,23 @@ timeout_ms = 200    # tap 판정 시간
 `mouse:up/down/left/right`(이동), `mouse:click/rclick/mclick`(버튼),
 `mouse:wheel-up/wheel-down`(휠), `mouse:slow`(저속 모드).
 
+기본 배치 위에 병합되며, 지정하지 않은 키는 기본값이 그대로 남는다.
+따라서 이동축을 통째로 바꿀 때는 **기본 이동키 4개(E/S/D/F)를 전부 덮어써야**
+한다 — 남겨두면 옛 키가 계속 포인터를 움직인다. 무동작 액션은 없으므로,
+비우고 싶은 키는 다른 기능으로 돌려준다.
+
+WASD로 되돌리는 예 (E/F는 휠로 재활용):
+
 ```toml
 [launcher.keymap.layers.mouse]
 trigger = "RAlt"
 [launcher.keymap.layers.mouse.mappings]
-E = "mouse:wheel-up"    # 기본 배치 위에 병합된다
-C = "mouse:wheel-down"
+W = "mouse:up"
+A = "mouse:left"
+S = "mouse:down"
+D = "mouse:right"
+E = "mouse:wheel-up"    # 기본 이동 매핑을 덮어써 잔상 제거
+F = "mouse:wheel-down"
 ```
 
 ### 4.6 [keybindings]
