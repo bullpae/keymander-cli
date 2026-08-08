@@ -155,11 +155,12 @@ codesign_binaries() {
     fi
     : "${sign_id:=-}"
 
+    # .new(새 inode)를 서명한다 — rename 전에. 제자리 재서명 금지 (위 주석 참조).
     local bin
     for bin in kmd kmd-daemon kmd-desktop; do
         if ! codesign --force --sign "$sign_id" \
                 --identifier "com.keymander.$bin" \
-                "$DEPLOY_DIR/$bin" 2>/dev/null; then
+                "$DEPLOY_DIR/$bin.new" 2>/dev/null; then
             warn "codesign 실패: $bin"
         fi
     done
@@ -215,9 +216,15 @@ fi
 info "[3/4] $DEPLOY_DIR 에 배포 중..."
 mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/kmd-data"
 
-cp "$TARGET_DIR/kmd" "$DEPLOY_DIR/"
-cp "$TARGET_DIR/kmd-desktop" "$DEPLOY_DIR/"
-cp "$TARGET_DIR/kmd-daemon" "$DEPLOY_DIR/"
+# 새 inode 에 배치한 뒤 서명하고 rename 으로 교체한다. 이미 실행된 적 있는
+# 파일을 제자리에서 덮어쓰거나 재서명하면 커널의 vnode 서명 캐시가 낡아,
+# 다음 실행이 OS_REASON_CODESIGNING 으로 즉사한다 (2026-08-08 실사고 —
+# launchd가 데몬을 기동 직후 kill). rename 은 원자적이고 실행 중 프로세스의
+# 매핑(기존 inode)도 건드리지 않는다.
+for bin in kmd kmd-desktop kmd-daemon; do
+    cp "$TARGET_DIR/$bin" "$DEPLOY_DIR/$bin.new"
+    chmod +x "$DEPLOY_DIR/$bin.new"
+done
 if [ ! -f "$DEPLOY_DIR/kmd-data/config.toml" ]; then
     case "$(uname -s)" in
         Darwin) CONFIG_PLATFORM=macos ;;
@@ -228,8 +235,10 @@ if [ ! -f "$DEPLOY_DIR/kmd-data/config.toml" ]; then
 else
     info "기존 config.toml 유지 (덮어쓰기 안 함)"
 fi
-chmod +x "$DEPLOY_DIR/kmd" "$DEPLOY_DIR/kmd-desktop" "$DEPLOY_DIR/kmd-daemon"
 codesign_binaries
+for bin in kmd kmd-desktop kmd-daemon; do
+    mv -f "$DEPLOY_DIR/$bin.new" "$DEPLOY_DIR/$bin"
+done
 
 ok "바이너리 배포 완료"
 
