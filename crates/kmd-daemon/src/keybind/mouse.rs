@@ -25,6 +25,17 @@ const SLOW_FACTOR: f32 = 0.25;
 /// 휠 속도 (노치/초)
 const WHEEL_NOTCHES_PER_SEC: f32 = 6.0;
 
+/// 램프 경과 시간(ms)에 대한 이동 속도(px/s). slow 모드면 SLOW_FACTOR 적용.
+/// 순수 함수로 분리해 스레드/벽시계 없이 단위 테스트한다 (타이밍 플레이크 방지).
+fn ramp_speed(t_ms: f32, slow: bool) -> f32 {
+    let speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (t_ms / RAMP_MS).min(1.0);
+    if slow {
+        speed * SLOW_FACTOR
+    } else {
+        speed
+    }
+}
+
 /// 상대 이동/휠 주입 — 플랫폼 어댑터가 구현
 pub trait MouseSink: Send + 'static {
     /// 포인터 상대 이동 (픽셀)
@@ -107,10 +118,7 @@ impl MouseWorker {
                 let now = Instant::now();
                 let start = *ramp_start.get_or_insert(now);
                 let t_ms = now.duration_since(start).as_secs_f32() * 1000.0;
-                let mut speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (t_ms / RAMP_MS).min(1.0);
-                if slow {
-                    speed *= SLOW_FACTOR;
-                }
+                let speed = ramp_speed(t_ms, slow);
 
                 let mut vx = (r as i8 - l as i8) as f32;
                 let mut vy = (d as i8 - u as i8) as f32;
@@ -258,40 +266,40 @@ mod tests {
         assert!(rx.try_recv().is_err(), "stop_all 후 이동 없음");
     }
 
-    /// 주어진 시간 동안 오른쪽으로 이동시키고 누적 이동량을 돌려준다.
-    fn distance_moved(window: Duration, slow: bool) -> i32 {
-        let (tx, rx) = mpsc::channel();
-        let worker = MouseWorker::start(RecordingSink(tx));
-        if slow {
-            worker.engage(MouseBind::Slow);
+    // slow 모드 속도 검증은 순수 함수 ramp_speed로 한다. 워커 스레드 + 벽시계로
+    // 재면 CI 부하에 따라 틱 간격이 달라져 플레이크가 난다(실제로 두 번 깨졌다) —
+    // 속도 로직 자체는 시간의 결정적 함수이므로 스레드 없이 직접 검증한다.
+    #[test]
+    fn slow_mode_reduces_step() {
+        for &t in &[0.0f32, 100.0, 250.0, 500.0, 1000.0] {
+            let normal = ramp_speed(t, false);
+            let slow = ramp_speed(t, true);
+            assert!(normal >= MIN_SPEED, "일반 속도는 최소 속도 이상 (t={t})");
+            assert!(
+                (slow - normal * SLOW_FACTOR).abs() < 0.01,
+                "저속 = 일반 × {SLOW_FACTOR} (t={t}: slow={slow}, normal={normal})"
+            );
+            assert!(slow < normal, "저속은 항상 일반보다 느리다 (t={t})");
         }
-        worker.engage(MouseBind::MoveRight);
-        std::thread::sleep(window);
-        worker.stop_all();
-
-        let mut total = 0;
-        while let Ok((dx, _)) = rx.try_recv() {
-            total += dx;
-        }
-        total
     }
 
     #[test]
-    fn slow_mode_reduces_step() {
-        // "N틱 동안의 절대 이동량"으로 재면 안 된다 — 틱당 이동은 고정 dt를 쓰지만
-        // 가속 램프는 벽시계 기준이라, 러너가 느려 틱 간격이 벌어지면 같은 틱 수에도
-        // 가속이 더 붙어 이동량이 커진다(CI에서 이 테스트가 그렇게 깨졌다).
-        //
-        // 대신 같은 벽시계 구간을 두 모드로 재서 비율을 본다. 램프 진행이 양쪽 모두
-        // 같은 시간 축을 타므로 부하가 걸려도 SLOW_FACTOR(0.25)만큼의 차이는 남는다.
-        const WINDOW: Duration = Duration::from_millis(120);
-        let normal = distance_moved(WINDOW, false);
-        let slow = distance_moved(WINDOW, true);
-
-        assert!(normal > 0, "일반 모드에서 이동이 있어야 함");
+    fn ramp_가속은_min에서_max까지_단조증가_후_고정() {
         assert!(
-            slow * 2 < normal,
-            "저속 {slow}px 는 같은 시간 일반 {normal}px 의 절반 미만이어야 함"
+            (ramp_speed(0.0, false) - MIN_SPEED).abs() < 0.01,
+            "t=0은 MIN"
+        );
+        assert!(
+            ramp_speed(250.0, false) > ramp_speed(0.0, false),
+            "중간은 더 빠름"
+        );
+        assert!(
+            (ramp_speed(RAMP_MS, false) - MAX_SPEED).abs() < 0.01,
+            "램프 끝=MAX"
+        );
+        assert!(
+            (ramp_speed(RAMP_MS * 10.0, false) - MAX_SPEED).abs() < 0.01,
+            "램프 이후는 MAX에 고정(clamp)"
         );
     }
 }
