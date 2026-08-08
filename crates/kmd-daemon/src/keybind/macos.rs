@@ -893,6 +893,20 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
+    // `extern "C"` 경계를 넘는 패닉은 정의되지 않은 동작이고, 현대 Rust는 이를
+    // 감지하면 프로세스를 abort시킨다 — 이 콜백이 유일한 키 이벤트 처리 지점이라
+    // 그 순간 키보드 전체가 잠긴다. 어떤 패닉(뮤텍스 poison·인덱스 초과 등)도
+    // 여기서 격리하고, 이벤트를 그대로 통과시켜(remap 없이) OS 기본 동작은 살린다.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        event_tap_callback_inner(type_, event)
+    }))
+    .unwrap_or_else(|_| {
+        tracing::error!("event_tap_callback 내부 패닉 — 이벤트 통과 (훅 유지)");
+        event
+    })
+}
+
+unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef {
     let tap_disabled =
         type_ == CG_EVENT_TAP_DISABLED_BY_TIMEOUT || type_ == CG_EVENT_TAP_DISABLED_BY_USER_INPUT;
 

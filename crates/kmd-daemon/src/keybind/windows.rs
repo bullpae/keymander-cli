@@ -396,6 +396,20 @@ unsafe extern "system" fn keyboard_hook_proc(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    // `extern "system"` 경계를 넘는 패닉은 정의되지 않은 동작이고, 현대 Rust는
+    // 이를 감지하면 프로세스를 abort시킨다 — 이 콜백이 유일한 키 이벤트 처리
+    // 지점이라 그 순간 키보드 전체가 잠긴다. 어떤 패닉도 여기서 격리하고,
+    // 다음 훅으로 이벤트를 넘겨(remap 없이) OS 기본 동작은 살린다.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        keyboard_hook_proc_inner(code, w_param, l_param)
+    }))
+    .unwrap_or_else(|_| {
+        tracing::error!("keyboard_hook_proc 내부 패닉 — 이벤트 통과 (훅 유지)");
+        CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+    })
+}
+
+unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if code < 0 {
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
