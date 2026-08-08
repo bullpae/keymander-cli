@@ -65,20 +65,37 @@ TARGET_DIR="target/$PROFILE"
 
 restart_daemon() {
     info "데몬/데스크톱 프로세스 종료 중..."
-    pkill -f kmd-daemon 2>/dev/null || true
     pkill -f kmd-desktop 2>/dev/null || true
-    sleep 1
 
-    info "데몬 시작 중..."
-    mkdir -p "$DEPLOY_DIR/kmd-data"
     # 로그는 런타임 디렉터리(OS 표준)로 — kmd daemon status가 보여주는 경로와 일치
     case "$(uname -s)" in
         Darwin) RUNTIME_DIR="$HOME/Library/Application Support/kmd" ;;
         *)      RUNTIME_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kmd" ;;
     esac
-    mkdir -p "$RUNTIME_DIR"
-    nohup "$DEPLOY_DIR/kmd-daemon" > "$RUNTIME_DIR/daemon.log" 2>&1 &
-    sleep 1
+    mkdir -p "$RUNTIME_DIR" "$DEPLOY_DIR/kmd-data"
+
+    # macOS: LaunchAgent가 설치돼 있으면 반드시 launchd로 재시작한다.
+    # nohup으로 이 스크립트(터미널) 밑에서 띄우면 TCC가 접근성 권한을 데몬이
+    # 아니라 부모(터미널/셸) 기준으로 귀속시켜, kmd-daemon을 허용해도
+    # AXIsProcessTrusted=false가 되고 키 훅이 죽는다. launchd(PID 1)가 띄우면
+    # 귀속이 깨끗하다. (kmd daemon install 로 LaunchAgent 등록)
+    local agent="$HOME/Library/LaunchAgents/com.keymander.daemon.plist"
+    if [ "$(uname -s)" = "Darwin" ] && [ -f "$agent" ]; then
+        info "데몬 재시작 중 (launchd)..."
+        launchctl kickstart -k "gui/$(id -u)/com.keymander.daemon" 2>/dev/null \
+            || { launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null || true; }
+    else
+        info "데몬 시작 중..."
+        if [ "$(uname -s)" = "Darwin" ]; then
+            warn "LaunchAgent 미설치 — nohup으로 시작합니다."
+            warn "이 경우 TCC 접근성 귀속이 터미널 기준이 되어 키 훅이 안 붙을 수 있습니다."
+            echo "    권장: kmd daemon install (로그인 자동시작 + 깨끗한 권한 귀속)"
+        fi
+        pkill -f kmd-daemon 2>/dev/null || true
+        sleep 1
+        nohup "$DEPLOY_DIR/kmd-daemon" > "$RUNTIME_DIR/daemon.log" 2>&1 &
+    fi
+    sleep 2
 
     if pgrep -f kmd-daemon > /dev/null; then
         ok "kmd-daemon 실행 중 (PID: $(pgrep -f kmd-daemon | head -1))"
@@ -87,11 +104,12 @@ restart_daemon() {
     fi
 
     # macOS: 접근성 권한이 없으면 데몬은 멀쩡히 뜨지만 CGEventTap 설치가 실패해
-    # Alt+Space 와 모든 레이어가 통째로 죽는다. status 는 여전히 "실행 중"으로
-    # 보이므로 배포 직후 로그로 직접 확인한다.
+    # Alt+Space 와 모든 레이어가 통째로 죽는다. 데몬 자신이 보고하는 현재 상태로
+    # 판정한다 — 로그 grep은 누적된 과거 실패 줄에 걸려 오탐이 난다.
+    # (kmd status 출력에 "키 훅" 라인이 있으면 = hook_error 존재 = 미동작)
     if [ "$(uname -s)" = "Darwin" ]; then
         sleep 1
-        if grep -q "CGEventTapCreate 실패" "$RUNTIME_DIR/daemon.log" 2>/dev/null; then
+        if "$DEPLOY_DIR/kmd" daemon status 2>/dev/null | grep -q "키 훅"; then
             echo ""
             warn "접근성(손쉬운 사용) 권한이 없어 키보드 훅이 설치되지 않았습니다."
             warn "Alt+Space 와 nav/mouse 레이어가 동작하지 않습니다."
