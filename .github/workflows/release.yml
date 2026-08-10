@@ -270,6 +270,8 @@ jobs:
           files: artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # rc 등 '-' 포함 태그는 프리릴리스로 표시 — latest로 잡히지 않게
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # 릴리스마다 GitHub Pages의 APT/YUM 저장소를 최근 릴리스 기준으로 재발행한다.
   # 이게 있어야 `apt update`/`dnf upgrade`로 갱신을 받을 수 있다.

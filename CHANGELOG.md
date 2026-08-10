@@ -4,7 +4,24 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **CapsLock 레이어 트리거 (실험, opt-in)** — nav 레이어 트리거를 LAlt 대신
+  CapsLock으로 쓸 수 있다 (`trigger = "CapsLock"`). macOS는 데몬이 시작 시
+  hidutil로 CapsLock→F19를 재맵해 홀드 감지 불가 문제를 우회하고, 종료 시
+  원복한다. Windows/Linux는 재맵 없이 그대로 동작. 트리거가 non-modifier가
+  되면서 HWP `Alt+Shift+N` 등 modifier 단축키 가림이 사라진다. 탭 액션은
+  `tap_action = "Hangul"` 권장 — 짧게 탭 = 한/영 전환, 홀드 = 레이어
+  (macOS 순정 caps 한영과 동일 UX). 상세는 docs/13.
+
 ### Fixed
+- **한/영 전환 직후 입력이 없으면 영문으로 되돌아가던 문제 (macOS)** —
+  Shift+Space 전환은 Ctrl+Space 주입(네이티브 경로)으로 이미 성공하는데,
+  백그라운드 스레드의 TIS 읽기가 낡은 값을 돌려줘 검증이 헛실패하고, 그때
+  도는 TISSelectInputSource 폴백이 반쪽 전환을 일으켜 잠시 후 영문으로
+  스냅백시켰다. 폴백을 제거하고 검증은 로그 전용으로 남겼다.
+- **콤보 키 홀드 시 오토리피트 재발화** — Shift+Space를 누르고 있으면
+  OS 오토리피트 keydown마다 콤보(한/영 토글 등)가 반복 발화했다. 콤보/
+  더블탭으로 소비된 키는 keyup까지 리피트 down을 억제한다.
 - **데몬은 살아 있는데 키맵만 죽던 문제 — 키보드 훅 워치독 추가 (Windows)** —
   Windows는 저수준 키보드 훅(WH_KEYBOARD_LL)을 **통지 없이** 제거한다.
   콜백이 `LowLevelHooksTimeout`(기본 300ms)을 넘기거나, **Modern Standby
