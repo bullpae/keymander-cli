@@ -1407,7 +1407,9 @@ mod tests {
         // 트리거를 LAlt 등으로 되돌린 사용자에게만 HHKB 모드탭이 살아난다.
         let e = effective_keymap(&keymap_with_profile("vim-nav"));
         assert!(
-            !e.tap_holds.keys().any(|k| k.eq_ignore_ascii_case("capslock")),
+            !e.tap_holds
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("capslock")),
             "CapsLock이 레이어 트리거인 기본 상태에서는 모드탭 미주입"
         );
 
@@ -1420,7 +1422,10 @@ mod tests {
             },
         );
         let e2 = effective_keymap(&km);
-        let th = e2.tap_holds.get("CapsLock").expect("LAlt 트리거면 모드탭 주입");
+        let th = e2
+            .tap_holds
+            .get("CapsLock")
+            .expect("LAlt 트리거면 모드탭 주입");
         assert_eq!(th.tap.as_deref(), Some("CapsLock"));
         assert_eq!(th.hold, "LCtrl");
 
@@ -1461,7 +1466,9 @@ mod tests {
         );
         let e = effective_keymap(&km);
         assert!(
-            !e.tap_holds.keys().any(|k| k.eq_ignore_ascii_case("capslock")),
+            !e.tap_holds
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("capslock")),
             "CapsLock이 레이어 트리거면 프리셋 모드탭을 주입하지 않아야 함"
         );
         assert_eq!(e.layers["nav"].trigger, "CapsLock");

@@ -551,10 +551,10 @@ mod tests {
         assert!(!kb.combos.is_empty(), "한/영 Shift+Space 콤보 포함");
         #[cfg(target_os = "windows")]
         assert!(
-            kb.tap_holds
+            !kb.tap_holds
                 .iter()
                 .any(|t| t.key == keybind::VKey::CapsLock),
-            "CapsLock tap-hold 기본값"
+            "CapsLock이 기본 레이어 트리거(0.13.0)이므로 모드탭은 미주입"
         );
     }
 
