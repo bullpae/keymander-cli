@@ -39,9 +39,13 @@ Windows/Linux는 CapsLock이 평범한 키라 재맵 불필요 — trigger="Caps
 ```toml
 [launcher.keymap.layers.nav]
 trigger = "CapsLock"      # LAlt 대신
-tap_action = "Escape"     # 짧게 탭 = Esc (원하면 변경)
+tap_action = "Hangul"     # 짧게 탭 = 한/영 전환 (macOS 순정 caps 한영과 동일 UX)
 tap_hold_ms = 200
 ```
+
+탭 액션은 처음엔 `Escape`였으나 물리 Esc와 중복이고 오탭 시 조합 취소·다이얼로그
+닫힘 부작용이 있어 `Hangul`로 교체 — 한영도 레이어도 CapsLock 하나로 통합된다.
+(Shift/CapsLock 인접 오타 문제도 해소. Shift+Space·RShift 더블탭 한영은 그대로 유지.)
 
 배포 후 데몬이 자동으로 macOS 재맵을 적용한다. `kmd daemon status`에
 `nav: CapsLock 홀드`로 표시된다(엔진 내부는 F19).

@@ -302,6 +302,23 @@ impl EngineState {
                 .extend(self.modifiers_held.iter().copied());
         }
 
+        // ── 2. 콤보/더블탭으로 소비된 키 억제 ──
+        // keyup은 물론, 홀드 중 오토리피트 down도 막는다 — 안 막으면 Shift+Space
+        // 홀드 시 리피트마다 콤보(한/영 토글 등)가 재발화한다. 진짜 재입력은
+        // keyup이 먼저 와서 소비 상태를 지우므로 정상 발화한다.
+        if self.combo_consumed_key == Some(vkey) {
+            if is_up {
+                self.combo_consumed_key = None;
+            }
+            return KeyDecision::Suppress;
+        }
+        if self.dt_consumed_key == Some(vkey) {
+            if is_up {
+                self.dt_consumed_key = None;
+            }
+            return KeyDecision::Suppress;
+        }
+
         // ── keymap on/off 토글 ──
         if is_down && !is_modifier_key(&vkey) {
             if let Some(toggle) = self.config.toggle_keymap.clone() {
@@ -332,18 +349,6 @@ impl EngineState {
                     }
                     return KeyDecision::Suppress;
                 }
-            }
-        }
-
-        // ── 2. 콤보/더블탭으로 소비된 키의 keyup 억제 ──
-        if is_up {
-            if self.combo_consumed_key == Some(vkey) {
-                self.combo_consumed_key = None;
-                return KeyDecision::Suppress;
-            }
-            if self.dt_consumed_key == Some(vkey) {
-                self.dt_consumed_key = None;
-                return KeyDecision::Suppress;
             }
         }
 
@@ -1342,6 +1347,28 @@ mod tests {
             e.process_key(VKey::LShift, false, 150),
             KeyDecision::PassThrough
         ));
+    }
+
+    #[test]
+    fn combo_autorepeat_does_not_refire() {
+        let mut e = EngineState::new(combo_config());
+        e.process_key(VKey::LShift, true, 0);
+        assert_execute_sendkey(e.process_key(VKey::Space, true, 50), VKey::Hangul);
+        // Space 홀드 → 오토리피트 down은 재발화하지 않고 억제
+        assert!(matches!(
+            e.process_key(VKey::Space, true, 300),
+            KeyDecision::Suppress
+        ));
+        assert!(matches!(
+            e.process_key(VKey::Space, true, 350),
+            KeyDecision::Suppress
+        ));
+        // keyup으로 소비 해제 → 진짜 재입력은 다시 발화
+        assert!(matches!(
+            e.process_key(VKey::Space, false, 400),
+            KeyDecision::Suppress
+        ));
+        assert_execute_sendkey(e.process_key(VKey::Space, true, 500), VKey::Hangul);
     }
 
     #[test]

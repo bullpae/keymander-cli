@@ -173,11 +173,7 @@ extern "C" {
 extern "C" {
     fn TISCopyCurrentKeyboardInputSource() -> *mut c_void;
     fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *const c_void;
-    fn TISCreateInputSourceList(properties: *const c_void, all_installed: bool) -> *mut c_void;
-    fn TISSelectInputSource(source: *mut c_void) -> i32;
     static kTISPropertyInputSourceLanguages: *const c_void;
-    static kTISPropertyInputSourceType: *const c_void;
-    static kTISTypeKeyboardInputMode: *const c_void;
 }
 
 // ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
@@ -461,8 +457,12 @@ const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 /// "이전 입력 소스 선택"(Ctrl+Space, symbolic hotkey 60)을 합성 이벤트로
 /// 주입해 동일한 네이티브 경로(HIToolbox)를 태운다. 입력 소스가 2개(영문/한글)
 /// 구성에서 "이전 소스" = 토글. IME의 미확정 조합 커밋도 정상 입력 경로로
-/// 흘러 글자 순서 뒤섞임을 방지한다. 주입이 반영되지 않으면(단축키 비활성 등)
-/// TIS API로 폴백한다.
+/// 흘러 글자 순서 뒤섞임을 방지한다.
+///
+/// 검증 실패 시 TIS 재선택 폴백은 두지 않는다 — 백그라운드 스레드의 TIS 읽기가
+/// 낡은 값을 돌려줘 성공한 전환을 "미반영"으로 오판하는 일이 있고, 그때 도는
+/// TISSelectInputSource가 위의 반쪽 전환을 일으켜 잠시 후 영문으로 되돌리는
+/// 증상을 만든다 (전환 후 입력이 없을 때만 재현되던 그 버그). 검증은 로그 전용.
 fn toggle_input_source() {
     let to_korean = unsafe {
         let current = TISCopyCurrentKeyboardInputSource();
@@ -476,7 +476,6 @@ fn toggle_input_source() {
     };
     let target: &'static [u8] = if to_korean { b"ko\0" } else { b"en\0" };
     let target_name = if to_korean { "ko" } else { "en" };
-    let seq_at_start = INPUT_SEQ.load(Ordering::Relaxed);
 
     std::thread::spawn(move || unsafe {
         // 물리 수정자(Shift 등)가 해제될 때까지 대기 — Shift가 남은 채 주입하면
@@ -495,7 +494,8 @@ fn toggle_input_source() {
         tracing::info!("입력 소스 전환: Ctrl+Space 주입 → {target_name}");
         send_combo(&[VKey::LCtrl], VKey::Space);
 
-        // 주입 반영 확인 (네이티브 경로라 선택==실제 적용)
+        // 주입 반영 확인 — 로그 전용. 이 스레드의 TIS 읽기는 낡은 값일 수 있어
+        // 미확인이어도 개입하지 않는다 (실제 전환은 네이티브 경로가 이미 처리).
         for attempt in 0..4 {
             std::thread::sleep(std::time::Duration::from_millis(60));
             let cur = TISCopyCurrentKeyboardInputSource();
@@ -509,17 +509,7 @@ fn toggle_input_source() {
                 return;
             }
         }
-
-        // 주입 미반영 → TIS 폴백. 단 사용자가 이미 타이핑 중이면 조합 보호를
-        // 위해 개입하지 않는다 (소스 재선택은 진행 중인 조합을 취소시킨다).
-        if INPUT_SEQ.load(Ordering::Relaxed) != seq_at_start {
-            tracing::info!("입력 소스 전환: 타이핑 감지 — TIS 폴백 생략 ({target_name})");
-            return;
-        }
-        tracing::warn!("Ctrl+Space 주입 미반영 — TIS 폴백: {target_name}");
-        if !tis_select_source_by_language(target) {
-            tracing::warn!("입력 소스 전환 실패: {target_name} 소스를 찾을 수 없음");
-        }
+        tracing::info!("입력 소스 전환 미확인(TIS 읽기 지연 가능): {target_name}");
     });
 }
 
@@ -537,51 +527,6 @@ unsafe fn tis_first_language_matches(source: *mut c_void, lang: &[u8]) -> bool {
     let eq = CFStringCompare(first, target, 0) == 0;
     CFRelease(target as *mut c_void);
     eq
-}
-
-unsafe fn tis_select_source_by_language(lang: &[u8]) -> bool {
-    let all = TISCreateInputSourceList(std::ptr::null(), false);
-    if all.is_null() {
-        return false;
-    }
-    let count = CFArrayGetCount(all);
-
-    // 언어가 일치하는 후보 중 "입력 모드"(예: 2SetKorean)를 부모 입력기
-    // (Keyboard Input Method)보다 우선 선택한다. 한국어 IM은 부모와 모드가
-    // 각각 리스트에 오르는데, 부모만 선택하면 모드가 지정되지 않은 반선택
-    // 상태가 되어 전환이 겉돌 수 있다.
-    let mut chosen: *mut c_void = std::ptr::null_mut();
-    let mut fallback: *mut c_void = std::ptr::null_mut();
-    for i in 0..count {
-        let source = CFArrayGetValueAtIndex(all, i) as *mut c_void;
-        if !tis_first_language_matches(source, lang) {
-            continue;
-        }
-        let ty = TISGetInputSourceProperty(source, kTISPropertyInputSourceType);
-        if !ty.is_null() && CFStringCompare(ty, kTISTypeKeyboardInputMode, 0) == 0 {
-            chosen = source;
-            break;
-        }
-        if fallback.is_null() {
-            fallback = source;
-        }
-    }
-    if chosen.is_null() {
-        chosen = fallback;
-    }
-
-    let mut found = false;
-    if !chosen.is_null() {
-        let status = TISSelectInputSource(chosen);
-        if status == 0 {
-            found = true;
-        } else {
-            tracing::warn!("TISSelectInputSource 실패: status={status}");
-        }
-    }
-
-    CFRelease(all);
-    found
 }
 
 // ── 마우스 주입 ──────────────────────────────────────────────────────────────
@@ -910,10 +855,6 @@ static TAP_TIMEOUT_COUNT: AtomicU32 = AtomicU32::new(0);
 static EVENT_TAP_PTR: std::sync::atomic::AtomicPtr<c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
-/// 물리 keyDown마다 증가하는 시퀀스. 입력 소스 전환 워커가 "사용자가
-/// 타이핑을 시작했는지"를 감지해 재선택(조합 취소 유발)을 중단하는 데 쓴다.
-static INPUT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 /// 엔진에 넘길 밀리초 단조 tick (u32 wrapping — 엔진의 wrapping_sub 규약)
 fn tick_ms() -> u32 {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -1169,11 +1110,6 @@ unsafe fn event_tap_callback_inner(type_: u32, event: CGEventRef) -> CGEventRef 
 
     // ── keyDown / keyUp 이벤트 ──
     let is_down = type_ == CG_EVENT_KEY_DOWN;
-
-    if is_down {
-        // 타이핑 활동 시퀀스 (입력 소스 전환 워커의 재선택 중단 신호)
-        INPUT_SEQ.fetch_add(1, Ordering::Relaxed);
-    }
 
     match guard.process_key(vkey, is_down, tick) {
         KeyDecision::PassThrough => {
