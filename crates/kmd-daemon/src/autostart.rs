@@ -109,8 +109,14 @@ mod platform {
         }
         std::fs::write(&path, plist).map_err(|e| e.to_string())?;
 
+        // load(구식)가 아닌 bootout→bootstrap: 이전 등록이 다른 바이너리 경로를
+        // 가리키고 있어도 새 plist로 확실히 재바인딩된다.
+        let (domain, service) = launchd_target();
         let _ = std::process::Command::new("launchctl")
-            .args(["load", &path.to_string_lossy()])
+            .args(["bootout", &service])
+            .output();
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootstrap", &domain, &path.to_string_lossy()])
             .output();
 
         Ok(format!("등록 위치: {}", path.display()))
@@ -119,12 +125,26 @@ mod platform {
     pub fn uninstall() -> Result<(), String> {
         let path = plist_path();
         if path.exists() {
+            let (_, service) = launchd_target();
             let _ = std::process::Command::new("launchctl")
-                .args(["unload", &path.to_string_lossy()])
+                .args(["bootout", &service])
                 .output();
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// launchctl 도메인(`gui/<uid>`)과 서비스 타깃 문자열
+    fn launchd_target() -> (String, String) {
+        let uid = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "501".into());
+        let domain = format!("gui/{uid}");
+        let service = format!("{domain}/{LABEL}");
+        (domain, service)
     }
 
     pub fn is_installed() -> bool {

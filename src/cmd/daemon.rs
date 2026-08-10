@@ -7,6 +7,7 @@ use std::net::TcpStream;
 pub enum Action {
     Start,
     Stop,
+    Restart,
     Status,
     Install,
     Uninstall,
@@ -25,6 +26,7 @@ pub fn run(action: Action) -> Result<()> {
     match action {
         Action::Start => start_daemon(),
         Action::Stop => send_command(ipc::Request::Shutdown, "stop"),
+        Action::Restart => restart_daemon(),
         Action::Status => check_status(),
         Action::Install => run_daemon_cmd("install"),
         Action::Uninstall => run_daemon_cmd("uninstall"),
@@ -79,6 +81,63 @@ fn daemon_log_stdio() -> (std::process::Stdio, std::process::Stdio) {
     (std::process::Stdio::null(), std::process::Stdio::null())
 }
 
+/// 데몬 재시작 — 실행 중이면 정상 종료(IPC Shutdown) 후 다시 시작한다.
+///
+/// launchd/systemd 밖에서 떠 있던 데몬(stray)도 IPC 종료 경로로 함께 정리되므로,
+/// 권한 재부여 후 훅을 되살리는 표준 절차로 이 명령 하나면 된다.
+fn restart_daemon() -> Result<()> {
+    if daemon_alive() {
+        send_command(ipc::Request::Shutdown, "stop")?;
+    }
+    start_daemon()
+}
+
+fn daemon_alive() -> bool {
+    matches!(ipc::read_port(), Ok(port) if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok())
+}
+
+/// macOS: 자동실행 LaunchAgent가 등록되어 있으면 그 plist 경로.
+#[cfg(target_os = "macos")]
+fn launchagent_plist() -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(std::env::var_os("HOME")?)
+        .join("Library/LaunchAgents/com.keymander.daemon.plist");
+    path.exists().then_some(path)
+}
+
+/// macOS에서 LaunchAgent 경유로 데몬을 (재)기동한다.
+///
+/// 반드시 launchd가 데몬을 띄워야 하는 이유: 터미널에서 직접 spawn하면 TCC의
+/// 책임 프로세스(responsible process)가 터미널로 귀속되어, 손쉬운 사용을
+/// 허용해 두고도 AXIsProcessTrusted=false가 나온다(훅 설치 실패).
+/// kickstart가 아닌 bootout→bootstrap을 쓰는 이유: launchd는 서비스에 서명
+/// 신원을 고정(pin)하므로 바이너리가 교체된 뒤 kickstart는
+/// OS_REASON_CODESIGNING으로 즉사한다. 재등록은 항상 안전하다.
+#[cfg(target_os = "macos")]
+fn start_via_launchd(plist: &std::path::Path) -> Result<()> {
+    let uid_out = std::process::Command::new("id").arg("-u").output()?;
+    let uid = String::from_utf8_lossy(&uid_out.stdout).trim().to_string();
+    let domain = format!("gui/{uid}");
+    let service = format!("{domain}/com.keymander.daemon");
+
+    // 이미 로드돼 있으면 내려서 재등록 (미로드 상태의 실패는 무시)
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &service])
+        .output();
+    let out = std::process::Command::new("launchctl")
+        .args(["bootstrap", &domain, &plist.to_string_lossy()])
+        .output()?;
+    if !out.status.success() {
+        eprintln!(
+            "launchctl bootstrap 실패: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        eprintln!("직접 실행으로 폴백합니다 (훅 권한 귀속이 어긋날 수 있음).");
+        return spawn_daemon_process();
+    }
+    println!("launchd 경유로 데몬을 시작합니다 ({})", plist.display());
+    Ok(())
+}
+
 fn start_daemon() -> Result<()> {
     if let Ok(port) = ipc::read_port() {
         if TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
@@ -88,6 +147,19 @@ fn start_daemon() -> Result<()> {
         ipc::cleanup_stale_files();
     }
 
+    // 자동실행이 등록된 환경에서는 서비스 매니저 경유로 기동한다.
+    #[cfg(target_os = "macos")]
+    if let Some(plist) = launchagent_plist() {
+        start_via_launchd(&plist)?;
+        return wait_daemon_ready();
+    }
+
+    spawn_daemon_process()?;
+    wait_daemon_ready()
+}
+
+/// 데몬 프로세스를 직접 spawn (서비스 매니저 미등록 환경)
+fn spawn_daemon_process() -> Result<()> {
     let daemon_exe = find_sibling_exe("kmd-daemon");
     let (log_out, log_err) = daemon_log_stdio();
 
@@ -116,6 +188,10 @@ fn start_daemon() -> Result<()> {
             .spawn()?;
     }
 
+    Ok(())
+}
+
+fn wait_daemon_ready() -> Result<()> {
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if let Ok(port) = ipc::read_port() {

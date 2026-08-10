@@ -147,6 +147,8 @@ enum DaemonAction {
     Start,
     /// Stop the daemon
     Stop,
+    /// Restart the daemon (stop, then start)
+    Restart,
     /// Show daemon status
     Status,
     /// Register daemon to start at login
@@ -322,6 +324,7 @@ fn main() -> color_eyre::Result<()> {
             cmd::daemon::run(match action {
                 DaemonAction::Start => cmd::daemon::Action::Start,
                 DaemonAction::Stop => cmd::daemon::Action::Stop,
+                DaemonAction::Restart => cmd::daemon::Action::Restart,
                 DaemonAction::Status => cmd::daemon::Action::Status,
                 DaemonAction::Install => cmd::daemon::Action::Install,
                 DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,
