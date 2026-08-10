@@ -11,7 +11,7 @@ use super::{
     resolve_launch_cmd, BindAction, KeybindConfig, KeyboardBackend, MacroStep, MouseBind, VKey,
 };
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -463,11 +463,47 @@ const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 /// 낡은 값을 돌려줘 성공한 전환을 "미반영"으로 오판하는 일이 있고, 그때 도는
 /// TISSelectInputSource가 위의 반쪽 전환을 일으켜 잠시 후 영문으로 되돌리는
 /// 증상을 만든다 (전환 후 입력이 없을 때만 재현되던 그 버그). 검증은 로그 전용.
+///
+/// # 직렬화·디바운스 (2026-08-10 키보드 먹통 사고)
+///
+/// Ctrl+Space는 macOS가 "홀드하면 입력 소스 피커 표시"로도 해석하는 단축키다.
+/// 토글이 겹치면(연타 → 스레드 2개) 두 주입의 Ctrl↓/↑가 인터리브되어 OS가
+/// "Ctrl 연속 홀드 + Space 2회"로 보고 피커(TextInputMenuAgent)를 띄우며,
+/// 이 피커가 key focus를 훔친 채 wedge되면 시스템 전역 키보드가 먹통이 된다
+/// (마우스만 생존, 재부팅 전까지 복구 불가 — 실제 발생 사고).
+///
+/// 방어 2중: ① in-flight 가드 — 이전 주입이 끝나기 전의 재요청은 버린다.
+/// ② 디바운스 — 직전 주입 완료 후 `TOGGLE_DEBOUNCE_MS` 내 재요청도 버린다
+/// (연타는 "전환이 안 된 것 같아 다시 누름"이므로 한 번만 수행하는 게 의도에
+/// 부합하고, OS의 홀드 판정 윈도우와도 겹치지 않게 된다).
 fn toggle_input_source() {
+    const TOGGLE_DEBOUNCE_MS: u64 = 300;
+    /// 이전 토글 스레드가 주입을 마쳤는지 (검증 로깅은 완료로 간주)
+    static TOGGLE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    /// 마지막 주입 완료 시각 (monotonic ms, 0 = 아직 없음)
+    static LAST_INJECT_DONE_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn monotonic_ms() -> u64 {
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+
+    if TOGGLE_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        tracing::info!("입력 소스 전환 무시: 이전 토글 주입 진행 중");
+        return;
+    }
+    let last_done = LAST_INJECT_DONE_MS.load(Ordering::Acquire);
+    if last_done != 0 && monotonic_ms().saturating_sub(last_done) < TOGGLE_DEBOUNCE_MS {
+        TOGGLE_IN_FLIGHT.store(false, Ordering::Release);
+        tracing::info!("입력 소스 전환 무시: 디바운스({TOGGLE_DEBOUNCE_MS}ms) 내 재요청");
+        return;
+    }
+
     let to_korean = unsafe {
         let current = TISCopyCurrentKeyboardInputSource();
         if current.is_null() {
             tracing::warn!("TISCopyCurrentKeyboardInputSource 실패");
+            TOGGLE_IN_FLIGHT.store(false, Ordering::Release);
             return;
         }
         let is_korean = tis_first_language_matches(current, b"ko\0");
@@ -493,6 +529,11 @@ fn toggle_input_source() {
 
         tracing::info!("입력 소스 전환: Ctrl+Space 주입 → {target_name}");
         send_combo(&[VKey::LCtrl], VKey::Space);
+
+        // 주입(4이벤트)이 끝난 뒤에만 다음 토글을 허용한다 — 검증 로깅은
+        // 읽기 전용이라 다음 토글과 겹쳐도 무해하므로 여기서 가드를 푼다.
+        LAST_INJECT_DONE_MS.store(monotonic_ms().max(1), Ordering::Release);
+        TOGGLE_IN_FLIGHT.store(false, Ordering::Release);
 
         // 주입 반영 확인 — 로그 전용. 이 스레드의 TIS 읽기는 낡은 값일 수 있어
         // 미확인이어도 개입하지 않는다 (실제 전환은 네이티브 경로가 이미 처리).
