@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-08-10
+
 ### Added
 - **`kmd daemon restart`** — 정상 종료 후 재기동을 한 명령으로. 접근성 권한을
   다시 부여한 뒤 훅을 되살리는 표준 절차이며, launchd/systemd 밖에서 떠 있던
