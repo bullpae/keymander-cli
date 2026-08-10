@@ -211,6 +211,9 @@ jobs:
 
   build-packages:
     name: Linux Packages (deb/rpm)
+    # rc 등 프리릴리스 제외 — apt/yum 발행이 게이트되어 쓰일 곳이 없고,
+    # RPM 버전 규칙이 '-'를 불허해 rc 버전(0.x.0-rc.1)에서 generate-rpm이 죽는다
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -252,6 +255,10 @@ jobs:
   release:
     name: Create Release
     needs: [build-cli, build-desktop, build-bundle, build-packages]
+    # 기본 조건(success())은 needs 중 하나라도 skip이면 같이 skip된다 —
+    # 프리릴리스에서 build-packages가 빠져도 릴리스는 만들어져야 하므로
+    # "실패/취소만 없으면 진행"으로 완화한다.
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -278,7 +285,7 @@ jobs:
   publish-repos:
     name: Publish apt/yum repos
     needs: release
-    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    if: ${{ success() && !contains(github.ref_name, '-') }} # 선행 잡 성공 + rc 등 프리릴리스 제외
     # 재사용 워크플로는 호출자보다 권한을 높일 수 없다 — 피호출자(publish-repos.yml)가
     # 요구하는 pages/id-token write를 호출 잡에서 명시해야 워크플로 컴파일이 통과한다.
     # (안 하면 태그 푸시 즉시 startup_failure — if 게이트로 스킵되는 경우에도 검증된다)
@@ -298,7 +305,7 @@ jobs:
   update-tap:
     name: Update Homebrew Tap
     needs: release
-    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    if: ${{ success() && !contains(github.ref_name, '-') }} # 선행 잡 성공 + rc 등 프리릴리스 제외
     runs-on: ubuntu-latest
     steps:
       - name: Check tap deploy key
@@ -351,7 +358,7 @@ jobs:
   update-winget:
     name: Update winget package
     needs: release
-    if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    if: ${{ success() && !contains(github.ref_name, '-') }} # 선행 잡 성공 + rc 등 프리릴리스 제외
     runs-on: windows-latest
     steps:
       - name: Check winget token
