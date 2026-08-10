@@ -49,6 +49,26 @@ tap_hold_ms = 200
 닫힘 부작용이 있어 `Hangul`로 교체 — 한영도 레이어도 CapsLock 하나로 통합된다.
 (Shift/CapsLock 인접 오타 문제도 해소. Shift+Space·RShift 더블탭 한영은 그대로 유지.)
 
+### 한영 토글 직렬화·디바운스 (macOS, 사고 재발 방지)
+
+macOS의 `Hangul` 액션은 Ctrl+Space(입력 소스 전환 단축키)를 합성 주입한다
+(`macos.rs toggle_input_source()` — TIS 직선택은 반쪽 전환 버그로 배제, 상단
+독스트링 참고). 이 단축키는 macOS가 **"홀드하면 입력 소스 피커 표시"**로도
+해석하기 때문에, 토글이 겹치면(연타 → 주입 스레드 2개의 Ctrl down/up 인터리브)
+피커(TextInputMenuAgent)가 열리고, 피커가 key focus를 훔친 채 멈추면 시스템
+전역 키보드가 먹통이 된다 — 마우스 포인터만 살고 재부팅 전까지 복구 불가
+(2026-08-10 실사고).
+
+방어 2중 (`toggle_input_source()`):
+- **in-flight 가드** — 이전 주입(4이벤트)이 끝나기 전의 재요청은 버린다.
+- **디바운스 300ms** — 주입 완료 후 300ms 내 재요청도 버린다. **CapsLock
+  연타 시 두 번째 탭이 무시되는 것은 의도된 동작**이다(연타는 대개 "전환이
+  안 된 것 같아 다시 누름"이라 한 번만 수행하는 게 의도에 부합).
+
+만에 하나 유사 증상(키보드 전멸·마우스 생존)이 다시 나타나면, 재부팅 대신:
+시스템 설정 → 손쉬운 사용 → 키보드 → **보조 키보드**를 마우스로 켜고
+터미널에 `killall TextInputMenuAgent` 입력.
+
 데몬이 시작 시 자동으로 macOS 재맵을 적용한다. `kmd daemon status`에
 `nav: CapsLock 홀드`로 표시된다(엔진 내부는 F19).
 
@@ -63,7 +83,8 @@ HHKB는 CapsLock 자리가 Control이라 이 방식이 그대로 안 맞는다. 
 
 ## 이전 방식(LAlt)으로 되돌리기
 
-`kmd-data/config.toml`의 nav 레이어에 두 줄만 덮어쓰고 데몬 재시작:
+config.toml(macOS `~/Library/Application Support/kmd/`, Windows `%APPDATA%\kmd\`,
+포터블 설치는 `kmd-data/`)의 nav 레이어에 두 줄만 덮어쓰고 `kmd daemon restart`:
 
 ```toml
 trigger = "LAlt"

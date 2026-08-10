@@ -44,6 +44,8 @@ keymander는 이 세 가지 "이탈"을 없애려고 만들어졌습니다.
 ```bash
 # 1. 설치 (macOS / Linux — Windows·소스 빌드는 영어 README 참고)
 brew install bullpae/tap/keymander
+#    ↳ 최신 Homebrew가 서드파티 탭 신뢰를 요구하며 거부하면:
+#      brew trust bullpae/tap 실행 후 재시도
 
 # 2. 런처 소환
 kmd-desktop
@@ -120,6 +122,9 @@ kmd keymap start           # 시작 (kanata 백엔드)
 
 **셀프 체크:** Shift 누르려다 CapsLock을 스쳐서 대문자가 쏟아진 적 있는가?
 이제 그 키는 짧게 탭 = 한/영이라 사고 칠 방법이 없습니다.
+
+> 한/영 탭을 아주 빠르게 연타하면 두 번째 탭(300ms 내)은 무시됩니다 —
+> 전환 겹침으로 인한 오동작을 막는 의도된 안전장치입니다 (docs/13).
 
 ### 미션 4 — 마우스 없는 클릭
 

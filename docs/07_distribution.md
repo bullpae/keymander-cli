@@ -490,3 +490,40 @@ ad-hoc으로 강등하고 경고한다.
 키 교체/폐기: `security delete-keychain "$KC"` 후 위 절차 재실행 → 접근성 1회
 재부여. 위협 모델: 이 키의 유일한 권능은 로컬 TCC 신원 연속성이다 — 배포 자산
 서명에는 쓰이지 않으며(그건 CI/GPG), 유출돼도 이 머신의 TCC 항목 외엔 영향 없다.
+
+## 8. macOS 로컬 운영 — brew 설치 + 고정 경로 동기화 (2026-08-10 전환)
+
+포터블 번들(`~/keymander/`) 운영을 폐기하고 brew 설치로 일원화하되, TCC
+접근성 권한 유지를 위해 **데몬은 항상 고정 경로에서 실행**한다.
+
+**구조** (개발 머신 기준):
+
+| 구성 요소 | 경로 | 역할 |
+|---|---|---|
+| brew 설치본 | `/opt/homebrew/Cellar/keymander/<ver>/bin/` | 원본 (업그레이드마다 경로 변경) |
+| 고정 실행 경로 | `~/.keymander/bin/{kmd,kmd-daemon,kmd-desktop}` | 실제 실행 대상. PATH 최우선, 데몬 plist가 가리킴 |
+| 동기화 스크립트 | `~/.keymander/sync.sh` (원본: `scripts/brew-sync-local.sh`) | Cellar → 고정 경로 복사 + §7 안정 서명 + 데몬 재시작. 같은 버전이면 no-op |
+| 자동 트리거 | `~/Library/LaunchAgents/com.keymander.sync.plist` (원본: `scripts/`) | WatchPaths=`/opt/homebrew/opt/keymander` — brew 업그레이드 감지 시 sync.sh 실행 |
+| 데몬 LaunchAgent | `~/Library/LaunchAgents/com.keymander.daemon.plist` | `~/.keymander/bin/kmd-daemon` 지정. `kmd daemon install`로 재생성 가능 |
+
+**왜 고정 경로인가**: TCC 접근성 항목은 실행 파일 경로 기준이다. brew Cellar
+경로는 버전마다 바뀌므로 직접 실행하면 업그레이드마다 손쉬운 사용 재부여가
+필요하다. 고정 경로 + §7 안정 서명이면 경로·신원이 모두 불변이다.
+
+**한계 (2026-08-10 관측)**: 같은 경로·같은 인증서·같은 identifier로
+재서명해도 **바이너리 내용이 바뀌면 TCC가 허용을 자동 해제**하는 사례를
+확인했다(tccd가 Unknown 반환 + 항목 Modify + universalAccessAuthWarn →
+설정에서 체크 해제됨). 설정 UI에서 드래그로 추가한 항목의 cdhash 고정 또는
+자체서명 인증서의 DR 평가 실패로 추정 — 즉 동기화 자동화가 재부여를 완전히
+없애주지 못할 수 있다. 업그레이드 후 훅이 죽어 있으면: 손쉬운 사용에서
+`~/.keymander/bin/kmd-daemon` 토글 재활성화 → `kmd daemon restart`.
+
+**데몬 기동 규칙**: 데몬은 반드시 launchd가 띄워야 한다 — 터미널에서 직접
+spawn하면 TCC 책임 프로세스가 터미널로 귀속되어 권한을 부여해도
+AXIsProcessTrusted=false가 난다. `kmd daemon start`/`restart`는 LaunchAgent가
+등록돼 있으면 자동으로 `launchctl bootout→bootstrap` 경유로 기동한다
+(kickstart는 바이너리 교체 후 서명 pin 불일치로 즉사하므로 쓰지 않는다).
+
+**주의**: `deploy-local.sh`는 여전히 포터블 경로(`~/keymander/`)를 타깃으로
+한다 — 이 워크플로를 다시 쓰려면 DEPLOY_DIR을 `~/.keymander/bin`으로 맞추고
+plist 충돌을 정리해야 한다(미정합 상태).

@@ -4,6 +4,33 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`kmd daemon restart`** — 정상 종료 후 재기동을 한 명령으로. 접근성 권한을
+  다시 부여한 뒤 훅을 되살리는 표준 절차이며, launchd/systemd 밖에서 떠 있던
+  데몬(stray)도 함께 정리된다.
+
+### Changed
+- **macOS 데몬 기동 launchd 일원화** — 자동실행(`kmd daemon install`)이 등록된
+  환경에서 `kmd daemon start`/`restart`는 직접 spawn 대신 `launchctl
+  bootout→bootstrap` 경유로 기동한다. 터미널에서 직접 띄우면 TCC 책임
+  프로세스(responsible process)가 터미널로 귀속되어, 손쉬운 사용을 허용해도
+  AXIsProcessTrusted=false로 훅 설치가 실패하던 함정 해소. `install`/
+  `uninstall`도 구식 `launchctl load`/`unload` 대신 `bootstrap`/`bootout`을
+  써서 이전 등록이 다른 바이너리 경로를 가리켜도 확실히 재바인딩된다.
+
+### Fixed
+- **한/영 연타 시 시스템 전역 키보드 먹통 (macOS, 치명)** — 한영 토글은
+  Ctrl+Space(입력 소스 전환 단축키) 합성 주입인데, 토글이 직렬화 없이 겹치면
+  두 주입의 Ctrl down/up이 인터리브되어 OS가 "Ctrl 홀드 + Space 연타"로
+  해석한다. 그러면 입력 소스 피커(TextInputMenuAgent)가 열리고, 이 피커가
+  key focus를 훔친 채 멈추면(wedge) 재부팅 전까지 모든 키 입력이 막힌다
+  (마우스 포인터만 생존 — 2026-08-10 실사고, 통합 로그로 역추적).
+  토글에 in-flight 가드 + 주입 완료 후 300ms 디바운스를 넣어 겹침 자체를
+  차단했다. 연타 시 두 번째 탭이 무시되는 것은 의도된 동작이다.
+  만에 하나 유사 증상 재발 시 재부팅 없는 응급 복구: 시스템 설정 → 손쉬운
+  사용 → 키보드 → 보조 키보드를 마우스로 켠 뒤 터미널에
+  `killall TextInputMenuAgent`.
+
 ## [0.13.0] — 2026-08-10
 
 ### Changed

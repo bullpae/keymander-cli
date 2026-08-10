@@ -202,6 +202,9 @@ Hangul composer (TUI), portable mode, search priority weights.
 brew install bullpae/tap/keymander
 ```
 
+> Recent Homebrew versions require third-party taps to be trusted once:
+> if the install is refused, run `brew trust bullpae/tap` and retry.
+
 Installs `kmd` (TUI/CLI), `kmd-desktop`, and `kmd-daemon`. A starter config is
 available at `$(brew --prefix)/share/keymander/config.example.toml`.
 
@@ -397,10 +400,21 @@ kmd keymap start           # start kanata with active profile
 kmd keymap stop            # stop kanata process
 
 # Daemon (native keymap backend + LLM autopilot)
-kmd daemon start
-kmd daemon status
+kmd daemon start           # start (routed via launchd when registered at login)
 kmd daemon stop
+kmd daemon restart         # stop + start — e.g. after re-granting Accessibility
+kmd daemon status
+kmd daemon install         # register to start at login (launchd / systemd / Startup)
+kmd daemon uninstall
 ```
+
+On macOS the daemon needs **Accessibility** (and Input Monitoring) permission
+for `kmd-daemon` under System Settings → Privacy & Security. macOS silently
+revokes the grant when the binary changes (e.g. after an upgrade) — if
+`kmd daemon status` reports the key hook is down, re-enable the toggle and run
+`kmd daemon restart`. When registered at login, start/restart go through
+launchd automatically; a daemon spawned directly from a terminal cannot pass
+the permission check even when granted.
 
 ## Search Modes
 
