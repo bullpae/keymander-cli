@@ -168,6 +168,7 @@ kmd keymap start           # 시작 (kanata 백엔드)
 ## 더 알아보기
 
 - **전체 기능·명령어·설정 레퍼런스**: [영어 README](README.md)
+- **설치 채널별 파일 위치·포터블 모드**: [영어 README — Install layout](README.md#install-layout-by-channel)
 - **설정 파일 상세**: [config reference](docs/06_config_reference.md)
 - **릴리스 이력**: [CHANGELOG.md](CHANGELOG.md)
 

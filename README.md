@@ -259,14 +259,57 @@ cargo install --path .
 cargo install --path crates/kmd-desktop
 ```
 
-### From releases
+### Portable install (from releases)
 
-Download the latest binary from [GitHub Releases](https://github.com/bullpae/keymander-cli/releases).
-Verify downloads against the `SHA256SUMS.txt` attached to each release:
+Download `keymander-portable-v<ver>-<os>-<arch>.tar.gz` (or `.zip` on Windows)
+from [GitHub Releases](https://github.com/bullpae/keymander-cli/releases),
+verify it against the attached `SHA256SUMS.txt`, and extract it anywhere:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+tar xzf keymander-portable-v*.tar.gz   # → ./keymander/
+./keymander/kmd-desktop
 ```
+
+The extracted `keymander/` directory is fully self-contained:
+
+| File | Role |
+|------|------|
+| `kmd` | TUI launcher + CLI (`kmd daemon …`, `kmd keymap …`) |
+| `kmd-desktop` | Spotlight-style GUI launcher |
+| `kmd-daemon` | Background key-remap daemon (layers, tap-hold, clipboard history) |
+| `kmd-data/` | Portable data directory — see below |
+| `README.txt` | Quick-start notes |
+
+A `kmd-data/` directory sitting next to the executables activates **portable
+mode**: config (`config.toml`), usage history (`kmd.db`), and the launch index
+cache all live inside it, so the whole folder can move between machines (USB
+stick included) with settings intact. Deleting the folder removes everything.
+
+### Install layout by channel
+
+| Channel | Binaries | Example config | Data mode |
+|---------|----------|----------------|-----------|
+| Homebrew | `$(brew --prefix)/bin/{kmd,kmd-desktop,kmd-daemon}` (symlinks into `Cellar/keymander/<ver>/bin/`) | `$(brew --prefix)/share/keymander/config.example.toml` | standard |
+| apt (deb) | `/usr/bin/{kmd,kmd-desktop,kmd-daemon}` | `/usr/share/keymander/config.example.toml` (+ `/usr/share/doc/keymander/README.md`) | standard |
+| dnf/yum (rpm) | same as deb | same as deb | standard |
+| winget | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>\keymander\` with PATH aliases in `…\WinGet\Links` | `kmd-data\config.toml` inside the package dir | **portable** (zip ships `kmd-data\`) |
+| Portable archive | wherever you extract `keymander/` | `kmd-data/config.toml` | **portable** |
+
+In **standard** mode nothing is written next to the binaries; config and data
+are created on first run under the OS-standard user directories:
+
+| OS | Config (`config.toml`) | Data (`kmd.db`, index cache) |
+|----|------------------------|------------------------------|
+| macOS | `~/Library/Application Support/kmd/` | same directory |
+| Linux | `~/.config/kmd/` | `~/.local/share/kmd/` |
+| Windows | `%APPDATA%\kmd\` | same directory |
+
+Daemon **runtime files** (`daemon.port`, `daemon.pid`, `daemon.log`) always go
+to the OS-standard data directory above — even in portable mode — because
+`daemon.port` holds an auth token that must not be world-readable from a
+shared/removable location. They are recreated on every daemon start, so this
+does not affect portability.
 
 ## Usage
 

@@ -17,6 +17,9 @@ keymander를 winget / Homebrew / apt / yum으로 배포하기 위해 구축한 �
 | yum/dnf (Fedora/RHEL) | `dnf install keymander` | ✅ 설치·갱신 자동 | 없음 |
 | winget (Windows) | `winget install keymander` | 🔶 등록 PR 검증·승인 대기 | 없음 — CLA 서명 완료(2026-08-08), 모더레이터 승인 대기 |
 
+사용자 관점의 채널별 설치 배치(바이너리·예시 config 경로, 포터블/표준 모드,
+런타임 파일 위치)는 README의 **"Install layout by channel"** 절이 정본이다.
+
 **주의 — 자산 첨부 ≠ 저장소.** `.deb`/`.rpm`을 릴리스 자산으로 올리는 것만으로는
 `apt update`/`dnf upgrade`가 새 버전을 찾지 못한다. 인덱스(`Packages`/`repodata`)와
 서명을 갖춘 저장소가 있어야 하며, 그 발행이 `publish-repos.yml` 잡이다.
