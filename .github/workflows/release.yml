@@ -279,6 +279,13 @@ jobs:
     name: Publish apt/yum repos
     needs: release
     if: ${{ !contains(github.ref_name, '-') }} # rc 등 프리릴리스 제외
+    # 재사용 워크플로는 호출자보다 권한을 높일 수 없다 — 피호출자(publish-repos.yml)가
+    # 요구하는 pages/id-token write를 호출 잡에서 명시해야 워크플로 컴파일이 통과한다.
+    # (안 하면 태그 푸시 즉시 startup_failure — if 게이트로 스킵되는 경우에도 검증된다)
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/publish-repos.yml
     secrets: inherit
 
