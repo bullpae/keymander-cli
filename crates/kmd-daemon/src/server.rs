@@ -533,7 +533,12 @@ mod tests {
     fn resolve_vim_nav_기본_레이어() {
         let kb = resolve_with_profile("vim-nav");
         assert_eq!(kb.layers.len(), 2, "nav + mouse 레이어");
-        assert!(kb.layers.iter().any(|l| l.trigger == keybind::VKey::LAlt));
+        assert!(
+            kb.layers
+                .iter()
+                .any(|l| l.trigger == keybind::VKey::CapsLock),
+            "0.13.0부터 nav 기본 트리거 = CapsLock"
+        );
         let mouse = kb
             .layers
             .iter()

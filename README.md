@@ -33,7 +33,7 @@ It fits in a single ~3MB binary. No Electron, no runtime, no ceremony.
 - **Hands on home row.** Navigation, editing, launching, even pointing — done
   through hold-layers so fingers never travel. And one ergonomic rule runs
   through every default layout: **the hand that holds a layer is never the hand
-  that operates it.** Left-hand `LAlt` hold drives right-hand HJKL navigation;
+  that operates it.** Left-pinky `CapsLock` hold drives right-hand HJKL navigation;
   right-thumb `RAlt` hold drives left-hand ESDF pointer movement. No one-handed
   claw grips.
 - **One binary, no ceremony.** Portable install, SQLite + one TOML file,
@@ -93,9 +93,9 @@ If no — mission complete.
 
 | Do | Keys |
 |----|------|
-| Move cursor | hold `LAlt` + `H J K L` |
-| Page up / down | hold `LAlt` + `N` / `M` |
-| Jump by word, line start/end | hold `LAlt` + `I` / `O` |
+| Move cursor | hold `CapsLock` + `H J K L` |
+| Page up / down | hold `CapsLock` + `N` / `M` |
+| Jump by word, line start/end | hold `CapsLock` + `I` / `O` |
 
 **Why this layout:** left hand holds, right hand moves — the Vim home-row
 positions, available in *every* app, not just your editor.
@@ -103,21 +103,25 @@ positions, available in *every* app, not just your editor.
 **Self-check:** did your right hand travel to the arrow cluster? It shouldn't
 need to, ever again.
 
-### Mission 3 — Ctrl without the pinky dive
+### Mission 3 — One key for the layer *and* input switching
 
-*Situation: copy, paste, save — a hundred times a day.*
+*Situation: that HJKL layer from Mission 2, plus the input-source toggle you
+hit all day if you type in two languages.*
 
 | Do | Keys |
 |----|------|
-| Copy / paste / save | hold `CapsLock` + `C` / `V` / `S` |
-| Actual CapsLock | tap `CapsLock` |
+| The whole nav layer (Mission 2) | hold `CapsLock` |
+| Toggle input source (한/영) | tap `CapsLock` |
 
-This is the HHKB's famous mod-tap: the strongest position on the keyboard
-(home row, left pinky) stops being wasted on a lock key. The hold decision is
-instant — the moment you press the second key, it's Ctrl. No 200ms lag.
+The strongest position on the keyboard (home row, left pinky) stops being
+wasted on a lock key. And because the trigger is not a modifier, no app's
+`Alt`/`Ctrl` shortcut is ever shadowed — vim-nav stays on while every native
+shortcut keeps working. Prefer the HHKB-style Ctrl mod-tap instead? Set the
+trigger back to `LAlt` and CapsLock becomes tap = CapsLock / hold = Ctrl
+(docs/13).
 
-**Self-check:** did your left pinky curl down to the corner Ctrl? Watch it
-stop doing that within a week.
+**Self-check:** ever grazed CapsLock reaching for Shift and typed a LINE OF
+CAPS? That key is now a harmless input toggle.
 
 ### Mission 4 — Click without the mouse
 
@@ -181,8 +185,10 @@ history with auto-pruning; inline calculator; single-instance hotkey toggle.
 prompt templates; Quick Transform from clipboard.
 
 **Keymap** — vim-nav & minimal presets over two backends (kanata / native
-daemon); Vim navigation layer; HHKB-style CapsLock mod-tap; accelerated mouse
-layer; `:km` control from the launcher; per-key customization in TOML.
+daemon); CapsLock-triggered Vim navigation layer (tap = input-source toggle);
+accelerated mouse layer; `:km` control from the launcher; per-key
+customization in TOML (HHKB-style CapsLock mod-tap available with an
+`LAlt` trigger).
 
 **Everything else** — emoji search (`:e fire` / `:e 하트`), shell commands
 (`!ip`), plugin system (JSON over stdio), 5 desktop themes, built-in 2-벌식
@@ -324,11 +330,13 @@ kmd keymap list-presets    # all built-in presets
 ```
 
 The `vim-nav` preset provides:
-- `LAlt` hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
-- `LAlt` + `.` / `/` = Backspace / Delete (plain taps — mash them freely),
+- `CapsLock` hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
+- `CapsLock` + `.` / `/` = Backspace / Delete (plain taps — mash them freely),
   `,` = delete word back, `Y` / `U` = copy / delete line (vim `yy` / `dd`)
-- `LAlt` + Space = launch kmd-desktop; `LAlt` tap alone = Esc
-- CapsLock mod-tap: tap = CapsLock, hold + key = Ctrl combo (HHKB-style)
+- `CapsLock` + Space = launch kmd-desktop; `CapsLock` tap alone = input-source
+  toggle (한/영); `Alt+Space` global hotkey also opens the launcher
+- Prefer HHKB-style CapsLock mod-tap (tap = CapsLock, hold = Ctrl)? Set the nav
+  trigger back to `LAlt` in config (docs/13)
 - `RAlt` hold = mouse layer: ESDF pointer move (accelerated, keeps the typing
   home position), R/V wheel, Space left-click/drag, C/G right/middle click,
   J/K/L click aliases, LShift precision — on Korean Windows keyboards a short

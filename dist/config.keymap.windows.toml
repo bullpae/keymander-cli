@@ -11,15 +11,15 @@
 active_profile = "vim-nav"
 
 [launcher.keymap.layers.nav]
-trigger = "LAlt"
-tap_action = "Escape"
+# 0.13.0부터 기본: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환 (docs/13).
+# Alt는 트리거가 아니므로 앱들의 Alt 단축키가 온전히 동작한다.
+trigger = "CapsLock"
+tap_action = "Hangul"
 tap_hold_ms = 200
-# ── CapsLock 트리거 실험 (docs/13) ──
-# 위 두 줄을 아래로 바꾸면: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환.
-# Alt가 트리거에서 풀려 앱들의 Alt 단축키가 온전히 복원된다.
-# 수정 후 데몬 재시작 필수 (kmd daemon stop → start).
-# trigger = "CapsLock"
-# tap_action = "Hangul"
+# 이전 방식(LAlt 홀드)으로 되돌리려면 위 두 줄을 아래로 교체 후 데몬 재시작.
+# LAlt 트리거로 돌아가면 CapsLock은 HHKB식 모드탭(탭=Caps/홀드=Ctrl)이 된다.
+# trigger = "LAlt"
+# tap_action = "Escape"
 # 미매핑 키 동작: "plain"(맨키 통과, 기본) | "passthrough"(트리거 조합을 OS로 투과,
 # 예: Alt+Tab 유지 — 어댑터 구현 전까지는 plain과 동일하게 동작) | "block"(억제)
 # unmapped = "passthrough"

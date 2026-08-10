@@ -9,15 +9,15 @@
 active_profile = "vim-nav"
 
 [launcher.keymap.layers.nav]
-trigger = "LAlt"
-tap_action = "Escape"
+# 0.13.0부터 기본: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환 (docs/13).
+# macOS는 데몬이 hidutil로 CapsLock→F19를 자동 재맵/원복한다 — 데몬 실행 중엔
+# CapsLock 대문자 잠금이 비활성이다(정상 종료 시 자동 복구).
+trigger = "CapsLock"
+tap_action = "Hangul"
 tap_hold_ms = 200
-# ── CapsLock 트리거 실험 (docs/13) ──
-# 위 두 줄을 아래로 바꾸면: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환.
-# macOS는 데몬이 hidutil로 CapsLock→F19를 자동 재맵/원복한다(대문자 잠금 비활성).
-# 수정 후 데몬 재시작 필수 (kmd daemon stop → start).
-# trigger = "CapsLock"
-# tap_action = "Hangul"
+# 이전 방식(LAlt 홀드 + 대문자 잠금 유지)으로 되돌리려면 아래로 교체 후 데몬 재시작.
+# trigger = "LAlt"
+# tap_action = "Escape"
 # 미매핑 키 동작: "plain"(맨키 통과, 기본) | "passthrough"(트리거 조합을 OS로 투과,
 # 예: Alt+Tab 유지 — 어댑터 구현 전까지는 plain과 동일하게 동작) | "block"(억제)
 # unmapped = "passthrough"

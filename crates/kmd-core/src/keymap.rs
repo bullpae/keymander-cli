@@ -641,8 +641,13 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     }
 
     LayerToml {
-        trigger: "LAlt".into(),
-        tap_action: Some("Escape".into()),
+        // 0.13.0부터 기본 트리거 = CapsLock (docs/13). modifier 트리거(LAlt)는
+        // 해당 modifier의 앱 단축키(HWP Alt+Shift+N 등)를 가리는 구조적 충돌이
+        // 있어, non-modifier인 CapsLock으로 승격했다. macOS는 데몬이 hidutil로
+        // CapsLock→F19를 자동 재맵/원복한다. 짧게 탭 = 한/영 전환.
+        // LAlt로 되돌리려면 config에서 trigger/tap_action만 덮어쓰면 된다.
+        trigger: "CapsLock".into(),
+        tap_action: Some("Hangul".into()),
         tap_hold_ms: Some(200),
         unmapped: None,
         mappings,
@@ -1225,8 +1230,8 @@ mod tests {
     fn vim_nav_기본_레이어와_한영_폴백() {
         let e = effective_keymap(&keymap_with_profile("vim-nav"));
         let nav = e.layers.get("nav").expect("nav 레이어");
-        assert_eq!(nav.trigger, "LAlt");
-        assert_eq!(nav.tap_action.as_deref(), Some("Escape"));
+        assert_eq!(nav.trigger, "CapsLock", "0.13.0부터 기본 트리거");
+        assert_eq!(nav.tap_action.as_deref(), Some("Hangul"), "탭 = 한/영");
         assert!(nav.mappings.contains_key("H"));
         assert!(nav.double_taps.contains_key("I"));
         assert!(e
@@ -1273,7 +1278,7 @@ mod tests {
 
         let e = effective_keymap(&km);
         let nav = &e.layers["nav"];
-        assert_eq!(nav.tap_action.as_deref(), Some("Escape"), "기본 유지");
+        assert_eq!(nav.tap_action.as_deref(), Some("Hangul"), "기본 유지");
         assert_eq!(nav.tap_hold_ms, Some(200), "기본 유지");
 
         // 명시하면 반영
@@ -1397,15 +1402,38 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn vim_nav_capslock_tap_hold_기본값() {
+    fn vim_nav_capslock_tap_hold는_lalt_트리거일_때만() {
+        // 기본 트리거가 CapsLock(0.13.0)이므로 모드탭(hold=Ctrl)은 기본 미주입 —
+        // 트리거를 LAlt 등으로 되돌린 사용자에게만 HHKB 모드탭이 살아난다.
         let e = effective_keymap(&keymap_with_profile("vim-nav"));
-        let th = e.tap_holds.get("CapsLock").expect("CapsLock tap-hold");
+        assert!(
+            !e.tap_holds.keys().any(|k| k.eq_ignore_ascii_case("capslock")),
+            "CapsLock이 레이어 트리거인 기본 상태에서는 모드탭 미주입"
+        );
+
+        let mut km = keymap_with_profile("vim-nav");
+        km.layers.insert(
+            "nav".into(),
+            LayerToml {
+                trigger: "LAlt".into(),
+                ..Default::default()
+            },
+        );
+        let e2 = effective_keymap(&km);
+        let th = e2.tap_holds.get("CapsLock").expect("LAlt 트리거면 모드탭 주입");
         assert_eq!(th.tap.as_deref(), Some("CapsLock"));
         assert_eq!(th.hold, "LCtrl");
 
         // 사용자 자체 tap-hold 정의 존중
-        let mut km = keymap_with_profile("vim-nav");
-        km.tap_holds.insert(
+        let mut km3 = keymap_with_profile("vim-nav");
+        km3.layers.insert(
+            "nav".into(),
+            LayerToml {
+                trigger: "LAlt".into(),
+                ..Default::default()
+            },
+        );
+        km3.tap_holds.insert(
             "caps".into(),
             crate::config::TapHoldToml {
                 tap: Some("Escape".into()),
@@ -1413,9 +1441,9 @@ mod tests {
                 timeout_ms: None,
             },
         );
-        let e2 = effective_keymap(&km);
-        assert_eq!(e2.tap_holds.len(), 1);
-        assert_eq!(e2.tap_holds["caps"].hold, "LWin");
+        let e3 = effective_keymap(&km3);
+        assert_eq!(e3.tap_holds.len(), 1);
+        assert_eq!(e3.tap_holds["caps"].hold, "LWin");
     }
 
     #[cfg(target_os = "windows")]

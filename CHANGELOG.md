@@ -4,6 +4,17 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **vim-nav 기본 트리거 LAlt → CapsLock, 탭 = 한/영** — modifier 트리거는
+  해당 modifier의 앱 단축키(HWP `Alt+Shift+N` 등)를 구조적으로 가리므로,
+  non-modifier인 CapsLock을 기본으로 승격. 짧게 탭 = 한/영 전환(기존
+  Escape 탭은 물리 Esc와 중복 + 오탭 부작용으로 교체). macOS는 데몬 실행 중
+  CapsLock 대문자 잠금이 비활성(hidutil 재맵, 종료 시 자동 복구).
+  Windows의 HHKB식 CapsLock 모드탭(탭=Caps/홀드=Ctrl)은 트리거를 LAlt로
+  되돌린 경우에만 주입된다. 되돌리기: config에서 `trigger = "LAlt"` +
+  `tap_action = "Escape"` 두 줄 (docs/13). 기존 사용자의 명시적 config는
+  영향 없음.
+
 ### Added
 - **CapsLock 레이어 트리거 (실험, opt-in)** — nav 레이어 트리거를 LAlt 대신
   CapsLock으로 쓸 수 있다 (`trigger = "CapsLock"`). macOS는 데몬이 시작 시

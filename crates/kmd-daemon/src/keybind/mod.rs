@@ -1066,13 +1066,13 @@ mod tests {
             Some(BindAction::Mouse(MouseBind::Slow))
         ));
 
-        // ── 네비게이션 레이어 ──
+        // ── 네비게이션 레이어 (0.13.0부터 기본 트리거 = CapsLock, 탭 = 한/영) ──
         let layer = config
             .layers
             .iter()
-            .find(|l| l.trigger == VKey::LAlt)
-            .expect("LAlt nav 레이어");
-        assert_eq!(layer.tap_action, Some(VKey::Escape));
+            .find(|l| l.trigger == VKey::CapsLock)
+            .expect("CapsLock nav 레이어");
+        assert_eq!(layer.tap_action, Some(VKey::Hangul));
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
         assert!(layer.mappings.contains_key(&VKey::N), "Alt+N은 PageUp 매핑");
