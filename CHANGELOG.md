@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-10
+
 ### Changed
 - **vim-nav 기본 트리거 LAlt → CapsLock, 탭 = 한/영** — modifier 트리거는
   해당 modifier의 앱 단축키(HWP `Alt+Shift+N` 등)를 구조적으로 가리므로,
