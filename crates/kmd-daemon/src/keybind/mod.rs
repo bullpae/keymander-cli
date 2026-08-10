@@ -93,6 +93,9 @@ pub enum VKey {
     F10,
     F11,
     F12,
+    /// F19 — 트리거 전용. macOS에서 CapsLock을 hidutil로 F19에 재맵해
+    /// LED-토글 문제 없이 깨끗한 홀드 트리거로 쓰기 위한 것 (docs/13).
+    F19,
     Escape,
     Tab,
     CapsLock,
@@ -193,6 +196,7 @@ impl VKey {
         VKey::F10,
         VKey::F11,
         VKey::F12,
+        VKey::F19,
         VKey::Escape,
         VKey::Tab,
         VKey::CapsLock,
@@ -286,6 +290,7 @@ impl VKey {
             "f10" => Some(Self::F10),
             "f11" => Some(Self::F11),
             "f12" => Some(Self::F12),
+            "f19" => Some(Self::F19),
             "esc" | "escape" => Some(Self::Escape),
             "tab" => Some(Self::Tab),
             "caps" | "capslock" => Some(Self::CapsLock),

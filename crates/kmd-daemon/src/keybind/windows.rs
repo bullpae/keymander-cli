@@ -194,6 +194,9 @@ fn vkey_to_vk(key: VKey) -> u16 {
         VKey::F10 => VK_F10,
         VKey::F11 => VK_F11,
         VKey::F12 => VK_F12,
+        // F19 — 트리거 전용(macOS CapsLock→F19 재맵용). Windows는 CapsLock을
+        // 직접 트리거로 쓰므로 F19가 실제로 오진 않지만 exhaustive match를 위해 둔다.
+        VKey::F19 => VK_F19,
         VKey::Escape => VK_ESCAPE,
         VKey::Tab => VK_TAB,
         VKey::CapsLock => VK_CAPITAL,

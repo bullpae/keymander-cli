@@ -232,6 +232,7 @@ fn vkey_to_cg(key: VKey) -> u16 {
         VKey::F10 => 0x6D,
         VKey::F11 => 0x67,
         VKey::F12 => 0x6F,
+        VKey::F19 => 0x50,
         VKey::Escape => 0x35,
         VKey::Tab => 0x30,
         VKey::CapsLock => 0x39,
@@ -336,6 +337,7 @@ fn cg_to_vkey(keycode: u16) -> Option<VKey> {
         0x6D => Some(VKey::F10),
         0x67 => Some(VKey::F11),
         0x6F => Some(VKey::F12),
+        0x50 => Some(VKey::F19),
         0x35 => Some(VKey::Escape),
         0x30 => Some(VKey::Tab),
         0x39 => Some(VKey::CapsLock),
@@ -825,6 +827,72 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
     execute_action(action);
 }
 
+// ── [실험] CapsLock → F19 HID 재맵 (docs/13) ─────────────────────────────────
+//
+// macOS는 CapsLock을 LED-토글 flagsChanged로 전달해 홀드 감지가 불가능하다.
+// hidutil로 CapsLock(0x39)을 F19(0x6E)로 HID 레벨 재맵하면 깨끗한 down/up
+// 일반 키가 되어, 지연·토글 없이 홀드 트리거로 쓸 수 있다(Karabiner 방식).
+
+/// 우리가 CapsLock 재맵을 적용했는지 — stop()에서 원복 여부 판단용.
+static CAPSLOCK_REMAPPED: AtomicBool = AtomicBool::new(false);
+
+const HID_CAPSLOCK: u64 = 0x7_0000_0039;
+const HID_F19: u64 = 0x7_0000_006E;
+
+/// config의 레이어 트리거(및 별칭)에 CapsLock이 있으면, hidutil로 CapsLock→F19
+/// 재맵을 적용하고 그 트리거들을 F19로 바꿔 반환한다. CapsLock 트리거가 없으면
+/// 그대로 반환(재맵도 안 함).
+fn remap_capslock_trigger_to_f19(mut config: KeybindConfig) -> KeybindConfig {
+    let uses_capslock = config
+        .layers
+        .iter()
+        .any(|l| l.trigger == VKey::CapsLock || l.trigger_aliases.contains(&VKey::CapsLock));
+    if !uses_capslock {
+        return config;
+    }
+
+    if apply_hidutil_remap(HID_CAPSLOCK, HID_F19) {
+        CAPSLOCK_REMAPPED.store(true, Ordering::Relaxed);
+        tracing::info!("CapsLock→F19 HID 재맵 적용 (CapsLock 트리거 실험)");
+        for layer in &mut config.layers {
+            if layer.trigger == VKey::CapsLock {
+                layer.trigger = VKey::F19;
+            }
+            for a in &mut layer.trigger_aliases {
+                if *a == VKey::CapsLock {
+                    *a = VKey::F19;
+                }
+            }
+        }
+    } else {
+        tracing::warn!("CapsLock→F19 재맵 실패 — CapsLock 홀드 트리거가 불안정할 수 있음");
+    }
+    config
+}
+
+/// hidutil로 단일 키 매핑 적용. 성공 시 true.
+fn apply_hidutil_remap(src: u64, dst: u64) -> bool {
+    let mapping = format!(
+        r#"{{"UserKeyMapping":[{{"HIDKeyboardModifierMappingSrc":{src},"HIDKeyboardModifierMappingDst":{dst}}}]}}"#
+    );
+    std::process::Command::new("hidutil")
+        .args(["property", "--set", &mapping])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// hidutil 매핑 제거 (원복). stop()에서 우리가 적용했을 때만 호출.
+fn clear_hidutil_remap() {
+    if !CAPSLOCK_REMAPPED.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    let _ = std::process::Command::new("hidutil")
+        .args(["property", "--set", r#"{"UserKeyMapping":[]}"#])
+        .status();
+    tracing::info!("CapsLock→F19 HID 재맵 원복");
+}
+
 // ── 글로벌 상태 ──────────────────────────────────────────────────────────────
 //
 // 바인딩 판정 로직은 전부 keybind::engine(플랫폼 독립, 단위 테스트 가능)에
@@ -1239,6 +1307,12 @@ impl KeyboardBackend for MacOSKeyboardBackend {
             );
         }
 
+        // [실험] CapsLock 트리거: macOS는 CapsLock을 LED-토글 flagsChanged로 줘서
+        // 홀드 감지가 불가능하다(macos.rs 1027 참조). hidutil로 CapsLock→F19로
+        // HID 레벨 재맵해 "깨끗한 일반 키"로 만든 뒤, 트리거를 F19로 바꿔 쓴다.
+        // 재맵은 재부팅 시 초기화되고 stop()에서도 원복한다 (docs/13).
+        let config = remap_capslock_trigger_to_f19(config);
+
         // OnceLock은 최초 1회만 set 가능하므로, 재시작 시에는 기존 Arc 내부의
         // 상태를 새 config로 교체한다 — 그렇지 않으면 stop/start 후에도
         // 이전 설정이 계속 적용된다.
@@ -1405,6 +1479,9 @@ impl KeyboardBackend for MacOSKeyboardBackend {
     }
 
     fn stop(&mut self) -> Result<(), String> {
+        // CapsLock→F19 재맵을 적용했다면 원복 (다른 앱들이 CapsLock을 정상 사용)
+        clear_hidutil_remap();
+
         // stuck modifier 방지: 종료 전에 held 상태인 modifier key-up 전송
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(mut guard) = state.lock() {

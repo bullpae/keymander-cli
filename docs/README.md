@@ -37,6 +37,7 @@
 | [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-08-08 확인) |
 | [11_refactor_backlog.md](11_refactor_backlog.md) | 리팩토링·개선 백로그 (2026-08-08 전수 감사 기반, 진행 중) |
 | [12_clipboard_plan.md](12_clipboard_plan.md) | 클립보드 히스토리 — 다중 버퍼 붙여넣기 설계 (레이어 즉시 + 런처 탐색) |
+| [13_capslock_trigger.md](13_capslock_trigger.md) | CapsLock 레이어 트리거 실험 (macOS hidutil→F19, opt-in) |
 | [deferred-ideas.md](deferred-ideas.md) | v0.3 로드맵에서 보류한 아이디어 모음 — 재검토용 |
 
 ## 변경 이력
