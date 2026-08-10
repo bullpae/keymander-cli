@@ -730,7 +730,13 @@ fn merge_layer_with_base(
 /// 사용자가 CapsLock에 자체 정의(리맵 또는 tap-hold)를 갖고 있는지
 fn user_defined_capslock(km: &crate::config::KeymapConfig) -> bool {
     let is_caps = |k: &str| k.eq_ignore_ascii_case("capslock") || k.eq_ignore_ascii_case("caps");
-    km.remaps.keys().any(|k| is_caps(k)) || km.tap_holds.keys().any(|k| is_caps(k))
+    // 레이어 트리거도 본다 — trigger="CapsLock"(docs/13)인데 Windows 프리셋
+    // 모드탭(tap=Caps/hold=Ctrl)이 함께 주입되면, 엔진에서 모드탭이 레이어
+    // 트리거보다 먼저 처리되어 CapsLock을 가로챈다 (홀드가 Ctrl이 되고
+    // 레이어·탭 액션 모두 불능).
+    km.remaps.keys().any(|k| is_caps(k))
+        || km.tap_holds.keys().any(|k| is_caps(k))
+        || km.layers.values().any(|l| is_caps(&l.trigger))
 }
 
 /// active_profile 문자열이 가리키는 프리셋 종류.
@@ -1410,6 +1416,27 @@ mod tests {
         let e2 = effective_keymap(&km);
         assert_eq!(e2.tap_holds.len(), 1);
         assert_eq!(e2.tap_holds["caps"].hold, "LWin");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn capslock_레이어_트리거면_프리셋_모드탭_주입_안_함() {
+        // trigger="CapsLock"(docs/13)인데 프리셋 모드탭(hold=Ctrl)이 주입되면
+        // 모드탭이 레이어 트리거보다 먼저 처리되어 CapsLock을 가로챈다
+        let mut km = keymap_with_profile("vim-nav");
+        km.layers.insert(
+            "nav".into(),
+            LayerToml {
+                trigger: "CapsLock".into(),
+                ..Default::default()
+            },
+        );
+        let e = effective_keymap(&km);
+        assert!(
+            !e.tap_holds.keys().any(|k| k.eq_ignore_ascii_case("capslock")),
+            "CapsLock이 레이어 트리거면 프리셋 모드탭을 주입하지 않아야 함"
+        );
+        assert_eq!(e.layers["nav"].trigger, "CapsLock");
     }
 
     #[test]

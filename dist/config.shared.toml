@@ -92,7 +92,9 @@
 # kmd-desktop 실행 글로벌 핫키 (데몬 모드에서 동작)
 # vim-nav 레이어와 독립적으로 항상 등록됨
 # 형식: "수정자+키" (예: "alt+space", "ctrl+space", "cmd+j")
-# global_hotkey = "alt+space"
+# 기본으로 켜 둔다 — 레이어 트리거를 LAlt에서 다른 키(CapsLock 등)로 바꾸면
+# 레이어의 Space 매핑이 더는 Alt+Space 역할을 못 하므로, 독립 핫키가 필요하다.
+global_hotkey = "alt+space"
 
 # TUI 키 바인딩
 # quit = "ctrl+c"

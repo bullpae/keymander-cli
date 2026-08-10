@@ -22,6 +22,15 @@ All notable changes to keymander are documented here.
 - **콤보 키 홀드 시 오토리피트 재발화** — Shift+Space를 누르고 있으면
   OS 오토리피트 keydown마다 콤보(한/영 토글 등)가 반복 발화했다. 콤보/
   더블탭으로 소비된 키는 keyup까지 리피트 down을 억제한다.
+- **CapsLock 레이어 트리거가 Windows에서 Ctrl로 동작하던 문제** —
+  `trigger = "CapsLock"`을 설정해도 vim-nav 프리셋의 CapsLock 모드탭
+  (tap=Caps/hold=Ctrl)이 함께 주입됐고, 엔진에서 모드탭이 레이어 트리거보다
+  먼저 처리되어 CapsLock을 가로챘다 (홀드+HJKL이 Ctrl+H/J/K/L로, 탭 한/영
+  불능). 레이어 트리거가 CapsLock이면 프리셋 모드탭을 주입하지 않는다.
+- **번들 기본 config에 `global_hotkey = "alt+space"` 활성화** — 지금까지
+  Alt+Space 런처 실행은 LAlt 레이어의 Space 매핑이 우연히 대신해 왔다.
+  트리거를 CapsLock 등으로 바꾸면 사라지므로, 레이어와 독립인 글로벌
+  핫키를 기본으로 켠다.
 - **데몬은 살아 있는데 키맵만 죽던 문제 — 키보드 훅 워치독 추가 (Windows)** —
   Windows는 저수준 키보드 훅(WH_KEYBOARD_LL)을 **통지 없이** 제거한다.
   콜백이 `LowLevelHooksTimeout`(기본 300ms)을 넘기거나, **Modern Standby
