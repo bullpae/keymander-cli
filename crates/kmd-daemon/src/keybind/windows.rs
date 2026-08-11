@@ -777,9 +777,12 @@ fn execute_mouse_pulse(mb: MouseBind) -> Result<(), SendInputFailure> {
 fn execute_slow_action(action: BindAction) {
     match action {
         BindAction::Launch(cmd) => {
-            // 런처가 포커스를 뺏기 전에 전경 앱 캡처 (docs/12 흐름 B).
-            // Windows 캡처는 아직 스텁 — 흐름 B는 macOS 우선.
-            crate::clipboard::capture_foreground_app();
+            // 런처가 포커스를 뺏기 전에 전경 HWND 캡처 (docs/12 흐름 B).
+            // 다른 launch 바인딩이 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록
+            // 데스크톱 런처를 여는 액션에서만 캡처한다.
+            if crate::clipboard::launch_captures_foreground(&cmd) {
+                crate::clipboard::capture_foreground_app();
+            }
             let resolved = resolve_launch_cmd(&cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {

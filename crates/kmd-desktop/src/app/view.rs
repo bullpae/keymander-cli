@@ -155,7 +155,6 @@ impl App {
         let input = text_input("Search anything...", &self.query)
             .id(self.input_id.clone())
             .on_input(Message::QueryChanged)
-            .on_submit(Message::Submit)
             .width(Fill)
             .size(u.font)
             .padding(Padding::from([4, 8]))

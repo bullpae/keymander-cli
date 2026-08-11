@@ -4,6 +4,10 @@ use crate::query_prefix::{prefix_of, Prefix};
 
 impl App {
     pub(super) fn perform_search(&mut self) -> Task<Message> {
+        // 모든 검색이 세대를 올린다 — 비동기 경로(클립보드)의 늦은 응답은
+        // 세대가 달라져 update에서 폐기된다.
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
         let query = self.query.clone();
         let trimmed = query.trim();
 
@@ -35,7 +39,9 @@ impl App {
             Prefix::Keymap => self.handle_keymap_query(trimmed),
             Prefix::Keys => self.handle_keys_query(),
             Prefix::FolderSearch => self.handle_folder_search(trimmed),
-            Prefix::Clipboard => self.handle_clip_query(trimmed),
+            Prefix::Clipboard => {
+                post_task = self.handle_clip_query(trimmed, generation);
+            }
             Prefix::General => self.handle_main_search(trimmed),
         }
 
@@ -322,10 +328,15 @@ impl App {
     }
 
     /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B).
-    /// 히스토리는 데몬에 있으므로 IPC로 조회한다(localhost, sub-ms). 결과 항목은
-    /// `kmd:clip:<slot>` 키워드 마커를 달아, Enter 시 launch_selected가 이전 앱
-    /// 붙여넣기로 라우팅한다. 데몬 미실행/미수집 시 안내 항목을 보여준다.
-    pub(super) fn handle_clip_query(&mut self, query: &str) {
+    /// 히스토리는 데몬에 있으므로 IPC로 조회한다. 결과 항목은
+    /// `kmd:clip:<id>:<slot>` 키워드 마커를 달아, Enter 시 handle_submit이 이전 앱
+    /// 붙여넣기(또는 Cmd/Ctrl+Enter 복사)로 라우팅한다.
+    ///
+    /// GUI 스레드에서 IPC 타임아웃(수 초)을 기다리지 않도록 블로킹 요청을 워커로
+    /// 보낸다 — 데몬이 느리거나 멈춰도 입력이 얼지 않는다. 응답이 도착하면
+    /// [`Message::ClipSearchFinished`]로 돌아오고, 그 사이 쿼리가 바뀌어
+    /// generation이 달라진 응답은 update에서 폐기된다.
+    pub(super) fn handle_clip_query(&mut self, query: &str, generation: u64) -> Task<Message> {
         let q = query
             .strip_prefix(';')
             .or_else(|| query.strip_prefix(":clip"))
@@ -336,29 +347,23 @@ impl App {
             query: q.to_string(),
             limit: 30,
         };
-        let items = match kmd_core::ipc::send_request_result(&req) {
-            Ok(kmd_core::ipc::Response::ClipHistory { hits }) if !hits.is_empty() => hits
-                .into_iter()
-                .map(|h| clip_item(&h, self.use_emoji))
-                .collect(),
-            Ok(kmd_core::ipc::Response::ClipHistory { .. }) => {
-                vec![clip_notice(
-                    if q.is_empty() {
-                        "클립보드 히스토리가 비어 있습니다"
-                    } else {
-                        "일치하는 항목이 없습니다"
-                    },
-                    "복사를 하면 여기에 쌓입니다 (설정: [clipboard] history_enabled)",
-                    self.use_emoji,
-                )]
-            }
-            _ => vec![clip_notice(
-                "클립보드 히스토리를 사용할 수 없습니다",
-                "데몬이 실행 중인지, [clipboard] history_enabled=true 인지 확인하세요",
-                self.use_emoji,
-            )],
-        };
-        self.apply_contains_items(items);
+        self.clear_results_state(kmd_core::SearchMode::Fuzzy);
+        Task::future(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                match kmd_core::ipc::send_request_result(&req) {
+                    Ok(kmd_core::ipc::Response::ClipHistory { hits }) => Ok(hits),
+                    Ok(kmd_core::ipc::Response::Error { message }) => Err(message),
+                    Ok(other) => Err(format!("예기치 않은 데몬 응답: {other:?}")),
+                    Err(_) => Err(
+                        "데몬이 실행 중인지, [clipboard] history_enabled=true 인지 확인하세요"
+                            .to_string(),
+                    ),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("클립보드 검색 작업 실패: {e}")));
+            Message::ClipSearchFinished { generation, result }
+        })
     }
 
     /// :keys / :k — 키 맵핑 치트시트
@@ -502,7 +507,7 @@ impl App {
 /// 담아 Enter 시 launch_selected가 이전 앱 붙여넣기로 라우팅한다. 실행은 안정
 /// ID를 쓴다 — 검색 뒤 새 복사로 슬롯이 밀려도 같은 항목을 붙여넣기 위함.
 /// slot은 구버전 데몬(id=0) 폴백용으로만 함께 싣는다.
-fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
+pub(super) fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
     IndexItem {
         name: if hit.preview.is_empty() {
             "(빈 줄)".to_string()
