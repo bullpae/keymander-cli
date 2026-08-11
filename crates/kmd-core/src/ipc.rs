@@ -63,6 +63,9 @@ pub enum Request {
         #[serde(default)]
         to_previous: bool,
     },
+    /// 안정 ID의 항목을 붙여넣지 않고 시스템 클립보드에 복사만 한다
+    /// (런처 Cmd/Ctrl+Enter — 사용자가 클립보드 교체를 명시한 동작).
+    ClipCopyItem { id: u64 },
     /// 클립보드 히스토리 검색 (흐름 B 런처). 빈 쿼리는 전체(최신순).
     ClipHistory {
         #[serde(default)]
@@ -423,6 +426,16 @@ mod tests {
             }
             other => panic!("잘못된 타입: {other:?}"),
         }
+    }
+
+    #[test]
+    fn clip_copy_item_roundtrip() {
+        let req = Request::ClipCopyItem { id: 7 };
+        let encoded = encode_request(&req).unwrap();
+        assert!(matches!(
+            decode_request(&encoded).unwrap(),
+            Request::ClipCopyItem { id: 7 }
+        ));
     }
 
     #[test]

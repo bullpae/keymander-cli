@@ -270,6 +270,9 @@ pub struct App {
     daemon_autostart_toggle_in_flight: bool,
     runtime_config: kmd_core::Config,
     last_results_signature: u64,
+    /// 비동기 검색 응답 세대 — perform_search마다 증가한다. 쿼리가 바뀐 뒤
+    /// 도착한 오래된(느린) 데몬 응답이 현재 결과를 덮어쓰지 않게 하는 가드.
+    search_generation: u64,
     loading: bool,
     engine_slot: EngineSlot,
     quick_engine_slot: QuickEngineSlot,
@@ -330,7 +333,6 @@ pub struct App {
 #[derive(Debug, Clone)]
 pub enum Message {
     QueryChanged(String),
-    Submit,
     ResultClicked(usize),
     KeyEvent(keyboard::Key, keyboard::Modifiers),
     BrandClicked,
@@ -371,6 +373,13 @@ pub enum Message {
     EngineSwapSettled,
     /// 비동기 quick 엔진 로드 완료 → 빈 엔진과 교체
     QuickEngineReady,
+    /// 비동기 클립보드 히스토리 검색 완료 — generation이 현재 세대와 다르면 폐기
+    ClipSearchFinished {
+        generation: u64,
+        result: Result<Vec<kmd_core::ipc::ClipHit>, String>,
+    },
+    /// 클립보드 붙여넣기/복사 IPC 완료 — 성공할 때만 런처를 닫는다 (정직한 오류)
+    ClipActionFinished(Result<String, String>),
 }
 
 // ─── Context Actions ─────────────────────────────────────────────────────────
@@ -706,6 +715,7 @@ impl App {
             daemon_autostart_toggle_in_flight: false,
             runtime_config: config,
             last_results_signature: 0,
+            search_generation: 0,
             loading: true,
             engine_slot,
             quick_engine_slot: quick_engine_slot.clone(),
@@ -1099,12 +1109,16 @@ impl App {
                 self.log_ime_state("QueryChanged:perform_search");
                 self.with_activity_warmup(search_task)
             }
-            Message::Submit => self.launch_selected(),
             Message::ResultClicked(index) => {
                 self.selected = index;
                 self.launch_selected()
             }
             Message::KeyEvent(key, modifiers) => {
+                // Enter는 수정자까지 봐야 한다 (클립보드 결과의 Cmd/Ctrl+Enter
+                // 복사 전용) — text_input on_submit 대신 여기서 일괄 처리한다.
+                if matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                    return self.handle_submit(&modifiers);
+                }
                 if let Some(action) = self.match_shortcut(&key, &modifiers) {
                     return self.execute_context_action(action);
                 }
@@ -1356,6 +1370,64 @@ impl App {
                 }
                 iced::exit()
             }
+            Message::ClipSearchFinished { generation, result } => {
+                // 오래된 응답(그 사이 쿼리가 바뀜)이나 클립보드 모드를 벗어난 뒤
+                // 도착한 응답은 폐기한다 — 현재 결과를 덮어쓰지 않는다.
+                if generation != self.search_generation
+                    || crate::query_prefix::prefix_of(self.query.trim())
+                        != crate::query_prefix::Prefix::Clipboard
+                {
+                    return Task::none();
+                }
+                let use_emoji = self.use_emoji;
+                let query_is_empty = self
+                    .query
+                    .trim()
+                    .strip_prefix(';')
+                    .or_else(|| self.query.trim().strip_prefix(":clip"))
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty();
+                let items = match result {
+                    Ok(hits) if !hits.is_empty() => hits
+                        .iter()
+                        .map(|hit| search_routing::clip_item(hit, use_emoji))
+                        .collect(),
+                    Ok(_) => vec![search_routing::clip_notice(
+                        if query_is_empty {
+                            "클립보드 히스토리가 비어 있습니다"
+                        } else {
+                            "일치하는 항목이 없습니다"
+                        },
+                        "복사를 하면 여기에 쌓입니다 (설정: [clipboard] history_enabled)",
+                        use_emoji,
+                    )],
+                    Err(message) => vec![search_routing::clip_notice(
+                        "클립보드 히스토리를 사용할 수 없습니다",
+                        &message,
+                        use_emoji,
+                    )],
+                };
+                self.apply_contains_items(items);
+                self.spawn_icon_prefetch()
+            }
+            Message::ClipActionFinished(result) => match result {
+                Ok(message) => {
+                    tracing::info!("{message}");
+                    iced::exit()
+                }
+                Err(message) => {
+                    // 실패는 결과 리스트에 표시해 사용자가 원인(항목 만료·데몬
+                    // 중지 등)을 보고 다시 시도할 수 있게 한다 — 창을 닫지 않는다.
+                    tracing::warn!("클립보드 동작 실패: {message}");
+                    self.apply_contains_items(vec![search_routing::clip_notice(
+                        "클립보드 동작에 실패했습니다",
+                        &message,
+                        self.use_emoji,
+                    )]);
+                    Task::none()
+                }
+            },
             Message::RunAction(action) => self.execute_context_action(action),
             Message::BackgroundClicked => {
                 if self.state_dirty {
@@ -1549,6 +1621,123 @@ mod tests {
         let window_state = WindowState::default();
         let (app, _task) = App::new_for_test(guard, config, window_state, test_db_path);
         app
+    }
+
+    // ── 클립보드 런처 (비동기 검색 세대 가드 + Cmd/Ctrl+Enter 복사 전용) ──
+
+    fn clip_hit(id: u64, slot: usize, preview: &str) -> kmd_core::ipc::ClipHit {
+        kmd_core::ipc::ClipHit {
+            id,
+            slot,
+            preview: preview.into(),
+        }
+    }
+
+    #[test]
+    fn 클립보드_검색_응답은_안정_id_마커로_결과를_만든다() {
+        let mut app = make_test_app();
+        app.query = ";account".into();
+        app.search_generation = 7;
+        let _ = app.update(Message::ClipSearchFinished {
+            generation: 7,
+            result: Ok(vec![clip_hit(4242, 3, "account number")]),
+        });
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(app.results[0].item.keywords, "kmd:clip:4242:3");
+    }
+
+    #[test]
+    fn 오래된_클립보드_검색_응답은_현재_결과를_덮어쓰지_않는다() {
+        let mut app = make_test_app();
+        app.query = ";new".into();
+        app.search_generation = 9;
+        let _ = app.update(Message::ClipSearchFinished {
+            generation: 8,
+            result: Ok(vec![clip_hit(1, 1, "stale")]),
+        });
+        assert!(app.results.is_empty(), "세대가 다른 응답은 폐기되어야 함");
+    }
+
+    #[test]
+    fn 클립보드_모드를_벗어난_뒤_도착한_응답은_폐기된다() {
+        let mut app = make_test_app();
+        app.query = "notes".into(); // 이미 일반 검색으로 전환됨
+        app.search_generation = 3;
+        let _ = app.update(Message::ClipSearchFinished {
+            generation: 3,
+            result: Ok(vec![clip_hit(5, 1, "late")]),
+        });
+        assert!(
+            app.results.is_empty(),
+            "클립보드 모드가 아니면 늦은 응답이 결과를 덮어쓰면 안 됨"
+        );
+    }
+
+    #[test]
+    fn 클립보드_submit은_수정자에_따라_붙여넣기와_복사를_구분한다() {
+        let mut app = make_test_app();
+        app.results = vec![kmd_core::SearchResult {
+            item: search_routing::clip_item(&clip_hit(77, 2, "value"), false),
+            score: 0,
+        }];
+
+        assert!(matches!(
+            app.clipboard_submit_request(false),
+            Some(kmd_core::ipc::Request::ClipPasteItem {
+                id: 77,
+                to_previous: true
+            })
+        ));
+        assert!(matches!(
+            app.clipboard_submit_request(true),
+            Some(kmd_core::ipc::Request::ClipCopyItem { id: 77 })
+        ));
+    }
+
+    #[test]
+    fn 구버전_데몬_id0은_슬롯_붙여넣기로만_폴백한다() {
+        let mut app = make_test_app();
+        app.results = vec![kmd_core::SearchResult {
+            item: search_routing::clip_item(&clip_hit(0, 4, "old daemon"), false),
+            score: 0,
+        }];
+
+        assert!(matches!(
+            app.clipboard_submit_request(false),
+            Some(kmd_core::ipc::Request::ClipPaste {
+                slot: 4,
+                to_previous: true
+            })
+        ));
+        assert!(
+            app.clipboard_submit_request(true).is_none(),
+            "구버전 데몬엔 복사 전용 요청이 없다 — 붙여넣기로 오인 실행하면 안 됨"
+        );
+    }
+
+    #[test]
+    fn 클립보드_안내_항목은_submit_대상이_아니다() {
+        let mut app = make_test_app();
+        app.results = vec![kmd_core::SearchResult {
+            item: search_routing::clip_notice("비어 있음", "안내", false),
+            score: 0,
+        }];
+        assert!(app.clipboard_submit_request(false).is_none());
+        assert!(app.clipboard_submit_request(true).is_none());
+    }
+
+    #[test]
+    fn 클립보드_동작_실패는_창을_닫지_않고_원인을_보여준다() {
+        let mut app = make_test_app();
+        let _ = app.update(Message::ClipActionFinished(Err(
+            "선택한 클립보드 항목이 만료되었습니다".into(),
+        )));
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(app.results[0].item.keywords, "kmd:clip:notice");
+        assert!(
+            app.results[0].item.path.contains("만료"),
+            "실패 원인이 표시되어야 함"
+        );
     }
 
     // ── 창 리사이즈 디바운스 (화면 찢어짐 회귀 방지) ──

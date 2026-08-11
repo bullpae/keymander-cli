@@ -1243,10 +1243,26 @@ fn handle_emoji_query(query: &str, state: &mut AppState) {
 
 /// Handle :help / :h prefix — 공용 도움말 항목 표시 (Enter로 시작 쿼리 전환)
 fn handle_help_query(state: &mut AppState) {
-    let items = kmd_core::query_prefix::help_items(state.use_emoji);
+    let items = help_items_for_tui(state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
+}
+
+/// TUI에 노출할 도움말 항목 — 클립보드 히스토리는 데몬+데스크톱 전용 흐름이라
+/// 숨긴다. 공용 COMMANDS 레지스트리의 항목을 그대로 노출하면 선택 시 시작
+/// 쿼리 `;`가 TUI에서는 일반 파일 검색으로 흘러가(위 QueryPrefix::Clipboard
+/// 라우팅 참고) 도움말이 안내한 것과 다른 동작이 된다.
+fn help_items_for_tui(use_emoji: bool) -> Vec<kmd_core::IndexItem> {
+    kmd_core::query_prefix::help_items(use_emoji)
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                kmd_core::query_prefix::help_query_seed(&item.name),
+                Some(seed) if kmd_core::query_prefix::prefix_of(seed) == QueryPrefix::Clipboard
+            )
+        })
+        .collect()
 }
 
 /// Handle :version prefix — 버전 정보 표시
@@ -1650,5 +1666,27 @@ mod tests {
         );
         assert!(!state.hangul_mode);
         assert!(!state.hangul_auto);
+    }
+
+    #[test]
+    fn tui_도움말은_클립보드_히스토리_항목을_숨긴다() {
+        // 회귀 방지: 공용 COMMANDS의 클립보드 항목을 TUI 도움말에 노출하면
+        // 선택 시 시작 쿼리 `;`가 일반 파일 검색으로 흘러가 안내와 다르게 동작한다.
+        let mut state = test_state();
+        handle_help_query(&mut state);
+        assert!(
+            !state.results.is_empty(),
+            "다른 도움말 항목은 그대로 보여야 함"
+        );
+        assert!(
+            state.results.iter().all(|r| {
+                !matches!(
+                    kmd_core::query_prefix::help_query_seed(&r.item.name),
+                    Some(seed)
+                        if kmd_core::query_prefix::prefix_of(seed) == QueryPrefix::Clipboard
+                )
+            }),
+            "클립보드 도움말 항목이 TUI에 노출됨"
+        );
     }
 }

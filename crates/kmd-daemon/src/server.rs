@@ -559,6 +559,13 @@ fn process_request(
             }
         }
 
+        Request::ClipCopyItem { id } => match crate::clipboard::copy_item(id) {
+            Ok(()) => Response::Ok {
+                message: "클립보드 항목 복사".into(),
+            },
+            Err(message) => Response::Error { message },
+        },
+
         Request::ClipHistory { query, limit } => Response::ClipHistory {
             hits: crate::clipboard::search(&query, limit),
         },
@@ -775,6 +782,14 @@ mod tests {
                 id: u64::MAX,
                 to_previous: false,
             },
+            &engine,
+            &tx,
+            Instant::now(),
+        );
+        assert!(matches!(response, Response::Error { .. }));
+
+        let response = process_request(
+            Request::ClipCopyItem { id: u64::MAX },
             &engine,
             &tx,
             Instant::now(),

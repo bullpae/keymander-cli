@@ -240,6 +240,13 @@ static SUPPRESS_CAPTURE: AtomicBool = AtomicBool::new(false);
 /// 0 = 없음. 런처가 포커스를 뺏기 전에 데몬이 스냅샷한다.
 static PREV_APP_TARGET: AtomicIsize = AtomicIsize::new(0);
 
+/// Launch 바인딩이 전경 앱 캡처를 동반해야 하는지 — 데스크톱 런처(`kmd-desktop`)
+/// 실행만 해당한다. 다른 launch 바인딩(브라우저·에디터 등)이 캡처하면 런처 사용
+/// 중 흐름 B의 붙여넣기 대상이 엉뚱한 앱으로 덮어써진다.
+pub fn launch_captures_foreground(cmd: &str) -> bool {
+    cmd == "kmd-desktop"
+}
+
 /// 런처(kmd-desktop)를 띄우기 직전에 호출 — 현재 전경 앱을 기억한다.
 /// Launch 액션 경로에서 불러, 전역 핫키/레이어 어느 쪽으로 열든 캡처된다.
 pub fn capture_foreground_app() {
@@ -300,6 +307,25 @@ pub fn paste_item(id: u64, to_previous: bool) -> Result<(), String> {
     let entry =
         entry_by_id(id).ok_or_else(|| "선택한 클립보드 항목이 만료되었습니다".to_string())?;
     paste_impl(entry, to_previous)
+}
+
+/// 안정 ID의 항목을 붙여넣지 않고 **시스템 클립보드에 복사만** 한다
+/// (런처 Cmd/Ctrl+Enter). 만료/실패는 Err.
+///
+/// 모든 플랫폼에서 클립보드를 실제로 교체한다 — Windows의 "붙여넣기는 클립보드
+/// 무변형" 불변식과 어긋나지 않는다: 복사 전용은 사용자가 "이 항목으로 클립보드를
+/// 바꿔 달라"고 명시한 동작이기 때문이다. 수집은 막지 않는다 — 감시 스레드가
+/// 이 복사를 관측하면 dedupe로 같은 항목(같은 ID)이 히스토리 맨 앞으로 온다.
+pub fn copy_item(id: u64) -> Result<(), String> {
+    let entry =
+        entry_by_id(id).ok_or_else(|| "선택한 클립보드 항목이 만료되었습니다".to_string())?;
+    let _guard = PASTE_LOCK
+        .lock()
+        .map_err(|_| "클립보드 동작 잠금이 손상되었습니다".to_string())?;
+    let mut board = arboard::Clipboard::new().map_err(|e| format!("클립보드 접근 실패: {e}"))?;
+    board
+        .set_text(entry.text)
+        .map_err(|e| format!("클립보드 쓰기 실패: {e}"))
 }
 
 /// 복원 판단 (클립보드 스왑 경로): 우리가 넣은 임시 값이 **여전히 현재
@@ -945,6 +971,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*steps.borrow(), ["activate", "wait", "paste"]);
+    }
+
+    #[test]
+    fn 만료된_id_복사도_에러다() {
+        let _g = reset();
+        // copy_item도 항목 조회가 먼저다 — 실제 클립보드를 건드리지 않는다.
+        assert!(copy_item(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn 전경_캡처는_데스크톱_런처_실행에만_동반된다() {
+        // 다른 launch 바인딩이 흐름 B 붙여넣기 대상을 덮어쓰는 회귀 방지.
+        assert!(launch_captures_foreground("kmd-desktop"));
+        assert!(!launch_captures_foreground("firefox"));
+        assert!(
+            !launch_captures_foreground("kmd-desktop.exe"),
+            "정확히 일치해야 함"
+        );
+        assert!(!launch_captures_foreground(""));
     }
 
     #[cfg(not(windows))]
