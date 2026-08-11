@@ -327,8 +327,8 @@ fn should_restore(
 /// - macOS/기타: 스냅샷(실패 시 **중단** — 원본을 파괴하지 않는다) → 교체 →
 ///   Cmd+V → 우리 값이 아직 현재일 때만 복원. 스왑 구간엔 수집을 멈춘다.
 ///
-/// **액션 워커/커넥션 스레드에서 호출** — macOS는 RESTORE_DELAY(300ms),
-/// Windows는 텍스트 길이에 비례한 주입 시간만큼 블로킹한다.
+/// **액션 워커/커넥션 스레드에서 호출** — macOS는 RESTORE_DELAY(300ms)만큼
+/// 블로킹하고, Windows는 단일 SendInput 호출이라 사실상 즉시 반환한다.
 fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
     let _guard = PASTE_LOCK
         .lock()
@@ -612,31 +612,61 @@ mod platform {
     /// 시스템 클립보드는 읽지도 쓰지도 않는다 — 원본(이미지·파일·커스텀 포맷
     /// 전부)이 그대로 남아 부분 소실·소유권 레이스가 원천 불가능하다.
     /// 우리 훅은 LLKHF_INJECTED로 주입 이벤트를 통과시키므로 되먹임도 없다.
-    /// 길이·호환 한계는 `winclip::encode_for_injection` 문서 참고.
+    /// 단일 행·길이·호환 한계는 `winclip::encode_for_injection` 문서 참고.
+    ///
+    /// 전체 down/up 이벤트를 **단 한 번의 SendInput 호출**로 보낸다 — SendInput은
+    /// 호출 단위로 입력 스트림에 원자적으로 들어가므로, 호출을 쪼개면 생기는
+    /// 물리 키 입력 interleave 창(반쪽 서러게이트·문자 사이 끼어들기)이 없다.
+    /// 호출 크기는 `winclip::MAX_INJECT_UTF16_UNITS`(4096유닛 = 이벤트 8192개)로
+    /// 제한되어 입력 큐를 점령하지 않는다.
     pub fn paste_text(text: &str) -> Result<(), String> {
         let units = winclip::encode_for_injection(text)?;
-        for range in winclip::injection_chunks(&units, winclip::INJECT_CHUNK_UNITS) {
-            let inputs = build_unicode_inputs(&units[range]);
-            let sent = unsafe {
-                SendInput(
-                    inputs.len() as u32,
-                    inputs.as_ptr(),
-                    std::mem::size_of::<INPUT>() as i32,
-                )
-            };
-            if sent != inputs.len() as u32 {
-                // UIPI 차단 등 — 이미 보낸 문자는 회수 불가지만 클립보드는 무변형.
-                return Err(format!(
-                    "유니코드 주입이 이벤트 {}개 중 {sent}개에서 중단됐습니다 — \
-                     클립보드는 변경되지 않았습니다",
-                    inputs.len()
-                ));
-            }
-            // 배치 사이 양보 — 대상 앱 메시지 큐가 소화할 시간을 주고
-            // CPU 포화를 피한다 (키 훅 중 CPU 포화 금지 수칙).
-            std::thread::sleep(std::time::Duration::from_millis(2));
+        if units.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let inputs = build_unicode_inputs(&units);
+        // SendInput은 부분 실패 시에만 last-error를 세팅한다 — 이전 호출의
+        // stale 값을 오류 보고에 싣지 않도록 먼저 0으로 지운다.
+        unsafe { windows_sys::Win32::Foundation::SetLastError(0) };
+        let sent = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            )
+        };
+        if sent == inputs.len() as u32 {
+            return Ok(());
+        }
+        // 부분 전송 (UIPI 차단, 다른 스레드의 입력 큐 잠금 등). 이미 들어간
+        // 문자는 회수 불가능하고, 나머지를 재시도하면 어디까지 전달됐는지
+        // 알 수 없어 중복 입력이 된다 — 재시도하지 않는다.
+        let last_error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        let cleanup = match winclip::dangling_down_unit(&units, sent as usize) {
+            Some(unit) => {
+                // 홀수에서 끊기면 마지막 이벤트가 짝 없는 key-down — 대상 앱에
+                // 눌린 채 남지 않도록 대응 key-up만 best-effort로 단독 전송한다.
+                let mut up: INPUT = unsafe { std::mem::zeroed() };
+                up.r#type = INPUT_KEYBOARD;
+                up.Anonymous.ki.wScan = unit;
+                up.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+                let cleaned =
+                    unsafe { SendInput(1, &up, std::mem::size_of::<INPUT>() as i32) } == 1;
+                if cleaned {
+                    "; 짝 잃은 마지막 key-down은 key-up으로 정리했습니다"
+                } else {
+                    "; 짝 잃은 마지막 key-down의 key-up 정리 전송도 실패했습니다"
+                }
+            }
+            None => "",
+        };
+        Err(format!(
+            "유니코드 주입이 이벤트 {}개 중 {sent}개에서 중단됐습니다 \
+             (GetLastError={last_error}; 대상 창이 더 높은 무결성 수준이면 UIPI 차단일 수 \
+             있습니다){cleanup}. 이미 입력된 문자는 회수할 수 없고 중복 입력을 막기 위해 \
+             재시도하지 않습니다 — 클립보드는 변경되지 않았습니다",
+            inputs.len()
+        ))
     }
 
     /// code unit들을 down/up INPUT 쌍으로 변환. wVk=0 + KEYEVENTF_UNICODE →
