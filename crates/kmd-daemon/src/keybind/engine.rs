@@ -321,8 +321,8 @@ impl EngineState {
 
         // ── keymap on/off 토글 ──
         if is_down && !is_modifier_key(&vkey) {
-            if let Some(toggle) = self.config.toggle_keymap.clone() {
-                if combo_trigger_matches(&toggle, vkey, &self.modifiers_held) {
+            if let Some(toggle) = self.config.toggle_keymap.as_ref() {
+                if combo_trigger_matches(toggle, vkey, &self.modifiers_held) {
                     let enabled = !self.keymap_enabled;
                     // 코드 모드를 끊는 경우 주입된 트리거를 해제해야 한다
                     let chord_trigger = self.take_engaged_chord_trigger();
