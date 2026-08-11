@@ -132,12 +132,23 @@ fn e2e_daemon_lifecycle() {
     let home = TempHome(std::env::temp_dir().join(format!("kmd-e2e-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&home.0);
 
-    // 격리 config: 트리거 LAlt 명시 (파일 상단 주석의 hidutil 안전장치)
+    // 격리 config:
+    // - 트리거 LAlt 명시 (파일 상단 주석의 hidutil 안전장치)
+    // - 파일 인덱싱 차단 (builtin 프로바이더 + 빈 search_paths) — CI macOS
+    //   러너는 Spotlight가 꺼져 있어 mdfind가 무기한 멈추고, 인덱스 빌드가
+    //   IPC 서버 기동보다 앞서므로 포트 파일이 영영 안 생긴다 (실측).
+    //   라이프사이클 테스트에 파일 인덱싱은 관심사가 아니다.
     let config_dir = child_config_dir(&home);
     std::fs::create_dir_all(&config_dir).expect("config 디렉터리 생성");
     std::fs::write(
         config_dir.join("config.toml"),
         r#"
+[launcher]
+file_search_provider = "builtin"
+search_paths = []
+index_directories = false
+scan_drives = false
+
 [launcher.keymap.layers.nav]
 trigger = "LAlt"
 tap_action = "Escape"
@@ -151,7 +162,7 @@ H = "Left"
 
     // ── 기동 → 포트 파일 → 인증 → 상태 ──────────────────────────────────
     let mut daemon = spawn_daemon(&home);
-    let (port, token) = wait_runtime(&home, Duration::from_secs(20));
+    let (port, token) = wait_runtime(&home, Duration::from_secs(60));
 
     assert!(
         matches!(send(port, &token, &Request::Ping), Some(Response::Pong)),
