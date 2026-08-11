@@ -43,11 +43,11 @@ const CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
 const CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 
 const CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
-const CG_EVENT_SOURCE_USER_DATA: u32 = 42;
+pub(crate) const CG_EVENT_SOURCE_USER_DATA: u32 = 42;
 const CG_EVENT_SOURCE_STATE_PRIVATE: i32 = -1;
 
 /// 자체 생성 이벤트 식별용 매직 넘버
-const MAGIC_USER_DATA: i64 = 0x6B6D6400; // "kmd\0"
+pub(crate) const MAGIC_USER_DATA: i64 = 0x6B6D6400; // "kmd\0"
 
 type CGEventTapCallBack = unsafe extern "C" fn(
     proxy: CGEventTapProxy,
@@ -178,7 +178,7 @@ extern "C" {
 
 // ── VKey → macOS CGKeyCode 변환 ──────────────────────────────────────────────
 
-fn vkey_to_cg(key: VKey) -> u16 {
+pub(crate) fn vkey_to_cg(key: VKey) -> u16 {
     match key {
         VKey::A => 0x00,
         VKey::S => 0x01,
@@ -824,6 +824,12 @@ fn execute_layer_action(action: &BindAction, trigger: VKey) {
 
 /// 우리가 CapsLock 재맵을 적용했는지 — stop()에서 원복 여부 판단용.
 static CAPSLOCK_REMAPPED: AtomicBool = AtomicBool::new(false);
+
+/// CapsLock→F19 재맵이 적용됐는지 — 셀프테스트가 엔진의 실제 트리거
+/// 키코드(F19)를 알아내는 데 쓴다.
+pub(crate) fn capslock_remapped() -> bool {
+    CAPSLOCK_REMAPPED.load(Ordering::Relaxed)
+}
 
 const HID_CAPSLOCK: u64 = 0x7_0000_0039;
 const HID_F19: u64 = 0x7_0000_006E;

@@ -9,6 +9,7 @@ pub enum Action {
     Stop,
     Restart,
     Status,
+    E2e,
     Install,
     Uninstall,
     PasteTest {
@@ -27,6 +28,7 @@ pub fn run(action: Action) -> Result<()> {
         Action::Start => start_daemon(),
         Action::Stop => send_command(ipc::Request::Shutdown, "stop"),
         Action::Restart => restart_daemon(),
+        Action::E2e => e2e_selftest(),
         Action::Status => check_status(),
         Action::Install => run_daemon_cmd("install"),
         Action::Uninstall => run_daemon_cmd("uninstall"),
@@ -253,9 +255,22 @@ fn check_status() -> Result<()> {
     Ok(())
 }
 
+/// 키 주입 셀프테스트 — 데몬이 수 초간 주입·캡처를 수행하므로 대기를 늘린다.
+fn e2e_selftest() -> Result<()> {
+    println!("키 주입 셀프테스트 실행 중... (수 초 소요, 실행 중 타이핑 금지)");
+    send_command_with_timeout(
+        ipc::Request::KeybindSelfTest,
+        std::time::Duration::from_secs(60),
+    )
+}
+
 fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
+    send_command_with_timeout(request, std::time::Duration::from_secs(5))
+}
+
+fn send_command_with_timeout(request: ipc::Request, timeout: std::time::Duration) -> Result<()> {
     let is_shutdown = matches!(request, ipc::Request::Shutdown);
-    match ipc::send_request_result(&request) {
+    match ipc::send_request_with_timeout(&request, timeout) {
         Ok(ipc::Response::Ok { message }) => {
             println!("{message}");
             if is_shutdown {
@@ -265,8 +280,17 @@ fn send_command(request: ipc::Request, _action_name: &str) -> Result<()> {
         Ok(ipc::Response::Error { message }) => eprintln!("에러: {message}"),
         Ok(_) => println!("완료"),
         Err(ipc::IpcError::Io(_)) => {
-            println!("데몬이 이미 종료되었거나 종료 중입니다.");
-            ipc::cleanup_stale_files();
+            // Io 에러 = "요청 중 연결 끊김"일 수도 있다. 데몬이 살아 있는데
+            // 포트 파일을 지우면 살아있는 데몬이 유령이 되므로(재발견 불가),
+            // 재연결 프로브로 생사를 가른 뒤에만 정리한다.
+            if daemon_alive() {
+                println!(
+                    "요청 처리 중 연결이 끊어졌습니다 — 데몬은 실행 중입니다. 다시 시도하세요."
+                );
+            } else {
+                println!("데몬이 이미 종료되었거나 종료 중입니다.");
+                ipc::cleanup_stale_files();
+            }
         }
         Err(ipc::IpcError::NoDaemon) => {
             println!("데몬이 실행 중이지 않습니다.");

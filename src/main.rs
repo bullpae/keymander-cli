@@ -151,6 +151,8 @@ enum DaemonAction {
     Restart,
     /// Show daemon status
     Status,
+    /// [macOS] Key-injection self-test through the live event tap (docs/14 Tier 2)
+    E2e,
     /// Register daemon to start at login
     Install,
     /// Unregister daemon from starting at login
@@ -325,6 +327,7 @@ fn main() -> color_eyre::Result<()> {
                 DaemonAction::Start => cmd::daemon::Action::Start,
                 DaemonAction::Stop => cmd::daemon::Action::Stop,
                 DaemonAction::Restart => cmd::daemon::Action::Restart,
+                DaemonAction::E2e => cmd::daemon::Action::E2e,
                 DaemonAction::Status => cmd::daemon::Action::Status,
                 DaemonAction::Install => cmd::daemon::Action::Install,
                 DaemonAction::Uninstall => cmd::daemon::Action::Uninstall,

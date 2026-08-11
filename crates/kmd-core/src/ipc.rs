@@ -76,6 +76,10 @@ pub enum Request {
     /// [검증용] 현재 전경 앱을 흐름 B 붙여넣기 대상으로 기억한다.
     /// 실사용에서는 데몬이 런처 실행(Launch) 시점에 자동 캡처하므로 불필요.
     ClipCaptureForeground,
+    /// [macOS] 키 주입 셀프테스트 — 마커 없는 합성 키를 주입해 데몬 탭의
+    /// 리맵 출력(레이어 매핑·탭=한영·연타 디바운스)을 실 이벤트 경로에서
+    /// 검증한다 (docs/14 Tier 2). `kmd daemon e2e`가 호출.
+    KeybindSelfTest,
 }
 
 fn default_limit() -> usize {
@@ -304,15 +308,24 @@ pub fn cleanup_stale_files() {
     let _ = std::fs::remove_file(pid_file_path());
 }
 
-/// 데몬에 요청 전송 후 응답 반환 (실패 시 에러 반환)
+/// 데몬에 요청 전송 후 응답 반환 (실패 시 에러 반환). 응답 대기 5초.
 pub fn send_request_result(request: &Request) -> Result<Response, IpcError> {
+    send_request_with_timeout(request, std::time::Duration::from_secs(5))
+}
+
+/// [`send_request_result`]의 응답 대기 시간 지정판 — 키 주입 셀프테스트처럼
+/// 데몬이 수 초 이상 작업한 뒤 응답하는 요청에 쓴다.
+pub fn send_request_with_timeout(
+    request: &Request,
+    read_timeout: std::time::Duration,
+) -> Result<Response, IpcError> {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
 
     let (port, token) = read_runtime()?;
     let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).map_err(IpcError::Io)?;
     stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .set_read_timeout(Some(read_timeout))
         .map_err(IpcError::Io)?;
 
     // line 1: token, line 2: JSON request

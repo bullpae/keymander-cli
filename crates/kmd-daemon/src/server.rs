@@ -576,6 +576,35 @@ fn process_request(
                 message: "전경 앱 캡처".into(),
             }
         }
+
+        Request::KeybindSelfTest => {
+            #[cfg(target_os = "macos")]
+            {
+                let preset = resolve_keybind_preset(&load_config());
+                // launchd 아래에서는 stderr가 유실되므로 패닉을 삼켜 IPC 응답으로
+                // 돌려준다 — 핸들러 스레드 패닉 = 클라이언트엔 원인 불명 연결 리셋.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    keybind::selftest::run(&preset)
+                })) {
+                    Ok(Ok(report)) => Response::Ok { message: report },
+                    Ok(Err(e)) => Response::Error { message: e },
+                    Err(panic) => {
+                        let msg = panic
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| panic.downcast_ref::<&str>().copied())
+                            .unwrap_or("(비문자열 패닉)");
+                        Response::Error {
+                            message: format!("셀프테스트 패닉: {msg}"),
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            Response::Error {
+                message: "키 주입 셀프테스트는 현재 macOS 전용입니다".into(),
+            }
+        }
     }
 }
 
