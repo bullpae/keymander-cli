@@ -13,10 +13,19 @@ impl App {
         #[cfg(not(target_os = "macos"))]
         let copy_modifier = modifiers.control();
 
-        if copy_modifier {
-            if let Some(request) = self.clipboard_submit_request(true) {
-                return Self::run_clip_action(request);
-            }
+        if copy_modifier
+            && self
+                .results
+                .get(self.selected)
+                .is_some_and(|result| result.item.keywords.starts_with("kmd:clip:"))
+        {
+            // 클립보드 결과에서 복사 전용 요청을 만들 수 없다면(안내 항목,
+            // 손상된 마커, 구버전 데몬의 id=0) 아무 동작도 하지 않는다.
+            // 일반 Enter 경로로 떨어뜨리면 의도와 달리 붙여넣기가 실행된다.
+            return self
+                .clipboard_submit_request(true)
+                .map(Self::run_clip_action)
+                .unwrap_or_else(Task::none);
         }
         if let Some(action) = self.match_shortcut(
             &keyboard::Key::Named(keyboard::key::Named::Enter),
