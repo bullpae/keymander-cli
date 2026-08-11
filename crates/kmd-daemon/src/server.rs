@@ -43,12 +43,30 @@ fn index_cache_max_age(refresh_minutes: u64) -> Option<Duration> {
 /// IPC를 먼저 연 뒤 리프레셔가 전체 인덱스로 교체한다.
 fn load_startup_index(config: &Config) -> (Index, bool) {
     let data_dir = Config::default_data_dir();
-    let cached = kmd_core::index::store::try_load_cached_with_max_age(
-        &data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME),
-        &data_dir.join(kmd_core::INDEX_CACHE_FILENAME),
-        Index::current_version(),
-        index_cache_max_age(config.launcher.index_refresh_minutes),
-    );
+    let bin_path = data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME);
+    let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
+    let config_modified = config
+        .config_path
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok()?.modified().ok());
+    let newest_cache = [&bin_path, &json_path]
+        .into_iter()
+        .filter_map(|path| std::fs::metadata(path).ok()?.modified().ok())
+        .max();
+    let config_changed = config_modified
+        .zip(newest_cache)
+        .is_some_and(|(config_time, cache_time)| config_time > cache_time);
+    let cached = if config_changed {
+        tracing::info!("설정 파일이 인덱스 캐시보다 새로움 — 백그라운드 재빌드 예약");
+        None
+    } else {
+        kmd_core::index::store::try_load_cached_with_max_age(
+            &bin_path,
+            &json_path,
+            Index::current_version(),
+            index_cache_max_age(config.launcher.index_refresh_minutes),
+        )
+    };
 
     match cached {
         Some(index) => {
