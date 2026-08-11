@@ -56,6 +56,16 @@ pub enum Request {
         #[serde(default)]
         to_previous: bool,
     },
+    /// 안정 ID로 클립보드 항목을 붙여넣는다. 슬롯 번호는 새 복사가 들어오면
+    /// 밀리므로, 런처 검색 결과 선택은 반드시 이 요청을 사용한다 (docs/12).
+    ClipPasteItem {
+        id: u64,
+        #[serde(default)]
+        to_previous: bool,
+    },
+    /// 안정 ID의 항목을 붙여넣지 않고 시스템 클립보드에 복사만 한다
+    /// (런처 Cmd/Ctrl+Enter — 사용자가 클립보드 교체를 명시한 동작).
+    ClipCopyItem { id: u64 },
     /// 클립보드 히스토리 검색 (흐름 B 런처). 빈 쿼리는 전체(최신순).
     ClipHistory {
         #[serde(default)]
@@ -101,7 +111,12 @@ pub struct LlmJob {
 /// 클립보드 히스토리 검색 결과 항목 (docs/12 흐름 B).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipHit {
-    /// 1-기반 슬롯 번호 (붙여넣기 시 ClipPaste.slot으로 그대로 넘긴다)
+    /// 데몬 수명 동안 변하지 않는 항목 식별자 — 붙여넣기는 ClipPasteItem.id로.
+    /// 0 = 구버전 데몬 응답(id 없음) → 클라이언트는 slot 폴백을 쓴다.
+    #[serde(default)]
+    pub id: u64,
+    /// 조회 시점의 1-기반 슬롯 번호 (표시/구버전 폴백용). 새 복사가 들어오면
+    /// 밀리므로 실행 식별자로 쓰지 않는다.
     pub slot: usize,
     /// 첫 줄 미리보기 (최대 200자). 전체 내용은 응답에 담지 않는다.
     pub preview: String,
@@ -392,6 +407,45 @@ mod tests {
                 assert!(keymap_layers.is_empty());
                 assert!(config_error.is_none());
                 assert!(keybind_error.is_none());
+            }
+            _ => panic!("잘못된 타입"),
+        }
+    }
+
+    #[test]
+    fn clip_paste_item_roundtrip() {
+        let req = Request::ClipPasteItem {
+            id: 42,
+            to_previous: true,
+        };
+        let encoded = encode_request(&req).unwrap();
+        match decode_request(&encoded).unwrap() {
+            Request::ClipPasteItem { id, to_previous } => {
+                assert_eq!(id, 42);
+                assert!(to_previous);
+            }
+            other => panic!("잘못된 타입: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_copy_item_roundtrip() {
+        let req = Request::ClipCopyItem { id: 7 };
+        let encoded = encode_request(&req).unwrap();
+        assert!(matches!(
+            decode_request(&encoded).unwrap(),
+            Request::ClipCopyItem { id: 7 }
+        ));
+    }
+
+    #[test]
+    fn clip_hit_구버전_응답은_id_0으로_디코드된다() {
+        // 구버전 데몬(id 필드 없음) 응답과의 하위 호환 — 클라이언트는 slot 폴백
+        let old = r#"{"type":"ClipHistory","hits":[{"slot":3,"preview":"p"}]}"#;
+        match decode_response(old).unwrap() {
+            Response::ClipHistory { hits } => {
+                assert_eq!(hits[0].id, 0);
+                assert_eq!(hits[0].slot, 3);
             }
             _ => panic!("잘못된 타입"),
         }

@@ -1,6 +1,6 @@
 [package]
 name = "kmd-daemon"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 description = "keymander Daemon — background service with IPC, global hotkey, key bindings"
 
@@ -24,12 +24,17 @@ color-eyre = "0.6"
 
 # 클립보드 — 히스토리 감시/붙여넣기(docs/12, 크로스플랫폼) + LLM 오토파일럿 주입
 arboard = "3.6.1"
+fs2 = "0.4.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # NSPasteboard 직접 접근 — changeCount 기반 감시 + Concealed 마크(비밀번호) 제외
 objc2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
+# 클립보드 감시(읽기 전용) — sequence number + 수집 제외 마커 판정 (docs/12).
+# 붙여넣기는 클립보드를 변형하지 않는 SendInput 유니코드 주입이라 스냅샷/복원
+# 계열 API(DataExchange/Memory)는 쓰지 않는다 (clipboard.rs 설계 불변식).
+clipboard-win = "5.4.1"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",

@@ -4,6 +4,92 @@ use super::context_actions_for;
 use super::*;
 
 impl App {
+    /// Enter 실행 진입점 (KeyEvent에서 호출). 클립보드 결과에서 Cmd(macOS)/
+    /// Ctrl+Enter는 붙여넣지 않고 시스템 클립보드에 **복사만** 하며, 그 외에는
+    /// 기존 단축키(Ctrl+Shift+Enter 등) → 기본 실행 순서를 유지한다.
+    pub(super) fn handle_submit(&mut self, modifiers: &keyboard::Modifiers) -> Task<Message> {
+        #[cfg(target_os = "macos")]
+        let copy_modifier = modifiers.logo() || modifiers.control();
+        #[cfg(not(target_os = "macos"))]
+        let copy_modifier = modifiers.control();
+
+        if copy_modifier
+            && self
+                .results
+                .get(self.selected)
+                .is_some_and(|result| result.item.keywords.starts_with("kmd:clip:"))
+        {
+            // 클립보드 결과에서 복사 전용 요청을 만들 수 없다면(안내 항목,
+            // 손상된 마커, 구버전 데몬의 id=0) 아무 동작도 하지 않는다.
+            // 일반 Enter 경로로 떨어뜨리면 의도와 달리 붙여넣기가 실행된다.
+            return self
+                .clipboard_submit_request(true)
+                .map(Self::run_clip_action)
+                .unwrap_or_else(Task::none);
+        }
+        if let Some(action) = self.match_shortcut(
+            &keyboard::Key::Named(keyboard::key::Named::Enter),
+            modifiers,
+        ) {
+            return self.execute_context_action(action);
+        }
+        self.launch_selected()
+    }
+
+    /// 선택된 클립보드 결과에 보낼 IPC 요청. 클립 항목이 아니거나 안내 항목,
+    /// 마커 손상이면 None. `kmd:clip:<id>:<slot>` 마커에서 안정 ID를 우선 쓰고,
+    /// id=0(구버전 데몬 응답)은 슬롯 붙여넣기로 폴백한다 — 복사 전용은 구버전
+    /// 데몬에 대응 요청이 없어 폴백하지 않는다 (붙여넣기로 오인 실행하지 않는다).
+    pub(super) fn clipboard_submit_request(
+        &self,
+        copy_only: bool,
+    ) -> Option<kmd_core::ipc::Request> {
+        let result = self.results.get(self.selected)?;
+        let marker = result.item.keywords.strip_prefix("kmd:clip:")?;
+        if marker == "notice" {
+            return None;
+        }
+        let mut parts = marker.split(':');
+        let id = parts.next().and_then(|s| s.parse::<u64>().ok());
+        let slot = parts.next().and_then(|s| s.parse::<usize>().ok());
+        match (id, slot) {
+            (Some(id), _) if id > 0 => Some(if copy_only {
+                kmd_core::ipc::Request::ClipCopyItem { id }
+            } else {
+                kmd_core::ipc::Request::ClipPasteItem {
+                    id,
+                    to_previous: true,
+                }
+            }),
+            (_, Some(slot)) if slot > 0 && !copy_only => Some(kmd_core::ipc::Request::ClipPaste {
+                slot,
+                to_previous: true,
+            }),
+            _ => None,
+        }
+    }
+
+    /// 클립보드 붙여넣기/복사 IPC를 워커에서 실행한다 — GUI 스레드가 IPC
+    /// 타임아웃에 얼지 않는다. 결과는 [`Message::ClipActionFinished`]로 돌아와
+    /// 성공에만 창을 닫고, 실패는 원인을 결과 리스트에 표시한다 (정직한 오류).
+    fn run_clip_action(request: kmd_core::ipc::Request) -> Task<Message> {
+        Task::future(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                match kmd_core::ipc::send_request_result(&request) {
+                    Ok(kmd_core::ipc::Response::Ok { message }) => Ok(message),
+                    Ok(kmd_core::ipc::Response::Error { message }) => Err(message),
+                    Ok(other) => Err(format!("예기치 않은 데몬 응답: {other:?}")),
+                    Err(e) => Err(format!(
+                        "데몬에 연결할 수 없습니다 — kmd daemon status로 확인하세요 ({e})"
+                    )),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("클립보드 동작 작업 실패: {e}")));
+            Message::ClipActionFinished(result)
+        })
+    }
+
     pub(super) fn execute_context_action(&mut self, action: ContextAction) -> Task<Message> {
         let Some(result) = self.results.get(self.selected) else {
             return Task::none();
@@ -86,19 +172,17 @@ impl App {
             return Task::none();
         };
 
-        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 슬롯을 런처 열기 전 앱에
-        // 붙여넣어라"고 요청하고 창을 닫는다. 데몬이 이전 앱을 활성화한 뒤 주입한다.
-        if let Some(slot_str) = result.item.keywords.strip_prefix("kmd:clip:") {
-            if slot_str == "notice" {
-                return Task::none(); // 안내 항목 — 실행 대상 아님
-            }
-            if let Ok(slot) = slot_str.parse::<usize>() {
-                let _ = kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::ClipPaste {
-                    slot,
-                    to_previous: true,
-                });
-            }
-            return iced::exit();
+        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 항목을 런처 열기 전 앱에
+        // 붙여넣어라"고 요청한다. 데몬이 이전 앱을 활성화한 뒤 주입하며, 성공
+        // 응답(ClipActionFinished)에만 창을 닫는다. 마커는 `kmd:clip:<id>:<slot>`
+        // (clip_item이 생성) — 안정 ID로 붙여넣어 검색 뒤 새 복사로 슬롯이 밀려도
+        // 선택한 항목을 정확히 집고, id=0(구버전 데몬)은 슬롯 요청으로 폴백한다.
+        if result.item.keywords.starts_with("kmd:clip:") {
+            return match self.clipboard_submit_request(false) {
+                Some(request) => Self::run_clip_action(request),
+                // 안내 항목 또는 마커 손상 — 실행 대상 아님
+                None => Task::none(),
+            };
         }
 
         // Help entries act like quick templates — 선택 시 시작 쿼리로 전환.

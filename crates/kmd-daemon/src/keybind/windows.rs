@@ -10,7 +10,7 @@ use super::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
-use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
@@ -21,9 +21,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 // 바인딩 판정 로직은 전부 keybind::engine(플랫폼 독립, 단위 테스트 가능)에
 // 있다. 이 파일은 OS 훅 설치/이벤트 변환/액션 큐잉만 담당한다.
 //
-// 액션(SendInput/매크로/Launch)은 전용 워커 스레드에서 실행한다.
+// 합성 키 SendInput은 물리 PassThrough보다 늦어지는 역전을 막기 위해 콜백의
+// 짧은 batch fast path에서 실행하고, Launch/클립보드는 slow worker로 분리한다.
 // LL 훅 콜백이 LowLevelHooksTimeout(기본 수백 ms)을 초과하면 OS가 훅을
-// 조용히 제거하므로, 콜백에서는 채널로 큐잉만 하고 즉시 반환한다.
+// 조용히 제거하므로 콜백에서는 sleep·파일·IPC·프로세스 작업을 하지 않는다.
 // SendInput으로 주입된 이벤트는 LLKHF_INJECTED 플래그로 걸러지므로
 // 재진입 문제가 없다.
 
@@ -52,6 +53,34 @@ static HOOK_LAST_SEEN: AtomicU32 = AtomicU32::new(0);
 /// 훅 재설치 누적 횟수 (진단용 — `kmd daemon status`로 노출)
 static HOOK_REINSTALLS: AtomicU32 = AtomicU32::new(0);
 
+/// 현재 설치된 훅 세대. 워치독 프로브와 재설치 요청 사이의 ABA 오판을 막는다.
+static HOOK_GENERATION: AtomicU32 = AtomicU32::new(0);
+
+/// SendInput 실패 누적 횟수 (키 값은 기록하지 않는 진단용 카운터)
+static INJECTION_FAILURES: AtomicU32 = AtomicU32::new(0);
+static LAST_INJECTION_EXPECTED: AtomicU32 = AtomicU32::new(0);
+static LAST_INJECTION_SENT: AtomicU32 = AtomicU32::new(0);
+static LAST_INJECTION_ERROR: AtomicU32 = AtomicU32::new(0);
+
+/// 훅 콜백 최대 지연과 큐 깊이 진단. 사용자 입력 내용은 포함하지 않는다.
+static HOOK_MAX_LATENCY_MS: AtomicU32 = AtomicU32::new(0);
+static HOOK_SLOW_CALLBACKS: AtomicU32 = AtomicU32::new(0);
+static HOOK_PANICS: AtomicU32 = AtomicU32::new(0);
+static FAST_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+static SLOW_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+static FAST_QUEUE_MAX_DEPTH: AtomicU32 = AtomicU32::new(0);
+static SLOW_QUEUE_MAX_DEPTH: AtomicU32 = AtomicU32::new(0);
+static QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
+
+/// 재설치 실패 뒤에는 훅 프로브를 주입하지 않고 제한된 backoff로 직접 재시도한다.
+static HOOK_REINSTALL_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// 합성 key-up/마우스 button-up 실패는 성공할 때까지 추적한다. 콜백에서는
+/// 최초 시도와 기록만 하고, 재시도는 워치독/fast worker에서 제한된 묶음으로 한다.
+static PENDING_SYNTHETIC_RELEASES: OnceLock<Mutex<PendingReleases<SyntheticRelease>>> =
+    OnceLock::new();
+static PENDING_MOUSE_RELEASES: OnceLock<Mutex<PendingReleases<MouseBind>>> = OnceLock::new();
+
 /// 훅 스레드에 재설치를 요청하는 커스텀 메시지.
 /// LL 훅은 설치한 스레드의 메시지 큐로 디스패치되므로 재설치도 그 스레드에서
 /// 해야 한다 (다른 스레드에서 SetWindowsHookExW를 부르면 훅이 그쪽에 붙는다).
@@ -73,6 +102,21 @@ const PROBE_MIN_INTERVAL_MS: i32 = 10_000;
 
 /// 프로브 주입 후 훅 콜백을 기다리는 시간
 const PROBE_WAIT_MS: u64 = 120;
+
+/// 재설치 실패 재시도 backoff. 프로브 입력 없이 메시지만 전송한다.
+const REINSTALL_RETRY_INITIAL_MS: u32 = 2_000;
+const REINSTALL_RETRY_MAX_MS: u32 = 60_000;
+
+/// 한 주기에서 처리하는 release 재시도 수와 fast worker 점검 주기.
+const RELEASE_RETRY_BATCH: usize = 8;
+const STOP_RELEASE_RETRY_PASSES: usize = 3;
+const MOUSE_RELEASE_RETRY_MS: u64 = 25;
+
+/// 훅 콜백 지연 경고 기준. SendInput fast path가 비정상적으로 오래 걸리는지 감시한다.
+const HOOK_LATENCY_WARN_MS: u32 = 20;
+
+/// 무제한 mpsc 큐가 밀릴 때 최초 경고를 남기는 깊이.
+const QUEUE_WARN_DEPTH: u32 = 32;
 
 /// 훅 재설치 누적 횟수 (진단용)
 pub fn hook_reinstall_count() -> u32 {
@@ -100,46 +144,171 @@ fn last_system_input_tick() -> Option<u32> {
     }
 }
 
-/// 워커 스레드 작업 — 일회성 액션 또는 코드(chord) 모드 주입/해제
-enum WorkerJob {
-    Action(BindAction),
-    /// 코드 진입: 트리거 down → 키 down을 원자적으로 주입.
-    /// 트리거 up은 [`WorkerJob::ChordRelease`]에서 — 그 사이 OS는
-    /// 트리거가 눌린 상태를 유지한다 (Alt+Tab 스위처 등).
-    ChordEngage {
-        trigger_vk: u16,
-        key_vk: u16,
-    },
-    /// 코드 해제: 트리거 up 주입
-    ChordRelease {
-        trigger_vk: u16,
-    },
+/// fast worker 작업 — 상태형 마우스만 소유한다.
+///
+/// 키 합성은 물리 이벤트보다 늦게 도착하지 않도록 훅 콜백의 짧은 SendInput
+/// fast path에서 즉시 처리한다. Launch/클립보드는 별도 slow worker로 보낸다.
+enum FastJob {
     /// 마우스 바인딩 시작 — 이동/휠은 모션 워커, 버튼은 즉시 down 주입
-    MouseEngage(MouseBind),
+    Engage(MouseBind),
     /// 마우스 바인딩 정지 — 이동/휠 해제, 버튼 up 주입
-    MouseRelease(MouseBind),
+    Release(MouseBind),
     /// 활성 마우스 바인딩 전체 정지 (stuck-mouse 방지)
-    MouseStopAll,
+    StopAll,
+    /// 일회성 마우스 액션. Engage/Release와 같은 FIFO에서 실행해 순서를 보장한다.
+    Pulse(MouseBind),
 }
 
-/// 액션 워커로 보내는 채널. FIFO이므로 키 입력 순서가 보존된다.
-static ACTION_TX: Mutex<Option<mpsc::Sender<WorkerJob>>> = Mutex::new(None);
+static FAST_TX: Mutex<Option<mpsc::Sender<FastJob>>> = Mutex::new(None);
+static SLOW_TX: Mutex<Option<mpsc::Sender<BindAction>>> = Mutex::new(None);
 
-/// 작업을 워커 스레드 큐에 넣는다 (훅 콜백에서 호출 — 블로킹 없음)
-fn queue_job(job: WorkerJob) {
-    let sender = ACTION_TX.lock().ok().and_then(|g| g.clone());
-    match sender {
-        Some(tx) => {
-            if tx.send(job).is_err() {
-                tracing::warn!("액션 워커가 종료되어 작업을 실행하지 못했습니다");
-            }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingRelease<T> {
+    item: T,
+    generation: u64,
+}
+
+/// 재시도해야 할 키보드 해제. 일반 리맵 키는 VK 기반이고, 클립보드 타이핑은
+/// KEYEVENTF_UNICODE의 UTF-16 code unit 기반이라 입력 형식을 함께 보존한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyntheticRelease {
+    VirtualKey(u16),
+    UnicodeUnit(u16),
+}
+
+#[derive(Debug)]
+struct PendingReleases<T> {
+    entries: Vec<PendingRelease<T>>,
+    next_generation: u64,
+}
+
+impl<T> Default for PendingReleases<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_generation: 0,
         }
-        None => tracing::warn!("액션 워커 미시작 — 작업 무시"),
     }
 }
 
-fn queue_action(action: BindAction) {
-    queue_job(WorkerJob::Action(action));
+impl<T: Copy + Eq> PendingReleases<T> {
+    fn record(&mut self, item: T) {
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.item == item) {
+            entry.generation = self.next_generation;
+        } else {
+            self.entries.push(PendingRelease {
+                item,
+                generation: self.next_generation,
+            });
+        }
+    }
+
+    fn snapshot(&self, limit: usize) -> Vec<PendingRelease<T>> {
+        self.entries.iter().take(limit).copied().collect()
+    }
+
+    fn complete(&mut self, completed: PendingRelease<T>) -> bool {
+        let Some(pos) = self.entries.iter().position(|entry| *entry == completed) else {
+            return false;
+        };
+        self.entries.remove(pos);
+        true
+    }
+
+    fn remove(&mut self, item: T) {
+        self.entries.retain(|entry| entry.item != item);
+    }
+
+    fn items(&self) -> Vec<T> {
+        self.entries.iter().map(|entry| entry.item).collect()
+    }
+}
+
+fn lock_pending<T>(
+    pending: &Mutex<PendingReleases<T>>,
+) -> std::sync::MutexGuard<'_, PendingReleases<T>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn retry_pending_releases<T: Copy + Eq>(
+    pending: &Mutex<PendingReleases<T>>,
+    limit: usize,
+    mut release: impl FnMut(T) -> bool,
+) -> Vec<T> {
+    let snapshot = lock_pending(pending).snapshot(limit);
+    let mut completed_items = Vec::new();
+    for entry in snapshot {
+        if release(entry.item) && lock_pending(pending).complete(entry) {
+            completed_items.push(entry.item);
+        }
+    }
+    completed_items
+}
+
+fn pending_synthetic_releases() -> &'static Mutex<PendingReleases<SyntheticRelease>> {
+    PENDING_SYNTHETIC_RELEASES.get_or_init(|| Mutex::new(PendingReleases::default()))
+}
+
+fn pending_mouse_releases() -> &'static Mutex<PendingReleases<MouseBind>> {
+    PENDING_MOUSE_RELEASES.get_or_init(|| Mutex::new(PendingReleases::default()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionLane {
+    Inline,
+    MouseWorker,
+    Slow,
+}
+
+fn action_lane(action: &BindAction) -> ActionLane {
+    match action {
+        BindAction::Launch(_) | BindAction::ClipPaste(_) => ActionLane::Slow,
+        BindAction::Mouse(_) => ActionLane::MouseWorker,
+        _ => ActionLane::Inline,
+    }
+}
+
+fn note_queue_depth(max_depth: &AtomicU32, depth: u32) {
+    max_depth.fetch_max(depth, Ordering::Relaxed);
+}
+
+/// 상태형 마우스 작업을 fast worker에 넣는다 (훅 콜백에서 호출 — 블로킹 없음).
+fn queue_fast(job: FastJob) {
+    let sender = FAST_TX.lock().ok().and_then(|g| g.clone());
+    match sender {
+        Some(tx) => {
+            let depth = FAST_QUEUE_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+            note_queue_depth(&FAST_QUEUE_MAX_DEPTH, depth);
+            if tx.send(job).is_err() {
+                FAST_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
+                QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        None => {
+            QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// 파일/IPC/프로세스 작업을 slow worker에 넣는다.
+fn queue_slow(action: BindAction) {
+    let sender = SLOW_TX.lock().ok().and_then(|g| g.clone());
+    match sender {
+        Some(tx) => {
+            let depth = SLOW_QUEUE_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+            note_queue_depth(&SLOW_QUEUE_MAX_DEPTH, depth);
+            if tx.send(action).is_err() {
+                SLOW_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
+                QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        None => {
+            QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 // ── VKey → Windows VK 코드 변환 ─────────────────────────────────────────────
@@ -280,60 +449,198 @@ fn is_extended_vk(vk: u16) -> bool {
     )
 }
 
-fn send_key_down(vk: u16) {
-    unsafe {
-        let mut input: INPUT = std::mem::zeroed();
-        input.r#type = INPUT_KEYBOARD;
-        input.Anonymous.ki.wVk = vk;
-        input.Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
-        input.Anonymous.ki.dwFlags = if is_extended_vk(vk) {
-            KEYEVENTF_EXTENDEDKEY
-        } else {
-            0
-        };
-        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
-    }
+#[derive(Debug)]
+struct SendInputFailure {
+    sent: u32,
 }
 
-fn send_key_up(vk: u16) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardEvent {
+    Down(u16),
+    Up(u16),
+}
+
+fn keyboard_input(event: KeyboardEvent) -> INPUT {
+    let (vk, key_up) = match event {
+        KeyboardEvent::Down(vk) => (vk, false),
+        KeyboardEvent::Up(vk) => (vk, true),
+    };
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;
         input.Anonymous.ki.wVk = vk;
         input.Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
-        input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP
+        input.Anonymous.ki.dwFlags = if key_up { KEYEVENTF_KEYUP } else { 0 }
             | if is_extended_vk(vk) {
                 KEYEVENTF_EXTENDEDKEY
             } else {
                 0
             };
-        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        input
     }
 }
 
-fn send_key_press(vk: u16) {
-    send_key_down(vk);
-    send_key_up(vk);
+fn unicode_key_up_input(unit: u16) -> INPUT {
+    unsafe {
+        let mut input: INPUT = std::mem::zeroed();
+        input.r#type = INPUT_KEYBOARD;
+        input.Anonymous.ki.wScan = unit;
+        input.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        input
+    }
+}
+
+/// SendInput 반환 개수를 항상 검증한다. operation은 고정된 동작 분류만 받고
+/// VK/사용자 입력 내용은 진단에 남기지 않는다.
+fn submit_inputs(inputs: &[INPUT], _operation: &'static str) -> Result<(), SendInputFailure> {
+    if inputs.is_empty() {
+        return Ok(());
+    }
+    let expected = inputs.len() as u32;
+    let sent = unsafe {
+        SetLastError(0);
+        SendInput(
+            expected,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent == expected {
+        return Ok(());
+    }
+
+    let os_error = unsafe { GetLastError() };
+    INJECTION_FAILURES.fetch_add(1, Ordering::Relaxed);
+    LAST_INJECTION_EXPECTED.store(expected, Ordering::Relaxed);
+    LAST_INJECTION_SENT.store(sent, Ordering::Relaxed);
+    LAST_INJECTION_ERROR.store(os_error, Ordering::Relaxed);
+    Err(SendInputFailure { sent })
+}
+
+/// SendInput이 prefix 일부만 처리한 경우 실제로 내려간 키만 역순 해제한다.
+fn cleanup_events_for_accepted_prefix(
+    events: &[KeyboardEvent],
+    accepted: usize,
+) -> Vec<KeyboardEvent> {
+    let mut held = Vec::new();
+    for event in events.iter().take(accepted) {
+        match *event {
+            KeyboardEvent::Down(vk) => {
+                if !held.contains(&vk) {
+                    held.push(vk);
+                }
+            }
+            KeyboardEvent::Up(vk) => {
+                if let Some(pos) = held.iter().rposition(|&held_vk| held_vk == vk) {
+                    held.remove(pos);
+                }
+            }
+        }
+    }
+    held.into_iter().rev().map(KeyboardEvent::Up).collect()
+}
+
+fn unaccepted_cleanup_releases(
+    cleanup: &[KeyboardEvent],
+    accepted: usize,
+) -> Vec<SyntheticRelease> {
+    cleanup
+        .iter()
+        .skip(accepted)
+        .filter_map(|event| match *event {
+            KeyboardEvent::Up(vk) => Some(SyntheticRelease::VirtualKey(vk)),
+            KeyboardEvent::Down(_) => None,
+        })
+        .collect()
+}
+
+fn send_keyboard_events(
+    events: &[KeyboardEvent],
+    operation: &'static str,
+) -> Result<(), SendInputFailure> {
+    let inputs: Vec<INPUT> = events.iter().copied().map(keyboard_input).collect();
+    match submit_inputs(&inputs, operation) {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            let cleanup = cleanup_events_for_accepted_prefix(events, failure.sent as usize);
+            if !cleanup.is_empty() {
+                let cleanup_inputs: Vec<INPUT> =
+                    cleanup.iter().copied().map(keyboard_input).collect();
+                // 훅 콜백에서는 정리 batch를 한 번만 시도한다. UIPI처럼 주입이
+                // 막힌 상황에서 키마다 재시도하면 LowLevelHooksTimeout을 넘길 수 있다.
+                if let Err(cleanup_failure) =
+                    submit_inputs(&cleanup_inputs, "부분 실패 수정자 정리")
+                {
+                    // 정리 batch마저 부분 실패하면 실제 전송되지 않은 up만 기존
+                    // 워치독 재시도 큐로 넘긴다. 즉시 호출의 prefix는 이미
+                    // 해제됐으므로 다시 기록하지 않는다.
+                    let unsent =
+                        unaccepted_cleanup_releases(&cleanup, cleanup_failure.sent as usize);
+                    let mut pending = lock_pending(pending_synthetic_releases());
+                    for release in unsent {
+                        pending.record(release);
+                    }
+                }
+            }
+            Err(failure)
+        }
+    }
+}
+
+fn send_synthetic_release(release: SyntheticRelease) -> Result<(), SendInputFailure> {
+    let input = match release {
+        SyntheticRelease::VirtualKey(vk) => keyboard_input(KeyboardEvent::Up(vk)),
+        SyntheticRelease::UnicodeUnit(unit) => unicode_key_up_input(unit),
+    };
+    submit_inputs(&[input], "키 up")
+}
+
+fn release_synthetic_or_track(release: SyntheticRelease) -> bool {
+    if send_synthetic_release(release).is_ok() {
+        lock_pending(pending_synthetic_releases()).remove(release);
+        true
+    } else {
+        lock_pending(pending_synthetic_releases()).record(release);
+        false
+    }
+}
+
+/// 콜백에서는 key-up을 한 번만 시도하고 실패를 기록한다. 기록된 항목은
+/// 워치독이 성공할 때까지 보존하며 한 주기당 제한된 수만 재시도한다.
+fn release_key_up_or_track(vk: u16) -> bool {
+    release_synthetic_or_track(SyntheticRelease::VirtualKey(vk))
+}
+
+/// 클립보드 유니코드 주입이 down에서 끊겼을 때 대응 up을 즉시 시도하고,
+/// 실패하면 일반 합성 키와 같은 워치독 재시도 큐에 등록한다.
+pub(crate) fn release_unicode_unit_or_track(unit: u16) -> bool {
+    release_synthetic_or_track(SyntheticRelease::UnicodeUnit(unit))
+}
+
+fn retry_pending_synthetic_releases() {
+    retry_pending_releases(
+        pending_synthetic_releases(),
+        RELEASE_RETRY_BATCH,
+        |release| send_synthetic_release(release).is_ok(),
+    );
+}
+
+fn key_press_events(vk: u16) -> [KeyboardEvent; 2] {
+    [KeyboardEvent::Down(vk), KeyboardEvent::Up(vk)]
+}
+
+fn send_key_press(vk: u16) -> Result<(), SendInputFailure> {
+    send_keyboard_events(&key_press_events(vk), "키 press")
 }
 
 /// 코드 진입 주입: 트리거 down → 키 down을 **한 번의 SendInput 호출**로 보낸다.
 /// 두 이벤트 사이에 다른 입력이 끼어들 수 없어 Alt+Tab 같은 조합의
 /// 순서(트리거가 먼저)가 보장된다. 트리거 up은 ChordRelease에서 별도 주입.
-fn send_chord_engage(trigger_vk: u16, key_vk: u16) {
-    unsafe {
-        let mut inputs: [INPUT; 2] = std::mem::zeroed();
-        for (i, vk) in [trigger_vk, key_vk].into_iter().enumerate() {
-            inputs[i].r#type = INPUT_KEYBOARD;
-            inputs[i].Anonymous.ki.wVk = vk;
-            inputs[i].Anonymous.ki.wScan = MapVirtualKeyW(vk as u32, 0) as u16;
-            inputs[i].Anonymous.ki.dwFlags = if is_extended_vk(vk) {
-                KEYEVENTF_EXTENDEDKEY
-            } else {
-                0
-            };
-        }
-        SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
-    }
+fn send_chord_engage(trigger_vk: u16, key_vk: u16) -> Result<(), SendInputFailure> {
+    send_keyboard_events(
+        &[KeyboardEvent::Down(trigger_vk), KeyboardEvent::Down(key_vk)],
+        "chord 진입",
+    )
 }
 
 // ── 마우스 주입 헬퍼 ────────────────────────────────────────────────────────
@@ -341,7 +648,7 @@ fn send_chord_engage(trigger_vk: u16, key_vk: u16) {
 /// 휠 1노치 델타 (WinUser.h WHEEL_DELTA)
 const WHEEL_DELTA_UNIT: i32 = 120;
 
-fn send_mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) {
+fn mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) -> INPUT {
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_MOUSE;
@@ -350,19 +657,35 @@ fn send_mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) {
         // DWORD 필드지만 휠 델타는 부호 있는 값 — 2의 보수 캐스팅
         input.Anonymous.mi.mouseData = mouse_data as u32;
         input.Anonymous.mi.dwFlags = flags;
-        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        input
     }
 }
 
-fn send_mouse_move(dx: i32, dy: i32) {
-    send_mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE);
+fn send_mouse_input(
+    dx: i32,
+    dy: i32,
+    mouse_data: i32,
+    flags: u32,
+    operation: &'static str,
+) -> Result<(), SendInputFailure> {
+    submit_inputs(&[mouse_input(dx, dy, mouse_data, flags)], operation)
 }
 
-fn send_mouse_wheel(notches: i32) {
-    send_mouse_input(0, 0, notches * WHEEL_DELTA_UNIT, MOUSEEVENTF_WHEEL);
+fn send_mouse_move(dx: i32, dy: i32) -> Result<(), SendInputFailure> {
+    send_mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE, "마우스 이동")
 }
 
-fn send_mouse_button(bind: MouseBind, down: bool) {
+fn send_mouse_wheel(notches: i32) -> Result<(), SendInputFailure> {
+    send_mouse_input(
+        0,
+        0,
+        notches * WHEEL_DELTA_UNIT,
+        MOUSEEVENTF_WHEEL,
+        "마우스 휠",
+    )
+}
+
+fn mouse_button_flags(bind: MouseBind, down: bool) -> Option<u32> {
     let flags = match (bind, down) {
         (MouseBind::BtnLeft, true) => MOUSEEVENTF_LEFTDOWN,
         (MouseBind::BtnLeft, false) => MOUSEEVENTF_LEFTUP,
@@ -370,9 +693,43 @@ fn send_mouse_button(bind: MouseBind, down: bool) {
         (MouseBind::BtnRight, false) => MOUSEEVENTF_RIGHTUP,
         (MouseBind::BtnMiddle, true) => MOUSEEVENTF_MIDDLEDOWN,
         (MouseBind::BtnMiddle, false) => MOUSEEVENTF_MIDDLEUP,
-        _ => return,
+        _ => return None,
     };
-    send_mouse_input(0, 0, 0, flags);
+    Some(flags)
+}
+
+fn send_mouse_button(bind: MouseBind, down: bool) -> Result<(), SendInputFailure> {
+    let Some(flags) = mouse_button_flags(bind, down) else {
+        return Ok(());
+    };
+    send_mouse_input(0, 0, 0, flags, "마우스 버튼")
+}
+
+fn send_mouse_button_click(bind: MouseBind) -> Result<(), SendInputFailure> {
+    let (Some(down), Some(up)) = (
+        mouse_button_flags(bind, true),
+        mouse_button_flags(bind, false),
+    ) else {
+        return Ok(());
+    };
+    let inputs = [mouse_input(0, 0, 0, down), mouse_input(0, 0, 0, up)];
+    match submit_inputs(&inputs, "마우스 클릭") {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            if let Some(accepted_down) =
+                mouse_release_for_accepted_click_prefix(bind, failure.sent as usize)
+            {
+                // down만 수락됐으면 up을 한 번 즉시 시도한다. 이 정리 호출도
+                // 실패하면 전역 pending 큐에 남겨 fast worker가 계속 재시도한다.
+                let _ = release_mouse_button_or_track(accepted_down);
+            }
+            Err(failure)
+        }
+    }
+}
+
+fn mouse_release_for_accepted_click_prefix(bind: MouseBind, accepted: usize) -> Option<MouseBind> {
+    (accepted == 1).then_some(bind)
 }
 
 fn is_mouse_button(bind: MouseBind) -> bool {
@@ -382,15 +739,41 @@ fn is_mouse_button(bind: MouseBind) -> bool {
     )
 }
 
+fn release_mouse_button_or_track(bind: MouseBind) -> bool {
+    let released = send_mouse_button(bind, false).is_ok();
+    track_mouse_release_result(pending_mouse_releases(), bind, released)
+}
+
+fn track_mouse_release_result(
+    pending: &Mutex<PendingReleases<MouseBind>>,
+    bind: MouseBind,
+    released: bool,
+) -> bool {
+    if released {
+        lock_pending(pending).remove(bind);
+        true
+    } else {
+        lock_pending(pending).record(bind);
+        false
+    }
+}
+
+fn retry_pending_mouse_buttons(pressed_buttons: &mut Vec<MouseBind>) {
+    let completed = retry_pending_releases(pending_mouse_releases(), RELEASE_RETRY_BATCH, |bind| {
+        send_mouse_button(bind, false).is_ok()
+    });
+    pressed_buttons.retain(|bind| !completed.contains(bind));
+}
+
 /// SendInput 기반 [`MouseSink`] — 모션 워커가 틱마다 호출
 struct WinMouseSink;
 
 impl MouseSink for WinMouseSink {
     fn move_rel(&mut self, dx: i32, dy: i32) {
-        send_mouse_move(dx, dy);
+        let _ = send_mouse_move(dx, dy);
     }
     fn wheel(&mut self, notches: i32) {
-        send_mouse_wheel(notches);
+        let _ = send_mouse_wheel(notches);
     }
 }
 
@@ -398,49 +781,89 @@ impl MouseSink for WinMouseSink {
 pub(super) fn inject_paste() {
     const VK_CONTROL: u16 = 0x11;
     const VK_V: u16 = 0x56;
-    send_combo(&[VK_CONTROL], VK_V);
+    let _ = send_combo(&[VK_CONTROL], VK_V);
 }
 
-fn send_combo(modifier_vks: &[u16], key_vk: u16) {
+fn combo_events(modifier_vks: &[u16], key_vk: u16) -> Vec<KeyboardEvent> {
+    let mut events = Vec::with_capacity(modifier_vks.len() * 2 + 2);
     for &m in modifier_vks {
-        send_key_down(m);
+        events.push(KeyboardEvent::Down(m));
     }
-    send_key_press(key_vk);
+    events.extend(key_press_events(key_vk));
     for &m in modifier_vks.iter().rev() {
-        send_key_up(m);
+        events.push(KeyboardEvent::Up(m));
     }
+    events
 }
 
-// ── 수정자 키 판별 / 콤보 매칭 헬퍼 ─────────────────────────────────────────
+fn send_combo(modifier_vks: &[u16], key_vk: u16) -> Result<(), SendInputFailure> {
+    send_keyboard_events(&combo_events(modifier_vks, key_vk), "키 조합")
+}
 
-// ── 바인딩 액션 실행 (워커 스레드에서 호출) ─────────────────────────────────
+// ── 바인딩 액션 실행 ────────────────────────────────────────────────────────
 
-fn execute_action(action: &BindAction) {
+/// 합성 입력 fast path. 훅 콜백에서 호출되므로 파일/IPC/프로세스 작업 금지.
+fn execute_inline_action(action: &BindAction) -> Result<(), SendInputFailure> {
     match action {
-        BindAction::SendKey(key) => {
-            send_key_press(vkey_to_vk(*key));
-        }
+        BindAction::SendKey(key) => send_key_press(vkey_to_vk(*key)),
         BindAction::SendCombo { modifiers, key } => {
             let mod_vks: Vec<u16> = modifiers.iter().map(|m| vkey_to_vk(*m)).collect();
-            send_combo(&mod_vks, vkey_to_vk(*key));
+            send_combo(&mod_vks, vkey_to_vk(*key))
         }
         BindAction::Macro(steps) => {
+            // 설정 파서가 이벤트 수를 이 상한 이하로 보장한다. 콜백 안에서
+            // Vec가 반복 재할당되지 않도록 한 번만 고정 크기로 예약한다.
+            let mut events = Vec::with_capacity(super::MAX_MACRO_INPUT_EVENTS);
             for step in steps {
                 match step {
-                    MacroStep::KeyPress(k) => send_key_down(vkey_to_vk(*k)),
-                    MacroStep::KeyRelease(k) => send_key_up(vkey_to_vk(*k)),
+                    MacroStep::KeyPress(k) => {
+                        events.push(KeyboardEvent::Down(vkey_to_vk(*k)));
+                    }
+                    MacroStep::KeyRelease(k) => {
+                        events.push(KeyboardEvent::Up(vkey_to_vk(*k)));
+                    }
                     MacroStep::Combo { modifiers, key } => {
                         let mod_vks: Vec<u16> = modifiers.iter().map(|m| vkey_to_vk(*m)).collect();
-                        send_combo(&mod_vks, vkey_to_vk(*key));
+                        events.extend(combo_events(&mod_vks, vkey_to_vk(*key)));
                     }
                 }
             }
+            send_keyboard_events(&events, "키 매크로")
         }
+        BindAction::Mouse(_) | BindAction::Launch(_) | BindAction::ClipPaste(_) => {
+            unreachable!("worker 액션이 합성 입력 inline path에 들어옴")
+        }
+    }
+}
+
+/// 콤보/리맵/더블탭에서 발생한 일회성 마우스 액션.
+/// 상태형 Engage/Release와 같은 worker FIFO에서 실행한다.
+fn execute_mouse_pulse(mb: MouseBind) -> Result<(), SendInputFailure> {
+    match mb {
+        MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle => {
+            send_mouse_button_click(mb)
+        }
+        MouseBind::WheelUp => send_mouse_wheel(1),
+        MouseBind::WheelDown => send_mouse_wheel(-1),
+        MouseBind::MoveUp => send_mouse_move(0, -25),
+        MouseBind::MoveDown => send_mouse_move(0, 25),
+        MouseBind::MoveLeft => send_mouse_move(-25, 0),
+        MouseBind::MoveRight => send_mouse_move(25, 0),
+        MouseBind::Slow => Ok(()),
+    }
+}
+
+/// 느린 액션 전용 worker. 훅 콜백과 key-up/chord release 경로를 막지 않는다.
+fn execute_slow_action(action: BindAction) {
+    match action {
         BindAction::Launch(cmd) => {
-            // 런처가 포커스를 뺏기 전에 전경 앱 캡처 (docs/12 흐름 B).
-            // Windows 캡처는 아직 스텁 — 흐름 B는 macOS 우선.
-            crate::clipboard::capture_foreground_app();
-            let resolved = resolve_launch_cmd(cmd);
+            // 런처가 포커스를 뺏기 전에 전경 HWND 캡처 (docs/12 흐름 B).
+            // 다른 launch 바인딩이 런처 사용 중 붙여넣기 대상을 덮어쓰지 않도록
+            // 데스크톱 런처를 여는 액션에서만 캡처한다.
+            if crate::clipboard::launch_captures_foreground(&cmd) {
+                crate::clipboard::capture_foreground_app();
+            }
+            let resolved = resolve_launch_cmd(&cmd);
             tracing::info!("프로그램 실행: {resolved}");
             std::thread::spawn(move || {
                 use std::os::windows::process::CommandExt;
@@ -453,22 +876,22 @@ fn execute_action(action: &BindAction) {
                 }
             });
         }
-        // 상태형 마우스 바인딩이 콤보/리맵/더블탭 등 일회성 경로로 온 경우 —
-        // 단발 동작으로 처리 (클릭 1회, 휠 1노치, 짧은 이동)
-        BindAction::Mouse(mb) => match mb {
-            MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle => {
-                send_mouse_button(*mb, true);
-                send_mouse_button(*mb, false);
-            }
-            MouseBind::WheelUp => send_mouse_wheel(1),
-            MouseBind::WheelDown => send_mouse_wheel(-1),
-            MouseBind::MoveUp => send_mouse_move(0, -25),
-            MouseBind::MoveDown => send_mouse_move(0, 25),
-            MouseBind::MoveLeft => send_mouse_move(-25, 0),
-            MouseBind::MoveRight => send_mouse_move(25, 0),
-            MouseBind::Slow => {}
-        },
-        BindAction::ClipPaste(n) => crate::clipboard::paste_slot(*n),
+        BindAction::ClipPaste(n) => crate::clipboard::paste_slot(n),
+        _ => tracing::error!("합성 입력 액션이 느린 worker로 잘못 전달됨"),
+    }
+}
+
+fn recover_engine_after_injection_failure() {
+    let mut stop_mouse = false;
+    if let Some(state) = HOOK_STATE.get() {
+        if let Ok(mut guard) = state.lock() {
+            stop_mouse = guard.recover_from_injection_failure();
+        }
+    }
+    if stop_mouse {
+        // 복구가 레이어 상태를 지우면 해당 물리 key-up은 더 이상 MouseRelease로
+        // 변환되지 않는다. 같은 FIFO에 StopAll을 넣어 모션과 버튼을 함께 끊는다.
+        queue_fast(FastJob::StopAll);
     }
 }
 
@@ -482,19 +905,27 @@ unsafe extern "system" fn keyboard_hook_proc(
     // 생존 하트비트 — 콜백이 호출됐다는 사실 자체가 훅이 체인에 살아 있다는
     // 증거다. 주입(INJECTED) 이벤트와 code<0도 포함해 최상단에서 기록해야
     // 워치독의 프로브가 성립한다. (catch_unwind 밖 — 원자 저장은 패닉 불가)
-    HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
+    let started = GetTickCount();
+    HOOK_LAST_SEEN.store(nonzero_tick(started), Ordering::Relaxed);
 
     // `extern "system"` 경계를 넘는 패닉은 정의되지 않은 동작이고, 현대 Rust는
     // 이를 감지하면 프로세스를 abort시킨다 — 이 콜백이 유일한 키 이벤트 처리
     // 지점이라 그 순간 키보드 전체가 잠긴다. 어떤 패닉도 여기서 격리하고,
     // 다음 훅으로 이벤트를 넘겨(remap 없이) OS 기본 동작은 살린다.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         keyboard_hook_proc_inner(code, w_param, l_param)
     }))
     .unwrap_or_else(|_| {
-        tracing::error!("keyboard_hook_proc 내부 패닉 — 이벤트 통과 (훅 유지)");
+        HOOK_PANICS.fetch_add(1, Ordering::Relaxed);
         CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
-    })
+    });
+
+    let elapsed = GetTickCount().wrapping_sub(started);
+    HOOK_MAX_LATENCY_MS.fetch_max(elapsed, Ordering::Relaxed);
+    if elapsed >= HOOK_LATENCY_WARN_MS {
+        HOOK_SLOW_CALLBACKS.fetch_add(1, Ordering::Relaxed);
+    }
+    result
 }
 
 unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
@@ -530,7 +961,9 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
         Err(_) => return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param),
     };
 
-    // 바인딩 판정은 순수 엔진에 위임 — 이 콜백은 큐잉만 하고 즉시 반환.
+    // 바인딩 판정은 순수 엔진에 위임한다. 합성 키 입력은 이 콜백 안에서 한 번의
+    // SendInput batch로 즉시 넣어, 이후 물리 PassThrough 입력과 순서가 뒤집히지
+    // 않게 한다. 파일/IPC/프로세스 작업은 slow worker로만 큐잉한다.
     // layer_trigger는 무시한다: Windows SendInput은 물리 modifier가 눌린
     // 상태에서도 합성 이벤트에 간섭하지 않는다 (macOS 전용 컨텍스트).
     match guard.process_key(vkey, is_down, kb.time) {
@@ -541,7 +974,22 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
         KeyDecision::Suppress => 1,
         KeyDecision::Execute { action, .. } => {
             drop(guard);
-            queue_action(action);
+            match action_lane(&action) {
+                ActionLane::Inline => {
+                    if execute_inline_action(&action).is_err() {
+                        // 물리 down은 계속 억제해 remap keyup과 불일치하지 않게 하고,
+                        // 이미 전진한 combo/layer 상태만 초기화한다.
+                        recover_engine_after_injection_failure();
+                    }
+                }
+                ActionLane::MouseWorker => {
+                    let BindAction::Mouse(mb) = action else {
+                        unreachable!("마우스 lane에는 마우스 액션만 들어와야 함")
+                    };
+                    queue_fast(FastJob::Pulse(mb));
+                }
+                ActionLane::Slow => queue_slow(action),
+            }
             1
         }
         // 코드 진입: 물리 이벤트를 억제하고 트리거+키를 묶어 주입.
@@ -549,45 +997,63 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
         // 트리거가 눌려 있으므로 Alt+Tab 등 조합이 그대로 동작한다.
         KeyDecision::EngageChord { trigger, key } => {
             drop(guard);
-            // 어떤 키인지는 로그하지 않는다 — 훅 프로그램의 로그에 실제 타이핑
-            // 내용이 남으면 안 된다 (트리거는 config에 있는 값이라 무방)
-            tracing::debug!("chord engage: {trigger:?}+미매핑 키");
-            queue_job(WorkerJob::ChordEngage {
-                trigger_vk: vkey_to_vk(trigger),
-                key_vk: vkey_to_vk(key),
-            });
-            1
+            if send_chord_engage(vkey_to_vk(trigger), vkey_to_vk(key)).is_err() {
+                recover_engine_after_injection_failure();
+                // chord가 실제로 생기지 않았으므로 현재 물리 키는 fail-open한다.
+                CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+            } else {
+                1
+            }
         }
         // 코드 해제: 물리 트리거 up을 억제하고 주입 트리거 up으로 대체.
-        // 지연 Launch는 해제 뒤에 실행 (FIFO 큐가 순서 보장).
+        // 지연 Launch는 해제를 즉시 주입한 뒤 slow worker에서 실행한다.
         KeyDecision::ReleaseChord {
             trigger,
             deferred_action,
         } => {
             drop(guard);
-            tracing::debug!("chord release: {trigger:?}");
-            queue_job(WorkerJob::ChordRelease {
-                trigger_vk: vkey_to_vk(trigger),
-            });
-            if let Some(action) = deferred_action {
-                queue_action(action);
+            let release_failed = !release_key_up_or_track(vkey_to_vk(trigger));
+            if release_failed {
+                // 합성 up 실패 시 물리 trigger up을 전달해 이미 내려간 수정자를
+                // OS가 해제할 기회를 보존한다. tap-hold처럼 물리 키와 합성
+                // modifier가 달라도 워치독이 기록된 합성 up을 계속 재시도한다.
+                // 해제 전 지연 액션은 modifier 간섭을 되살리므로 실행하지 않는다.
+                recover_engine_after_injection_failure();
+                CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+            } else {
+                if let Some(action) = deferred_action {
+                    match action_lane(&action) {
+                        ActionLane::Inline => {
+                            if execute_inline_action(&action).is_err() {
+                                recover_engine_after_injection_failure();
+                            }
+                        }
+                        ActionLane::MouseWorker => {
+                            let BindAction::Mouse(mb) = action else {
+                                unreachable!("마우스 lane에는 마우스 액션만 들어와야 함")
+                            };
+                            queue_fast(FastJob::Pulse(mb));
+                        }
+                        ActionLane::Slow => queue_slow(action),
+                    }
+                }
+                1
             }
-            1
         }
         // 마우스 바인딩 — 물리 키 이벤트를 억제하고 워커에 위임
         KeyDecision::MouseEngage(mb) => {
             drop(guard);
-            queue_job(WorkerJob::MouseEngage(mb));
+            queue_fast(FastJob::Engage(mb));
             1
         }
         KeyDecision::MouseRelease(mb) => {
             drop(guard);
-            queue_job(WorkerJob::MouseRelease(mb));
+            queue_fast(FastJob::Release(mb));
             1
         }
         KeyDecision::MouseStopAll => {
             drop(guard);
-            queue_job(WorkerJob::MouseStopAll);
+            queue_fast(FastJob::StopAll);
             1
         }
     }
@@ -600,18 +1066,23 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
 /// 훅이 사라진 동안의 keyup을 놓쳤을 수 있으므로 엔진의 일시 상태도 함께
 /// 리셋한다 — 그러지 않으면 "LAlt를 누른 채 훅이 죽었다가 되살아난" 경우
 /// 레이어가 계속 활성으로 남아 모든 키가 화살표로 나간다.
-unsafe fn reinstall_hook(hook: &mut HHOOK) {
+unsafe fn reinstall_hook(hook: &mut HHOOK) -> Result<(), String> {
     // 코드 모드로 주입해 둔 트리거가 있으면 먼저 해제 (stuck-Alt 방지)
     if let Some(state) = HOOK_STATE.get() {
         if let Ok(mut guard) = state.lock() {
             if let Some(trigger) = guard.engaged_chord_trigger() {
-                send_key_up(vkey_to_vk(trigger));
+                release_key_up_or_track(vkey_to_vk(trigger));
             }
             guard.reset_transient_state();
         }
     }
 
-    UnhookWindowsHookEx(*hook);
+    if UnhookWindowsHookEx(*hook) == 0 {
+        let error = GetLastError();
+        // 훅이 OS에서 이미 조용히 제거된 경우에도 실패할 수 있으므로 새 설치는
+        // 계속 시도하되, 결과를 숨기지 않는다.
+        tracing::warn!("기존 키보드 훅 해제 실패: OS 오류={error} — 재설치 계속");
+    }
     let fresh = SetWindowsHookExW(
         WH_KEYBOARD_LL,
         Some(keyboard_hook_proc),
@@ -619,16 +1090,111 @@ unsafe fn reinstall_hook(hook: &mut HHOOK) {
         0,
     );
     if fresh.is_null() {
-        tracing::error!("키보드 훅 재설치 실패 — SetWindowsHookExW가 NULL 반환");
-        return;
+        let error = GetLastError();
+        let reason = format!("키보드 훅 재설치 실패 — OS 오류={error}");
+        super::set_hook_error(Some(reason.clone()));
+        tracing::error!("{reason}");
+        let last_seen = HOOK_LAST_SEEN.load(Ordering::Relaxed);
+        HOOK_LAST_SEEN.store(
+            heartbeat_after_reinstall_failure(last_seen, GetTickCount()),
+            Ordering::Relaxed,
+        );
+        HOOK_REINSTALL_PENDING.store(true, Ordering::SeqCst);
+        return Err(reason);
     }
     *hook = fresh;
-    HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
+    super::set_hook_error(None);
+    HOOK_LAST_SEEN.store(nonzero_tick(GetTickCount()), Ordering::Relaxed);
+    HOOK_REINSTALL_PENDING.store(false, Ordering::SeqCst);
+    HOOK_GENERATION.fetch_add(1, Ordering::SeqCst);
     let n = HOOK_REINSTALLS.fetch_add(1, Ordering::Relaxed) + 1;
     tracing::warn!(
         "키보드 훅 재설치 완료 (누적 {n}회) — OS가 훅을 조용히 제거했음 \
          (Modern Standby 복귀 / LowLevelHooksTimeout 초과 등)"
     );
+    Ok(())
+}
+
+fn nonzero_tick(tick: u32) -> u32 {
+    tick.max(1)
+}
+
+/// 재설치 실패를 "훅 미설치(0)"로 바꾸면 일반 프로브 판정에서 영구 제외된다.
+/// 기존 하트비트를 유지하고, 비정상적으로 0이었다면 현재 tick의 non-zero 값을 쓴다.
+fn heartbeat_after_reinstall_failure(last_seen: u32, now: u32) -> u32 {
+    if last_seen == 0 {
+        nonzero_tick(now)
+    } else {
+        last_seen
+    }
+}
+
+fn reinstall_retry_due(now: u32, last_attempt: Option<u32>, delay_ms: u32) -> bool {
+    match last_attempt {
+        None => true,
+        Some(previous) => now.wrapping_sub(previous) >= delay_ms,
+    }
+}
+
+fn next_reinstall_retry_delay(current_ms: u32) -> u32 {
+    current_ms.saturating_mul(2).min(REINSTALL_RETRY_MAX_MS)
+}
+
+#[derive(Default)]
+struct DiagnosticsSnapshot {
+    injection_failures: u32,
+    slow_callbacks: u32,
+    hook_panics: u32,
+    fast_queue_max: u32,
+    slow_queue_max: u32,
+    queue_drops: u32,
+}
+
+/// 훅 콜백에서는 원자 카운터만 갱신하고, 실제 로그 출력은 워치독에서 수행한다.
+fn report_hook_diagnostics(previous: &mut DiagnosticsSnapshot) {
+    let injection_failures = INJECTION_FAILURES.load(Ordering::Relaxed);
+    if injection_failures != previous.injection_failures {
+        tracing::error!(
+            "SendInput 실패 누적={injection_failures}, 최근 요청={}, 처리={}, OS 오류={}",
+            LAST_INJECTION_EXPECTED.load(Ordering::Relaxed),
+            LAST_INJECTION_SENT.load(Ordering::Relaxed),
+            LAST_INJECTION_ERROR.load(Ordering::Relaxed)
+        );
+        previous.injection_failures = injection_failures;
+    }
+
+    let slow_callbacks = HOOK_SLOW_CALLBACKS.load(Ordering::Relaxed);
+    if slow_callbacks != previous.slow_callbacks {
+        tracing::warn!(
+            "키보드 훅 지연 누적={slow_callbacks}, 최대={}ms",
+            HOOK_MAX_LATENCY_MS.load(Ordering::Relaxed)
+        );
+        previous.slow_callbacks = slow_callbacks;
+    }
+
+    let hook_panics = HOOK_PANICS.load(Ordering::Relaxed);
+    if hook_panics != previous.hook_panics {
+        tracing::error!("키보드 훅 콜백 패닉 누적={hook_panics} — 이벤트는 통과 처리됨");
+        previous.hook_panics = hook_panics;
+    }
+
+    let fast_queue_max = FAST_QUEUE_MAX_DEPTH.load(Ordering::Relaxed);
+    if fast_queue_max >= QUEUE_WARN_DEPTH && fast_queue_max != previous.fast_queue_max {
+        tracing::warn!("입력 fast 큐 최대 적체={fast_queue_max}");
+    }
+    previous.fast_queue_max = fast_queue_max;
+
+    let slow_queue_max = SLOW_QUEUE_MAX_DEPTH.load(Ordering::Relaxed);
+    if slow_queue_max >= QUEUE_WARN_DEPTH && slow_queue_max != previous.slow_queue_max {
+        tracing::warn!("느린 액션 큐 최대 적체={slow_queue_max}");
+    }
+    previous.slow_queue_max = slow_queue_max;
+
+    let queue_drops = QUEUE_DROPS.load(Ordering::Relaxed);
+    if queue_drops != previous.queue_drops {
+        tracing::warn!("입력 작업 큐 전달 실패 누적={queue_drops}");
+        previous.queue_drops = queue_drops;
+    }
 }
 
 /// 훅 생존 워치독.
@@ -643,6 +1209,9 @@ unsafe fn reinstall_hook(hook: &mut HHOOK) {
 fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut last_probe: Option<u32> = None;
+        let mut last_reinstall_attempt: Option<u32> = None;
+        let mut reinstall_retry_delay = REINSTALL_RETRY_INITIAL_MS;
+        let mut diagnostics = DiagnosticsSnapshot::default();
         while running.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(WATCHDOG_INTERVAL_MS));
             if !running.load(Ordering::Relaxed) {
@@ -650,6 +1219,38 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
             }
 
             let now = unsafe { GetTickCount() };
+            report_hook_diagnostics(&mut diagnostics);
+            retry_pending_synthetic_releases();
+
+            // 이미 재설치 실패를 확인한 상태에서는 SendInput 프로브를 다시 쏘지
+            // 않는다. 유휴 타이머를 계속 갱신하지 않고 메시지만 backoff 재전송한다.
+            if HOOK_REINSTALL_PENDING.load(Ordering::SeqCst) {
+                if reinstall_retry_due(now, last_reinstall_attempt, reinstall_retry_delay) {
+                    let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
+                    if tid != 0 {
+                        let posted = unsafe {
+                            PostThreadMessageW(
+                                tid,
+                                WM_KMD_REINSTALL_HOOK,
+                                HOOK_GENERATION.load(Ordering::SeqCst) as usize,
+                                HOOK_LAST_SEEN.load(Ordering::Relaxed) as isize,
+                            )
+                        };
+                        if posted == 0 {
+                            let error = unsafe { GetLastError() };
+                            tracing::error!(
+                                "키보드 훅 재설치 재시도 메시지 전송 실패: OS 오류={error}"
+                            );
+                        }
+                    }
+                    last_reinstall_attempt = Some(now);
+                    reinstall_retry_delay = next_reinstall_retry_delay(reinstall_retry_delay);
+                }
+                continue;
+            }
+            last_reinstall_attempt = None;
+            reinstall_retry_delay = REINSTALL_RETRY_INITIAL_MS;
+
             let last_hook = HOOK_LAST_SEEN.load(Ordering::Relaxed);
             let Some(last_input) = last_system_input_tick() else {
                 continue;
@@ -663,21 +1264,60 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
             // 콜백은 주입 이벤트로도 하트비트를 남기므로, 이 주입 뒤에도
             // HOOK_LAST_SEEN이 그대로면 훅이 체인에서 빠진 것이 확정된다.
             let before = HOOK_LAST_SEEN.load(Ordering::Relaxed);
-            send_key_press(VK_NONAME);
+            let generation = HOOK_GENERATION.load(Ordering::SeqCst);
+            if send_key_press(VK_NONAME).is_err() {
+                // 프로브 자체가 실패하면 훅 사망의 증거가 아니므로 재설치 금지.
+                continue;
+            }
             std::thread::sleep(std::time::Duration::from_millis(PROBE_WAIT_MS));
-            if HOOK_LAST_SEEN.load(Ordering::Relaxed) != before {
+            if !probe_evidence_unchanged(
+                generation,
+                before,
+                HOOK_GENERATION.load(Ordering::SeqCst),
+                HOOK_LAST_SEEN.load(Ordering::Relaxed),
+            ) {
                 continue; // 살아 있다
             }
 
-            tracing::warn!("키보드 훅 무응답 감지 — 재설치 요청");
+            // Post 직전 한 번 더 세대/하트비트를 확인한다. 메시지 처리 시 훅
+            // 스레드가 같은 증거를 다시 확인해 큐 지연 중의 정상 회복도 거른다.
             let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
-            if tid != 0 {
-                unsafe {
-                    PostThreadMessageW(tid, WM_KMD_REINSTALL_HOOK, 0, 0);
-                }
+            if tid == 0
+                || !running.load(Ordering::Relaxed)
+                || !probe_evidence_unchanged(
+                    generation,
+                    before,
+                    HOOK_GENERATION.load(Ordering::SeqCst),
+                    HOOK_LAST_SEEN.load(Ordering::Relaxed),
+                )
+            {
+                continue;
+            }
+            tracing::warn!("키보드 훅 무응답 감지 — 재설치 요청");
+            let posted = unsafe {
+                PostThreadMessageW(
+                    tid,
+                    WM_KMD_REINSTALL_HOOK,
+                    generation as usize,
+                    before as isize,
+                )
+            };
+            if posted == 0 {
+                let error = unsafe { GetLastError() };
+                tracing::error!("키보드 훅 재설치 메시지 전송 실패: OS 오류={error}");
             }
         }
     })
+}
+
+/// 프로브 시작 뒤 훅 세대나 콜백 하트비트가 바뀌지 않았을 때만 재설치한다.
+fn probe_evidence_unchanged(
+    probe_generation: u32,
+    probe_heartbeat: u32,
+    current_generation: u32,
+    current_heartbeat: u32,
+) -> bool {
+    probe_generation == current_generation && probe_heartbeat == current_heartbeat
 }
 
 /// 워치독 판정 (순수 함수 — 시각 산술만 담당해 단위 테스트 가능).
@@ -699,10 +1339,10 @@ fn should_probe_hook(now: u32, last_hook: u32, last_input: u32, last_probe: Opti
         return false;
     }
     // 프로브 레이트 제한 — 마우스만 쓰는 구간에서 매 주기 주입하지 않도록
-    match last_probe {
-        Some(prev) if (now.wrapping_sub(prev) as i32) < PROBE_MIN_INTERVAL_MS => false,
-        _ => true,
-    }
+    !matches!(
+        last_probe,
+        Some(prev) if (now.wrapping_sub(prev) as i32) < PROBE_MIN_INTERVAL_MS
+    )
 }
 
 // ── Backend 구현 ────────────────────────────────────────────────────────────
@@ -710,7 +1350,8 @@ fn should_probe_hook(now: u32, last_hook: u32, last_input: u32, last_probe: Opti
 pub struct WindowsKeyboardBackend {
     running: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
-    action_worker: Option<std::thread::JoinHandle<()>>,
+    fast_worker: Option<std::thread::JoinHandle<()>>,
+    slow_worker: Option<std::thread::JoinHandle<()>>,
     watchdog: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -719,7 +1360,8 @@ impl WindowsKeyboardBackend {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             thread: None,
-            action_worker: None,
+            fast_worker: None,
+            slow_worker: None,
             watchdog: None,
         }
     }
@@ -745,61 +1387,97 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             let _ = HOOK_STATE.set(Arc::new(Mutex::new(new_state)));
         }
 
-        // 액션 워커 시작 — 훅 콜백은 큐잉만 하고 실행은 이 스레드가 담당
-        let (action_tx, action_rx) = mpsc::channel::<WorkerJob>();
-        match ACTION_TX.lock() {
-            Ok(mut g) => *g = Some(action_tx),
-            Err(_) => return Err("액션 큐 잠금 실패".into()),
+        // 상태형 마우스 fast worker와 파일/IPC/프로세스 slow worker를 분리한다.
+        // slow 작업이 멎어도 key-up/chord release는 훅 fast path에서 계속 처리된다.
+        let (fast_tx, fast_rx) = mpsc::channel::<FastJob>();
+        let (slow_tx, slow_rx) = mpsc::channel::<BindAction>();
+        {
+            let mut fast_guard = FAST_TX
+                .lock()
+                .map_err(|_| "입력 fast 큐 잠금 실패".to_string())?;
+            let mut slow_guard = SLOW_TX
+                .lock()
+                .map_err(|_| "느린 액션 큐 잠금 실패".to_string())?;
+            *fast_guard = Some(fast_tx);
+            *slow_guard = Some(slow_tx);
         }
-        self.action_worker = Some(std::thread::spawn(move || {
-            // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 액션 워커가 소유한다
+        FAST_QUEUE_DEPTH.store(0, Ordering::Relaxed);
+        SLOW_QUEUE_DEPTH.store(0, Ordering::Relaxed);
+        FAST_QUEUE_MAX_DEPTH.store(0, Ordering::Relaxed);
+        SLOW_QUEUE_MAX_DEPTH.store(0, Ordering::Relaxed);
+        self.fast_worker = Some(std::thread::spawn(move || {
+            // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 fast worker가 소유한다.
             let motion = MouseWorker::start(WinMouseSink);
-            let mut pressed_buttons: Vec<MouseBind> = Vec::new();
+            let mut pressed_buttons = lock_pending(pending_mouse_releases()).items();
 
-            for job in action_rx {
-                match job {
-                    WorkerJob::Action(action) => execute_action(&action),
-                    WorkerJob::ChordEngage { trigger_vk, key_vk } => {
-                        send_chord_engage(trigger_vk, key_vk);
-                    }
-                    WorkerJob::ChordRelease { trigger_vk } => send_key_up(trigger_vk),
-                    WorkerJob::MouseEngage(mb) => {
-                        if is_mouse_button(mb) {
-                            if !pressed_buttons.contains(&mb) {
-                                pressed_buttons.push(mb);
-                                send_mouse_button(mb, true);
+            loop {
+                match fast_rx.recv_timeout(std::time::Duration::from_millis(MOUSE_RELEASE_RETRY_MS))
+                {
+                    Ok(job) => {
+                        FAST_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
+                        match job {
+                            FastJob::Engage(mb) => {
+                                if is_mouse_button(mb) {
+                                    lock_pending(pending_mouse_releases()).remove(mb);
+                                    if !pressed_buttons.contains(&mb)
+                                        && send_mouse_button(mb, true).is_ok()
+                                    {
+                                        pressed_buttons.push(mb);
+                                    }
+                                } else {
+                                    motion.engage(mb);
+                                }
                             }
-                        } else {
-                            motion.engage(mb);
-                        }
-                    }
-                    WorkerJob::MouseRelease(mb) => {
-                        if is_mouse_button(mb) {
-                            if let Some(pos) = pressed_buttons.iter().position(|&b| b == mb) {
-                                pressed_buttons.remove(pos);
-                                send_mouse_button(mb, false);
+                            FastJob::Release(mb) => {
+                                if is_mouse_button(mb) {
+                                    if pressed_buttons.contains(&mb)
+                                        && release_mouse_button_or_track(mb)
+                                    {
+                                        pressed_buttons.retain(|&button| button != mb);
+                                    }
+                                } else {
+                                    motion.release(mb);
+                                }
                             }
-                        } else {
-                            motion.release(mb);
+                            FastJob::StopAll => {
+                                motion.stop_all();
+                                for &mb in &pressed_buttons {
+                                    lock_pending(pending_mouse_releases()).record(mb);
+                                }
+                            }
+                            FastJob::Pulse(mb) => {
+                                let _ = execute_mouse_pulse(mb);
+                            }
                         }
+                        retry_pending_mouse_buttons(&mut pressed_buttons);
                     }
-                    WorkerJob::MouseStopAll => {
-                        motion.stop_all();
-                        for mb in pressed_buttons.drain(..) {
-                            send_mouse_button(mb, false);
-                        }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        retry_pending_mouse_buttons(&mut pressed_buttons);
                     }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            // 종료 정리 — 눌린 버튼 해제 (모션은 MouseWorker Drop이 정지)
-            for mb in pressed_buttons.drain(..) {
-                send_mouse_button(mb, false);
+            // 종료 정리 — 실패 항목은 전역 추적에 남겨 다음 start에서도 재시도한다.
+            for &mb in &pressed_buttons {
+                lock_pending(pending_mouse_releases()).record(mb);
             }
-            tracing::debug!("액션 워커 종료");
+            for _ in 0..STOP_RELEASE_RETRY_PASSES {
+                retry_pending_mouse_buttons(&mut pressed_buttons);
+            }
+            tracing::debug!("입력 fast worker 종료");
+        }));
+        self.slow_worker = Some(std::thread::spawn(move || {
+            for action in slow_rx {
+                SLOW_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
+                execute_slow_action(action);
+            }
+            tracing::debug!("느린 액션 worker 종료");
         }));
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
+        HOOK_THREAD_ID.store(0, Ordering::SeqCst);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
 
         let thread = std::thread::spawn(move || {
             unsafe {
@@ -811,35 +1489,61 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 );
 
                 if hook.is_null() {
-                    super::set_hook_error(Some(
-                        "키보드 훅 설치 실패 — SetWindowsHookExW 실패".into(),
-                    ));
+                    let reason = format!(
+                        "키보드 훅 설치 실패 — SetWindowsHookExW 실패: OS 오류={}",
+                        GetLastError()
+                    );
+                    super::set_hook_error(Some(reason.clone()));
                     tracing::error!("SetWindowsHookExW 실패");
                     running.store(false, Ordering::Relaxed);
+                    let _ = ready_tx.send(Err(reason));
                     return;
                 }
 
                 super::set_hook_error(None);
                 tracing::info!("키보드 훅 설치 완료");
-                HOOK_LAST_SEEN.store(GetTickCount(), Ordering::Relaxed);
+                HOOK_LAST_SEEN.store(nonzero_tick(GetTickCount()), Ordering::Relaxed);
+                HOOK_REINSTALL_PENDING.store(false, Ordering::SeqCst);
+                HOOK_GENERATION.fetch_add(1, Ordering::SeqCst);
 
-                // stop()이 WM_QUIT를 보낼 수 있도록 스레드 ID 공개
+                // PostThreadMessageW가 안정적으로 동작하도록 메시지 큐를 먼저 만든다.
+                // stop()이 WM_QUIT를 보낼 수 있도록 그 뒤에만 스레드 ID를 공개한다.
+                let mut msg: MSG = std::mem::zeroed();
+                PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
                 HOOK_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
+                let _ = ready_tx.send(Ok(()));
 
                 // 메시지 루프 (훅이 동작하려면 필수).
                 // GetMessageW 블로킹 대기 — 기존 PeekMessageW + 1ms sleep은
                 // 상시 데몬이 초당 ~1000회 깨어나는 busy-wait였다.
                 // WM_QUIT(ret==0) 또는 에러(ret==-1)에서 종료.
-                let mut msg: MSG = std::mem::zeroed();
                 loop {
                     let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
-                    if ret == 0 || ret == -1 {
+                    if ret == 0 {
+                        break;
+                    }
+                    if ret == -1 {
+                        tracing::error!("키보드 훅 메시지 루프 실패: OS 오류={}", GetLastError());
                         break;
                     }
                     // 워치독이 훅 사망을 확인하면 이 메시지로 재설치를 요청한다.
                     // (LL 훅은 설치한 스레드에 묶이므로 반드시 여기서 처리)
                     if msg.message == WM_KMD_REINSTALL_HOOK {
-                        reinstall_hook(&mut hook);
+                        let probe_generation = msg.wParam as u32;
+                        let probe_heartbeat = msg.lParam as u32;
+                        if running.load(Ordering::Relaxed)
+                            && (HOOK_REINSTALL_PENDING.load(Ordering::SeqCst)
+                                || probe_evidence_unchanged(
+                                    probe_generation,
+                                    probe_heartbeat,
+                                    HOOK_GENERATION.load(Ordering::SeqCst),
+                                    HOOK_LAST_SEEN.load(Ordering::Relaxed),
+                                ))
+                        {
+                            let _ = reinstall_hook(&mut hook);
+                        } else {
+                            tracing::debug!("정상 회복된 훅의 오래된 재설치 요청 무시");
+                        }
                         continue;
                     }
                     TranslateMessage(&msg);
@@ -848,13 +1552,29 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
                 HOOK_THREAD_ID.store(0, Ordering::SeqCst);
                 running.store(false, Ordering::Relaxed);
-                UnhookWindowsHookEx(hook);
+                if UnhookWindowsHookEx(hook) == 0 {
+                    tracing::warn!("키보드 훅 해제 실패: OS 오류={}", GetLastError());
+                }
                 HOOK_LAST_SEEN.store(0, Ordering::Relaxed);
+                HOOK_REINSTALL_PENDING.store(false, Ordering::SeqCst);
                 tracing::info!("키보드 훅 해제 완료");
             }
         });
 
         self.thread = Some(thread);
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(reason)) => {
+                let _ = self.stop();
+                return Err(reason);
+            }
+            Err(_) => {
+                let reason = "키보드 훅 준비 신호 수신 실패".to_string();
+                super::set_hook_error(Some(reason.clone()));
+                let _ = self.stop();
+                return Err(reason);
+            }
+        }
         self.watchdog = Some(spawn_hook_watchdog(self.running.clone()));
         Ok(())
     }
@@ -864,8 +1584,10 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         // GetMessageW에서 블로킹 중인 메시지 루프를 WM_QUIT로 깨운다
         let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
         if tid != 0 {
-            unsafe {
-                PostThreadMessageW(tid, WM_QUIT, 0, 0);
+            let posted = unsafe { PostThreadMessageW(tid, WM_QUIT, 0, 0) };
+            if posted == 0 {
+                let error = unsafe { GetLastError() };
+                tracing::error!("키보드 훅 종료 메시지 전송 실패: OS 오류={error}");
             }
         }
         if let Some(thread) = self.thread.take() {
@@ -875,22 +1597,31 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         if let Some(watchdog) = self.watchdog.take() {
             let _ = watchdog.join();
         }
-        // 센더를 드롭하면 워커의 recv 루프가 끝난다
-        if let Ok(mut g) = ACTION_TX.lock() {
-            *g = None;
-        }
-        if let Some(worker) = self.action_worker.take() {
-            let _ = worker.join();
-        }
         // 코드 모드 중 중지된 경우 주입돼 있는 트리거를 해제한다 (stuck-Alt 방지).
-        // 훅/워커가 모두 종료된 뒤라 여기서 직접 주입해도 경합이 없다.
+        // slow worker join보다 먼저 수행해 느린 클립보드 작업에 해제가 막히지 않게 한다.
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(guard) = state.lock() {
                 if let Some(trigger) = guard.engaged_chord_trigger() {
                     tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
-                    send_key_up(vkey_to_vk(trigger));
+                    release_key_up_or_track(vkey_to_vk(trigger));
                 }
             }
+        }
+        for _ in 0..STOP_RELEASE_RETRY_PASSES {
+            retry_pending_synthetic_releases();
+        }
+        // 센더를 드롭하면 각 worker의 recv 루프가 끝난다.
+        if let Ok(mut g) = FAST_TX.lock() {
+            *g = None;
+        }
+        if let Ok(mut g) = SLOW_TX.lock() {
+            *g = None;
+        }
+        if let Some(worker) = self.fast_worker.take() {
+            let _ = worker.join();
+        }
+        if let Some(worker) = self.slow_worker.take() {
+            let _ = worker.join();
         }
         Ok(())
     }
@@ -907,6 +1638,182 @@ mod tests {
         for &k in VKey::ALL {
             assert_eq!(vk_to_vkey(vkey_to_vk(k)), Some(k), "{k:?} 왕복 불일치");
         }
+    }
+
+    // ── 합성 입력 순서 / 실패 정리 ──
+
+    #[test]
+    fn 키_press는_down_up_단일_batch_순서() {
+        assert_eq!(
+            key_press_events(VK_ESCAPE),
+            [KeyboardEvent::Down(VK_ESCAPE), KeyboardEvent::Up(VK_ESCAPE)]
+        );
+    }
+
+    #[test]
+    fn 콤보는_수정자_down부터_역순_up까지_원자_순서() {
+        assert_eq!(
+            combo_events(&[VK_LCONTROL, VK_LSHIFT], 0x41),
+            vec![
+                KeyboardEvent::Down(VK_LCONTROL),
+                KeyboardEvent::Down(VK_LSHIFT),
+                KeyboardEvent::Down(0x41),
+                KeyboardEvent::Up(0x41),
+                KeyboardEvent::Up(VK_LSHIFT),
+                KeyboardEvent::Up(VK_LCONTROL),
+            ]
+        );
+    }
+
+    #[test]
+    fn 부분_주입_실패는_실제로_내려간_키만_역순_해제() {
+        let events = combo_events(&[VK_LCONTROL, VK_LSHIFT], 0x41);
+        assert_eq!(
+            cleanup_events_for_accepted_prefix(&events, 3),
+            vec![
+                KeyboardEvent::Up(0x41),
+                KeyboardEvent::Up(VK_LSHIFT),
+                KeyboardEvent::Up(VK_LCONTROL),
+            ]
+        );
+        assert!(
+            cleanup_events_for_accepted_prefix(&events, events.len()).is_empty(),
+            "정상 완료된 batch에는 추가 해제가 없어야 한다"
+        );
+    }
+
+    #[test]
+    fn 즉시_정리도_부분_실패하면_전송되지_않은_up을_재시도_대상으로_남긴다() {
+        let cleanup = vec![
+            KeyboardEvent::Up(0x41),
+            KeyboardEvent::Up(VK_LSHIFT),
+            KeyboardEvent::Up(VK_LCONTROL),
+        ];
+        assert_eq!(
+            unaccepted_cleanup_releases(&cleanup, 1),
+            vec![
+                SyntheticRelease::VirtualKey(VK_LSHIFT),
+                SyntheticRelease::VirtualKey(VK_LCONTROL),
+            ],
+            "첫 up만 성공했으면 나머지 두 키는 pending release여야 한다"
+        );
+        assert_eq!(
+            unaccepted_cleanup_releases(&cleanup, 0),
+            vec![
+                SyntheticRelease::VirtualKey(0x41),
+                SyntheticRelease::VirtualKey(VK_LSHIFT),
+                SyntheticRelease::VirtualKey(VK_LCONTROL),
+            ],
+            "정리 호출 전체 실패면 모든 up을 추적해야 한다"
+        );
+    }
+
+    #[test]
+    fn 유니코드_unit_release도_일반_키와_같은_재시도_큐를_사용한다() {
+        let pending = Mutex::new(PendingReleases::default());
+        let release = SyntheticRelease::UnicodeUnit('한' as u16);
+        lock_pending(&pending).record(release);
+
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| false);
+        assert_eq!(lock_pending(&pending).items(), vec![release]);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
+    }
+
+    #[test]
+    fn 합성_release는_실패하면_추적을_유지하고_성공할_때만_제거한다() {
+        let pending = Mutex::new(PendingReleases::default());
+        lock_pending(&pending).record(VK_LCONTROL);
+
+        let mut attempts = 0;
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| {
+            attempts += 1;
+            false
+        });
+        assert_eq!(attempts, 1);
+        assert_eq!(lock_pending(&pending).items(), vec![VK_LCONTROL]);
+
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
+    }
+
+    #[test]
+    fn release_재시도는_묶음_상한과_재기록_세대를_지킨다() {
+        let pending = Mutex::new(PendingReleases::default());
+        for vk in 1..=(RELEASE_RETRY_BATCH as u16 + 2) {
+            lock_pending(&pending).record(vk);
+        }
+        let stale = lock_pending(&pending).snapshot(1)[0];
+        lock_pending(&pending).record(stale.item);
+        assert!(
+            !lock_pending(&pending).complete(stale),
+            "재시도 중 다시 실패한 release를 오래된 성공이 지우면 안 된다"
+        );
+
+        let mut attempts = 0;
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| {
+            attempts += 1;
+            false
+        });
+        assert_eq!(attempts, RELEASE_RETRY_BATCH);
+    }
+
+    #[test]
+    fn 마우스_release도_성공_전에는_추적에서_제거하지_않는다() {
+        let pending = Mutex::new(PendingReleases::default());
+        lock_pending(&pending).record(MouseBind::BtnLeft);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| false);
+        assert_eq!(lock_pending(&pending).items(), vec![MouseBind::BtnLeft]);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
+    }
+
+    #[test]
+    fn 일회성_클릭은_down만_수락되면_up_정리를_요구한다() {
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 0),
+            None
+        );
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 1),
+            Some(MouseBind::BtnLeft)
+        );
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn 일회성_클릭_정리_batch_실패는_pending_up으로_남는다() {
+        let pending = Mutex::new(PendingReleases::default());
+        let bind =
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnRight, 1).expect("down 수락");
+
+        assert!(!track_mouse_release_result(&pending, bind, false));
+        assert_eq!(lock_pending(&pending).items(), vec![MouseBind::BtnRight]);
+        assert!(track_mouse_release_result(&pending, bind, true));
+        assert!(
+            lock_pending(&pending).items().is_empty(),
+            "정리 up이 성공한 뒤에만 pending에서 제거"
+        );
+    }
+
+    #[test]
+    fn 액션을_inline_mouse_slow_lane으로_분리() {
+        assert_eq!(
+            action_lane(&BindAction::SendKey(VKey::Escape)),
+            ActionLane::Inline
+        );
+        assert_eq!(
+            action_lane(&BindAction::Mouse(MouseBind::BtnLeft)),
+            ActionLane::MouseWorker
+        );
+        assert_eq!(
+            action_lane(&BindAction::Launch("kmd-desktop".into())),
+            ActionLane::Slow
+        );
+        assert_eq!(action_lane(&BindAction::ClipPaste(1)), ActionLane::Slow);
     }
 
     // ── 훅 워치독 판정 ──
@@ -929,9 +1836,44 @@ mod tests {
     }
 
     #[test]
+    fn 프로브_뒤_세대나_하트비트가_바뀌면_재설치_취소() {
+        assert!(probe_evidence_unchanged(7, 1000, 7, 1000));
+        assert!(!probe_evidence_unchanged(7, 1000, 8, 1000));
+        assert!(!probe_evidence_unchanged(7, 1000, 7, 1001));
+    }
+
+    #[test]
     fn 훅_미설치면_판단_대상_아님() {
         let now = 100_000;
         assert!(!should_probe_hook(now, 0, now - 200, None));
+    }
+
+    #[test]
+    fn 재설치_실패는_하트비트를_0으로_만들지_않는다() {
+        assert_eq!(heartbeat_after_reinstall_failure(42_000, 50_000), 42_000);
+        assert_eq!(heartbeat_after_reinstall_failure(0, 50_000), 50_000);
+        assert_eq!(heartbeat_after_reinstall_failure(0, 0), 1);
+    }
+
+    #[test]
+    fn 재설치_재시도는_지수_backoff와_상한을_지킨다() {
+        let now = 100_000;
+        assert!(reinstall_retry_due(now, None, REINSTALL_RETRY_INITIAL_MS));
+        assert!(!reinstall_retry_due(
+            now,
+            Some(now - 1_000),
+            REINSTALL_RETRY_INITIAL_MS
+        ));
+        assert!(reinstall_retry_due(
+            now,
+            Some(now - REINSTALL_RETRY_INITIAL_MS),
+            REINSTALL_RETRY_INITIAL_MS
+        ));
+        assert_eq!(next_reinstall_retry_delay(2_000), 4_000);
+        assert_eq!(
+            next_reinstall_retry_delay(REINSTALL_RETRY_MAX_MS),
+            REINSTALL_RETRY_MAX_MS
+        );
     }
 
     #[test]

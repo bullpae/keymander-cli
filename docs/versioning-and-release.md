@@ -4,11 +4,12 @@ This repository uses one product version across all runtime packages:
 
 - `keymander` (CLI/TUI)
 - `kmd-core` (shared core)
+- `kmd-daemon` (background service)
 - `kmd-desktop` (desktop launcher)
 
 ## 1) Single Product Version
 
-- Keep the three Cargo package versions identical.
+- Keep the four Cargo package versions identical.
 - Use SemVer: `MAJOR.MINOR.PATCH`.
 - Git tag format: `vMAJOR.MINOR.PATCH` (example: `v0.2.3`).
 - GitHub release title: same as tag.
@@ -33,6 +34,7 @@ It tracks index/data compatibility and can move independently when schema/storag
 2. Update package versions in:
    - `Cargo.toml` (root `keymander`)
    - `crates/kmd-core/Cargo.toml`
+   - `crates/kmd-daemon/Cargo.toml`
    - `crates/kmd-desktop/Cargo.toml`
 3. Commit release changes.
 4. Create annotated tag: `vX.Y.Z`.
@@ -44,7 +46,7 @@ It tracks index/data compatibility and can move independently when schema/storag
 
 ## 4) Practical Policy for This Repo
 
-- Default policy: all three package versions move together.
+- Default policy: all four package versions move together.
 - Exception policy: if only internal crates are published separately in the future,
   split policy can be introduced, but only with explicit docs update.
 

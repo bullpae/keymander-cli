@@ -9,8 +9,33 @@ permissions:
   contents: write
 
 jobs:
+  validate-version:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Match tag and Cargo package versions
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          # 기존 태그 관례(v0.x.y-rc1)와 Cargo SemVer(0.x.y-rc.1)를 정규화한다.
+          EXPECTED_VERSION="$(sed -E 's/-rc([0-9]+)$/-rc.\1/' <<< "$TAG_VERSION")"
+          for manifest in \
+            Cargo.toml \
+            crates/kmd-core/Cargo.toml \
+            crates/kmd-daemon/Cargo.toml \
+            crates/kmd-desktop/Cargo.toml
+          do
+            PACKAGE_VERSION="$(awk -F '"' '/^version = / { print $2; exit }' "$manifest")"
+            if [[ "$PACKAGE_VERSION" != "$EXPECTED_VERSION" ]]; then
+              echo "::error file=$manifest::tag $GITHUB_REF_NAME expects $EXPECTED_VERSION, found $PACKAGE_VERSION"
+              exit 1
+            fi
+          done
+
   build-cli:
     name: Build CLI ${{ matrix.target }}
+    needs: validate-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,6 +95,7 @@ jobs:
 
   build-desktop:
     name: Build Desktop ${{ matrix.target }}
+    needs: validate-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -137,6 +163,7 @@ jobs:
 
   build-bundle:
     name: Portable Bundle ${{ matrix.target }}
+    needs: validate-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -211,6 +238,7 @@ jobs:
 
   build-packages:
     name: Linux Packages (deb/rpm)
+    needs: validate-version
     # rc 등 프리릴리스 제외 — apt/yum 발행이 게이트되어 쓰일 곳이 없고,
     # RPM 버전 규칙이 '-'를 불허해 rc 버전(0.x.0-rc.1)에서 generate-rpm이 죽는다
     if: ${{ !contains(github.ref_name, '-') }}

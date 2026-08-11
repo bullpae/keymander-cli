@@ -2,13 +2,68 @@
 
 use crate::autostart;
 use crate::keybind::{self, KeybindConfig};
+use fs2::FileExt;
 use kmd_core::ipc::{self, Request, Response, SearchHit};
 use kmd_core::{Config, Index, SearchEngine};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const DAEMON_LOCK_FILE: &str = "daemon.lock";
+
+/// OS가 프로세스 종료 시 자동으로 해제하는 데몬 단일 인스턴스 잠금.
+///
+/// 잠금 파일 자체는 지우지 않는다. 잠금을 쥔 채 파일을 지우면 새 프로세스가
+/// 같은 경로에 다른 inode를 만들어 두 프로세스가 서로 다른 파일을 잠글 수 있다.
+struct DaemonInstanceGuard {
+    _file: File,
+}
+
+enum DaemonInstanceAction {
+    Acquired(DaemonInstanceGuard),
+    AlreadyRunning,
+}
+
+fn daemon_lock_path() -> PathBuf {
+    ipc::runtime_dir().join(DAEMON_LOCK_FILE)
+}
+
+/// 파일 생성과 OS 배타 잠금을 한 단계로 묶어 동시 기동의 check-then-start
+/// 레이스를 없앤다. 프로세스가 비정상 종료해도 파일 핸들이 닫히며 잠금은
+/// 자동 해제되므로 남은 daemon.lock 파일은 다음 기동을 막지 않는다.
+fn acquire_daemon_instance() -> color_eyre::Result<DaemonInstanceAction> {
+    std::fs::create_dir_all(ipc::runtime_dir())?;
+    let path = daemon_lock_path();
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            // 잠금 소유자만 진단용 PID를 갱신한다. 실패해도 잠금 자체는 유효하다.
+            use std::io::{Seek, SeekFrom};
+            let _ = file.set_len(0);
+            let _ = file.seek(SeekFrom::Start(0));
+            let _ = write!(file, "{}", std::process::id());
+            Ok(DaemonInstanceAction::Acquired(DaemonInstanceGuard {
+                _file: file,
+            }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Ok(DaemonInstanceAction::AlreadyRunning)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 /// 전체 인덱스를 공유 캐시(index.bin/index.json)에 저장
 fn save_full_index_cache(index: &Index) {
@@ -31,22 +86,127 @@ fn save_quick_index_cache(use_emoji: bool) {
     );
 }
 
+/// 설정된 리프레시 주기를 부팅 캐시의 최대 수명으로도 사용한다.
+/// 0(off)은 기존 캐시를 만료시키지 않되, 캐시가 아예 없으면 한 번은
+/// 백그라운드에서 전체 인덱스를 만든다.
+fn index_cache_max_age(refresh_minutes: u64) -> Option<Duration> {
+    (refresh_minutes != 0).then(|| Duration::from_secs(refresh_minutes.saturating_mul(60)))
+}
+
+/// 부팅 크리티컬 패스에서는 디스크 전체 스캔을 하지 않는다. 신선한 전체
+/// 캐시가 있으면 즉시 쓰고, 없으면 PATH/시스템 명령만 포함하는 quick 인덱스로
+/// IPC를 먼저 연 뒤 리프레셔가 전체 인덱스로 교체한다.
+fn load_startup_index(config: &Config) -> (Index, bool) {
+    let data_dir = Config::default_data_dir();
+    let bin_path = data_dir.join(kmd_core::INDEX_CACHE_BIN_FILENAME);
+    let json_path = data_dir.join(kmd_core::INDEX_CACHE_FILENAME);
+    let config_modified = config
+        .config_path
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok()?.modified().ok());
+    let newest_cache = [&bin_path, &json_path]
+        .into_iter()
+        .filter_map(|path| std::fs::metadata(path).ok()?.modified().ok())
+        .max();
+    let config_changed = config_modified
+        .zip(newest_cache)
+        .is_some_and(|(config_time, cache_time)| config_time > cache_time);
+    let cached = if config_changed {
+        tracing::info!("설정 파일이 인덱스 캐시보다 새로움 — 백그라운드 재빌드 예약");
+        None
+    } else {
+        kmd_core::index::store::try_load_cached_with_max_age(
+            &bin_path,
+            &json_path,
+            Index::current_version(),
+            index_cache_max_age(config.launcher.index_refresh_minutes),
+        )
+    };
+
+    match cached {
+        Some(index) => {
+            tracing::info!(
+                "신선한 전체 인덱스 캐시로 즉시 시작 ({}개 항목)",
+                index.len()
+            );
+            (index, false)
+        }
+        None => {
+            let index = Index::build_quick(config.general.emoji_icons);
+            tracing::info!(
+                "전체 인덱스 캐시 없음/만료 — quick 인덱스로 시작 ({}개 항목)",
+                index.len()
+            );
+            (index, true)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn lower_indexer_thread_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+
+    // 전체 파일 스캔이 키 훅/포그라운드 앱과 CPU를 다투지 않게 한다.
+    // 실패해도 기능은 유지되므로 경고만 남긴다.
+    if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) } == 0 {
+        tracing::warn!("Windows 인덱서 스레드 우선순위 하향 실패");
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn lower_indexer_thread_priority() {}
+
+fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
+    let started = Instant::now();
+    let index = Index::build(&config.launcher, config.general.emoji_icons);
+    let count = index.items.len();
+    save_full_index_cache(&index);
+    if let Ok(mut e) = engine.lock() {
+        e.set_kind_weights(config.launcher.kind_weights.clone());
+        e.load(index.items);
+    } else {
+        tracing::warn!("인덱스 교체 실패: 검색 엔진 잠금 오염");
+    }
+    save_quick_index_cache(config.general.emoji_icons);
+    tracing::info!(
+        "백그라운드 인덱스 리프레시 완료 ({count}개 항목, {}ms)",
+        started.elapsed().as_millis()
+    );
+}
+
 /// 백그라운드 인덱스 리프레셔 스레드.
 ///
 /// `launcher.index_refresh_minutes` 주기(기본 6시간, 0=off)로 전체/quick
 /// 인덱스를 재빌드해 공유 캐시를 원자적으로 갱신하고 데몬 검색 엔진도
 /// 교체한다. kmd-desktop은 언제 떠도 신선한 캐시를 즉시 로드하므로
 /// 실행 시점(alt+space)에 인덱싱 비용을 지불하지 않는다.
-fn spawn_index_refresher(engine: Arc<Mutex<SearchEngine>>, shutdown: Arc<AtomicBool>) {
+fn spawn_index_refresher(
+    engine: Arc<Mutex<SearchEngine>>,
+    shutdown: Arc<AtomicBool>,
+    rebuild_immediately: bool,
+) {
     std::thread::spawn(move || {
-        // 시작 직후 quick 캐시부터 신선하게 (전체 캐시는 부팅 경로에서 저장됨).
-        // 부팅 크리티컬 패스 밖이라 IPC/키바인딩 시작을 지연시키지 않는다.
+        lower_indexer_thread_priority();
         let boot_cfg = load_config();
-        save_quick_index_cache(boot_cfg.general.emoji_icons);
         tracing::info!(
             "인덱스 리프레셔 시작 (주기 {}분, 0=off)",
             boot_cfg.launcher.index_refresh_minutes
         );
+
+        if rebuild_immediately {
+            // 첫 설치/만료 직후에도 IPC와 훅이 안정화될 시간을 먼저 준다.
+            // Windows에서는 이 스레드 우선순위도 낮춰 포그라운드 키 입력을
+            // 인덱싱보다 우선 처리한다.
+            for _ in 0..20 {
+                if shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            rebuild_full_index(&engine, &boot_cfg);
+        }
 
         let mut elapsed_secs: u64 = 0;
         let mut interval_min = boot_cfg.launcher.index_refresh_minutes;
@@ -67,35 +227,31 @@ fn spawn_index_refresher(engine: Arc<Mutex<SearchEngine>>, shutdown: Arc<AtomicB
             elapsed_secs = 0;
 
             let cfg = load_config();
-            let started = Instant::now();
-            let index = Index::build(&cfg.launcher, cfg.general.emoji_icons);
-            let count = index.items.len();
-            save_full_index_cache(&index);
-            if let Ok(mut e) = engine.lock() {
-                e.set_kind_weights(cfg.launcher.kind_weights.clone());
-                e.load(index.items);
-            }
-            save_quick_index_cache(cfg.general.emoji_icons);
-            tracing::info!(
-                "백그라운드 인덱스 리프레시 완료 ({count}개 항목, {}ms)",
-                started.elapsed().as_millis()
-            );
+            rebuild_full_index(&engine, &cfg);
         }
     });
 }
 
 /// 데몬 메인 루프
 pub fn run() -> color_eyre::Result<()> {
-    // 단일 인스턴스 가드 — 살아 있는 데몬이 이미 있으면 아무것도 건드리지 않고
-    // 종료한다. kmd CLI는 spawn 전에 포트를 확인하지만 launchd·직접 실행
-    // 경로에는 이 가드가 유일하다. 가드가 없으면 두 번째 데몬이 이벤트 탭을
-    // 이중 설치하고(키 이벤트 이중 처리) 포트 파일을 덮어써 원래 데몬이
-    // CLI에서 유령이 된다. Ping 응답(토큰 인증 포함)으로 생존을 판정하므로
-    // 죽은 데몬의 낡은 포트 파일은 통과한다.
+    // Ping 선확인은 두 프로세스가 동시에 통과할 수 있다. OS 배타 잠금을 먼저
+    // 획득해 check→초기화 전체를 직렬화하고 프로세스 수명 동안 보유한다.
+    let _instance_guard = match acquire_daemon_instance()? {
+        DaemonInstanceAction::Acquired(guard) => guard,
+        DaemonInstanceAction::AlreadyRunning => {
+            println!("이미 실행 중인 데몬이 있어 종료합니다.");
+            return Ok(());
+        }
+    };
+
+    // 잠금 도입 전 버전의 살아 있는 데몬과도 공존하지 않는다. 잠금 소유권을
+    // 얻은 뒤 Ping이 실패하면 남은 포트/PID는 죽은 데몬의 stale runtime이므로
+    // 소유자만 정리한다.
     if let Ok(ipc::Response::Pong) = ipc::send_request_result(&ipc::Request::Ping) {
         println!("이미 실행 중인 데몬이 있어 종료합니다.");
         return Ok(());
     }
+    ipc::cleanup_stale_files();
 
     let started_at = Instant::now();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -118,14 +274,11 @@ pub fn run() -> color_eyre::Result<()> {
         }
     }
 
-    // 인덱스 빌드 + 검색 엔진 초기화
-    let index = Index::build(&config.launcher, config.general.emoji_icons);
+    // 전체 파일 스캔은 키 훅이 살아 있는 부팅 크리티컬 패스에서 제거한다.
+    // 신선한 캐시 또는 quick 인덱스로 먼저 IPC를 연다.
+    let (index, rebuild_immediately) = load_startup_index(&config);
     let item_count = index.items.len();
-    tracing::info!("{item_count}개 항목으로 인덱스 빌드 완료");
-
-    // 방금 빌드한 인덱스를 공유 캐시에 저장 — kmd-desktop이 실행 시점에
-    // 재빌드 없이 항상 캐시 히트로 뜨게 한다 (tmp+rename 원자적 쓰기)
-    save_full_index_cache(&index);
+    tracing::info!("{item_count}개 항목으로 검색 엔진 초기화");
 
     let engine = Arc::new(Mutex::new({
         let mut e = SearchEngine::new();
@@ -133,9 +286,6 @@ pub fn run() -> color_eyre::Result<()> {
         e.load(index.items);
         e
     }));
-
-    // 백그라운드 인덱스 리프레셔 — 인덱싱 비용을 데몬이 소유한다
-    spawn_index_refresher(engine.clone(), shutdown.clone());
 
     // 클립보드 히스토리 감시 (opt-in) — clip:N 붙여넣기의 데이터 소스
     crate::clipboard::spawn_watcher(
@@ -156,6 +306,10 @@ pub fn run() -> color_eyre::Result<()> {
         "kmd-daemon 실행 중 (port={port}, pid={})",
         std::process::id()
     );
+
+    // IPC 준비를 외부에 알린 다음에만 전체 인덱싱을 시작한다. 캐시가 신선하면
+    // 주기 리프레시 전까지 아무 스캔도 하지 않는다.
+    spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.
@@ -381,20 +535,36 @@ fn process_request(
         }
 
         Request::ClipPaste { slot, to_previous } => {
-            // 워커가 아니라 여기서 직접 실행 — RESTORE_DELAY(300ms)만큼 블로킹하나
-            // 이 커넥션 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
-            if to_previous {
-                crate::clipboard::paste_slot_to_previous(slot);
-            } else {
-                crate::clipboard::paste_slot(slot);
-            }
-            Response::Ok {
-                message: format!(
-                    "클립보드 슬롯 {slot} 붙여넣기 (히스토리 {}건)",
-                    crate::clipboard::len()
-                ),
+            // 워커가 아니라 여기서 직접 실행 — macOS는 RESTORE_DELAY(300ms),
+            // Windows는 텍스트 길이에 비례한 주입 시간만큼 블로킹하나 이 커넥션
+            // 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
+            // 빈 슬롯/스냅샷·주입 실패는 성공으로 위장하지 않고 Error로 알린다.
+            match crate::clipboard::paste_slot_checked(slot, to_previous) {
+                Ok(()) => Response::Ok {
+                    message: format!(
+                        "클립보드 슬롯 {slot} 붙여넣기 (히스토리 {}건)",
+                        crate::clipboard::len()
+                    ),
+                },
+                Err(message) => Response::Error { message },
             }
         }
+
+        Request::ClipPasteItem { id, to_previous } => {
+            match crate::clipboard::paste_item(id, to_previous) {
+                Ok(()) => Response::Ok {
+                    message: "클립보드 항목 붙여넣기".into(),
+                },
+                Err(message) => Response::Error { message },
+            }
+        }
+
+        Request::ClipCopyItem { id } => match crate::clipboard::copy_item(id) {
+            Ok(()) => Response::Ok {
+                message: "클립보드 항목 복사".into(),
+            },
+            Err(message) => Response::Error { message },
+        },
 
         Request::ClipHistory { query, limit } => Response::ClipHistory {
             hits: crate::clipboard::search(&query, limit),
@@ -541,6 +711,12 @@ mod tests {
     }
 
     #[test]
+    fn index_cache_max_age는_refresh_off면_무기한() {
+        assert_eq!(index_cache_max_age(0), None);
+        assert_eq!(index_cache_max_age(6), Some(Duration::from_secs(360)));
+    }
+
+    #[test]
     fn resolve_vim_nav_기본_레이어() {
         let kb = resolve_with_profile("vim-nav");
         assert_eq!(kb.layers.len(), 2, "nav + mouse 레이어");
@@ -593,6 +769,32 @@ mod tests {
         config.keybindings.toggle_keymap = String::new();
         let kb = resolve_keybind_preset(&config);
         assert_eq!(kb.combos.len(), 1, "none 프로필에서도 글로벌 핫키는 등록");
+    }
+
+    #[test]
+    fn 만료된_클립보드_id는_성공으로_위장하지_않는다() {
+        // u64::MAX는 발급될 수 없는 ID — 항목 조회가 클립보드 접근 전에
+        // 실패하므로 테스트가 실제 클립보드를 건드리지 않는다.
+        let engine = Arc::new(Mutex::new(SearchEngine::new()));
+        let (tx, _rx) = mpsc::channel();
+        let response = process_request(
+            Request::ClipPasteItem {
+                id: u64::MAX,
+                to_previous: false,
+            },
+            &engine,
+            &tx,
+            Instant::now(),
+        );
+        assert!(matches!(response, Response::Error { .. }));
+
+        let response = process_request(
+            Request::ClipCopyItem { id: u64::MAX },
+            &engine,
+            &tx,
+            Instant::now(),
+        );
+        assert!(matches!(response, Response::Error { .. }));
     }
 
     #[test]

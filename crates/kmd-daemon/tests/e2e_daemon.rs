@@ -17,8 +17,12 @@ use kmd_core::ipc::{self, Request, Response};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
+
+/// 두 E2E가 동시에 macOS 전역 이벤트 탭을 설치/해제하지 않게 직렬화한다.
+static E2E_LOCK: Mutex<()> = Mutex::new(());
 
 /// 테스트 격리 홈 디렉터리 — Drop 시 삭제
 struct TempHome(PathBuf);
@@ -56,7 +60,11 @@ fn child_config_dir(home: &TempHome) -> PathBuf {
 }
 
 fn spawn_daemon(home: &TempHome) -> DaemonGuard {
-    let log = std::fs::File::create(home.0.join("daemon-stdio.log")).expect("로그 파일 생성");
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.0.join("daemon-stdio.log"))
+        .expect("로그 파일 생성");
     let child = Command::new(env!("CARGO_BIN_EXE_kmd-daemon"))
         .arg("start")
         .env("HOME", &home.0)
@@ -68,6 +76,36 @@ fn spawn_daemon(home: &TempHome) -> DaemonGuard {
         .spawn()
         .expect("kmd-daemon spawn");
     DaemonGuard(child)
+}
+
+fn prepare_home(label: &str) -> TempHome {
+    let home =
+        TempHome(std::env::temp_dir().join(format!("kmd-e2e-{label}-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&home.0);
+
+    // 기본 CapsLock 트리거의 macOS hidutil 전역 변경과 파일 인덱싱을 차단한다.
+    let config_dir = child_config_dir(&home);
+    std::fs::create_dir_all(&config_dir).expect("config 디렉터리 생성");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[launcher]
+file_search_provider = "builtin"
+search_paths = []
+index_directories = false
+scan_drives = false
+
+[launcher.keymap.layers.nav]
+trigger = "LAlt"
+tap_action = "Escape"
+tap_hold_ms = 200
+
+[launcher.keymap.layers.nav.mappings]
+H = "Left"
+"#,
+    )
+    .expect("config.toml 작성");
+    home
 }
 
 /// 포트 파일이 생길 때까지 폴링 후 (port, token) 파싱
@@ -122,43 +160,26 @@ fn wait_exit(child: &mut Child, deadline: Duration) -> bool {
     false
 }
 
+fn wait_exit_status(child: &mut Child, deadline: Duration) -> Option<ExitStatus> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 #[test]
 fn e2e_daemon_lifecycle() {
     if std::env::var("KMD_E2E").is_err() {
         eprintln!("KMD_E2E 미설정 — E2E skip (CI가 설정, 로컬: KMD_E2E=1 cargo test ...)");
         return;
     }
+    let _test_guard = E2E_LOCK.lock().unwrap_or_else(|error| error.into_inner());
 
-    let home = TempHome(std::env::temp_dir().join(format!("kmd-e2e-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&home.0);
-
-    // 격리 config:
-    // - 트리거 LAlt 명시 (파일 상단 주석의 hidutil 안전장치)
-    // - 파일 인덱싱 차단 (builtin 프로바이더 + 빈 search_paths) — CI macOS
-    //   러너는 Spotlight가 꺼져 있어 mdfind가 무기한 멈추고, 인덱스 빌드가
-    //   IPC 서버 기동보다 앞서므로 포트 파일이 영영 안 생긴다 (실측).
-    //   라이프사이클 테스트에 파일 인덱싱은 관심사가 아니다.
-    let config_dir = child_config_dir(&home);
-    std::fs::create_dir_all(&config_dir).expect("config 디렉터리 생성");
-    std::fs::write(
-        config_dir.join("config.toml"),
-        r#"
-[launcher]
-file_search_provider = "builtin"
-search_paths = []
-index_directories = false
-scan_drives = false
-
-[launcher.keymap.layers.nav]
-trigger = "LAlt"
-tap_action = "Escape"
-tap_hold_ms = 200
-
-[launcher.keymap.layers.nav.mappings]
-H = "Left"
-"#,
-    )
-    .expect("config.toml 작성");
+    let home = prepare_home("lifecycle");
 
     // ── 기동 → 포트 파일 → 인증 → 상태 ──────────────────────────────────
     let mut daemon = spawn_daemon(&home);
@@ -218,5 +239,85 @@ H = "Left"
     assert!(
         wait_exit(&mut daemon.0, Duration::from_secs(10)),
         "Shutdown 후 프로세스가 종료돼야 한다"
+    );
+}
+
+#[test]
+fn concurrent_start_allows_exactly_one_daemon() {
+    if std::env::var("KMD_E2E").is_err() {
+        eprintln!("KMD_E2E 미설정 — E2E skip (CI가 설정, 로컬: KMD_E2E=1 cargo test ...)");
+        return;
+    }
+    let _test_guard = E2E_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+
+    const STARTERS: usize = 8;
+    let home = prepare_home("concurrent-start");
+    let runtime_dir = child_data_dir(&home);
+    std::fs::create_dir_all(&runtime_dir).expect("runtime 디렉터리 생성");
+    std::fs::write(runtime_dir.join("daemon.lock"), "99999999").expect("stale lock 파일");
+    std::fs::write(runtime_dir.join("daemon.port"), "not-a-port\nstale-token\n")
+        .expect("stale port 파일");
+    std::fs::write(runtime_dir.join("daemon.pid"), "99999999").expect("stale pid 파일");
+
+    let barrier = Arc::new(Barrier::new(STARTERS));
+    let mut daemons = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..STARTERS)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let home = &home;
+                scope.spawn(move || {
+                    barrier.wait();
+                    spawn_daemon(home)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("동시 spawn 스레드"))
+            .collect::<Vec<_>>()
+    });
+
+    let (port, token) = wait_runtime(&home, Duration::from_secs(60));
+    let winner_pid = match send(port, &token, &Request::Status) {
+        Some(Response::Status { pid, .. }) => pid,
+        other => panic!("동시 기동 뒤 Status 응답이 아님: {other:?}"),
+    };
+    assert!(
+        daemons.iter().any(|daemon| daemon.0.id() == winner_pid),
+        "런타임 파일의 PID는 동시 spawn 중 하나여야 한다: {winner_pid}"
+    );
+
+    for daemon in daemons
+        .iter_mut()
+        .filter(|daemon| daemon.0.id() != winner_pid)
+    {
+        let status = wait_exit_status(&mut daemon.0, Duration::from_secs(10))
+            .unwrap_or_else(|| panic!("잠금 경쟁에서 진 데몬 {}이 종료되지 않음", daemon.0.id()));
+        assert!(
+            status.success(),
+            "중복 데몬 {}은 정상적인 AlreadyRunning 종료여야 함: {status}",
+            daemon.0.id()
+        );
+    }
+    let winner = daemons
+        .iter_mut()
+        .find(|daemon| daemon.0.id() == winner_pid)
+        .expect("승자 프로세스");
+    assert!(
+        winner.0.try_wait().expect("승자 상태 확인").is_none(),
+        "단 하나의 승자 데몬은 계속 실행 중이어야 한다"
+    );
+    assert!(
+        matches!(send(port, &token, &Request::Ping), Some(Response::Pong)),
+        "경쟁 종료 뒤 승자 IPC가 살아 있어야 한다"
+    );
+
+    assert!(matches!(
+        send(port, &token, &Request::Shutdown),
+        Some(Response::Ok { .. })
+    ));
+    assert!(
+        wait_exit(&mut winner.0, Duration::from_secs(10)),
+        "승자 데몬도 정상 종료돼야 한다"
     );
 }
