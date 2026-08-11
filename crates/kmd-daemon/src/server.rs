@@ -86,6 +86,17 @@ fn spawn_index_refresher(engine: Arc<Mutex<SearchEngine>>, shutdown: Arc<AtomicB
 
 /// 데몬 메인 루프
 pub fn run() -> color_eyre::Result<()> {
+    // 단일 인스턴스 가드 — 살아 있는 데몬이 이미 있으면 아무것도 건드리지 않고
+    // 종료한다. kmd CLI는 spawn 전에 포트를 확인하지만 launchd·직접 실행
+    // 경로에는 이 가드가 유일하다. 가드가 없으면 두 번째 데몬이 이벤트 탭을
+    // 이중 설치하고(키 이벤트 이중 처리) 포트 파일을 덮어써 원래 데몬이
+    // CLI에서 유령이 된다. Ping 응답(토큰 인증 포함)으로 생존을 판정하므로
+    // 죽은 데몬의 낡은 포트 파일은 통과한다.
+    if let Ok(ipc::Response::Pong) = ipc::send_request_result(&ipc::Request::Ping) {
+        println!("이미 실행 중인 데몬이 있어 종료합니다.");
+        return Ok(());
+    }
+
     let started_at = Instant::now();
     let shutdown = Arc::new(AtomicBool::new(false));
     // Shutdown 요청 → 채널로 메인 스레드를 즉시 깨운다 (200ms 폴링 제거)
