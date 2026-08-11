@@ -1,143 +1,99 @@
-//! Windows 클립보드 스냅샷/민감정보 **정책** — 순수 로직 (플랫폼 무관 컴파일).
+//! Windows 붙여넣기 주입/민감정보 **정책** — 순수 로직 (플랫폼 무관 컴파일).
 //!
-//! FFI 없는 판단 로직만 둔다: 어떤 포맷을 백업할 수 있고, 상한(개수/포맷당/전체
-//! 바이트)을 넘으면 어떻게 실패하는지, 어떤 마커가 "수집 제외" 신호인지.
-//! macOS에서도 컴파일·테스트되므로 Windows 실기 없이 정책 회귀를 잡는다.
-//! 실제 클립보드 접근(clipboard-win)은 `clipboard.rs`의 `platform` 모듈 담당.
+//! FFI 없는 판단 로직만 둔다: 붙여넣을 텍스트를 어떤 UTF-16 시퀀스로 주입하고,
+//! 어떤 마커가 "수집 제외" 신호인지. macOS에서도 컴파일·테스트되므로 Windows
+//! 실기 없이 정책 회귀를 잡는다. 실제 주입(SendInput)은 `clipboard.rs`의
+//! `platform` 모듈 담당.
+//!
+//! ## 왜 클립보드 스냅샷/복원 정책이 없는가 (설계 불변식)
+//!
+//! Windows 붙여넣기는 시스템 클립보드를 **전혀 변형하지 않는다** — 임시 교체
+//! (SetClipboardData) + Ctrl+V + 복원 대신, 항목 텍스트를 SendInput
+//! KEYEVENTF_UNICODE 타이핑으로 직접 주입한다. 복원 기반 설계는 어떤 변형으로도
+//! "부분 포맷 소실 불가능"을 보장할 수 없다:
+//! - 다중 SetClipboardData는 트랜잭션이 아니다 — EmptyClipboard 후 n번째 set이
+//!   실패하면 롤백이 없다.
+//! - OLE(OleGetClipboard→보관→OleSetClipboard)도 지연 렌더 원본에선 소스 앱
+//!   프록시라, 스왑 중 소스 앱이 종료하면 복원할 데이터 자체가 사라진다.
+//!
+//! 히스토리는 텍스트 전용이므로 타이핑 주입으로 기능 손실이 없고, 원본
+//! 클립보드(이미지·파일·커스텀 포맷 전부)는 건드리지 않았으니 소실이 원천
+//! 불가능하다. 한계는 [`encode_for_injection`] 문서 참고.
 
-/// 스냅샷에 담는 포맷 개수 상한. 실사용 클립보드는 10개 안팎이고,
-/// 그 이상은 비정상 소유자일 가능성이 높다 (메모리 보호).
-pub const MAX_SNAPSHOT_FORMATS: usize = 32;
-/// 포맷 하나의 바이트 상한 (대형 DIB/커스텀 데이터 복사 방어).
-pub const MAX_SNAPSHOT_FORMAT_BYTES: usize = 16 * 1024 * 1024;
-/// 스냅샷 전체 바이트 상한.
-pub const MAX_SNAPSHOT_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+/// 주입 텍스트의 UTF-16 code unit 상한. 유닛당 키 이벤트 2개(down/up)를 보내므로
+/// 상한이 없으면 1MB 히스토리 항목이 수백만 이벤트가 되어 입력 큐를 점령한다.
+/// 초과 시 주입을 거부(Err)한다 — 클립보드는 무변형이라 사용자 데이터 손실은 없다.
+pub const MAX_INJECT_UTF16_UNITS: usize = 64 * 1024;
 
-// 표준 클립보드 포맷 ID (winuser.h). clipboard-win 상수와 같은 값이지만
-// 이 모듈은 비-Windows에서도 컴파일되어야 하므로 직접 정의한다.
-pub const CF_TEXT: u32 = 1;
-pub const CF_BITMAP: u32 = 2;
-pub const CF_METAFILEPICT: u32 = 3;
-pub const CF_DIB: u32 = 8;
-pub const CF_PALETTE: u32 = 9;
-pub const CF_UNICODETEXT: u32 = 13;
-pub const CF_ENHMETAFILE: u32 = 14;
-pub const CF_DIBV5: u32 = 17;
-pub const CF_OWNERDISPLAY: u32 = 0x0080;
-pub const CF_DSPTEXT: u32 = 0x0081;
-pub const CF_DSPBITMAP: u32 = 0x0082;
-pub const CF_DSPMETAFILEPICT: u32 = 0x0083;
-pub const CF_DSPENHMETAFILE: u32 = 0x008E;
-const CF_GDIOBJFIRST: u32 = 0x0300;
-const CF_GDIOBJLAST: u32 = 0x03FF;
+/// SendInput 한 번에 보내는 code unit 수. 배치 사이에 짧은 양보를 넣어
+/// 대상 앱 메시지 큐가 소화할 시간을 주고 CPU 포화를 피한다 (사고 수칙).
+pub const INJECT_CHUNK_UNITS: usize = 256;
 
-/// GDI 핸들/소유자 의존 포맷 — HGLOBAL이 아니라 GlobalLock으로 읽을 수 없다.
-/// 스냅샷 열거 시 바이트 복사를 시도하지 말아야 한다 (핸들 오용 방지).
-pub fn is_gdi_or_owner_format(format: u32) -> bool {
-    matches!(
-        format,
-        CF_BITMAP
-            | CF_METAFILEPICT
-            | CF_PALETTE
-            | CF_ENHMETAFILE
-            | CF_OWNERDISPLAY
-            | CF_DSPBITMAP
-            | CF_DSPMETAFILEPICT
-            | CF_DSPENHMETAFILE
-    ) || (CF_GDIOBJFIRST..=CF_GDIOBJLAST).contains(&format)
+/// 텍스트 → 주입용 UTF-16 시퀀스 (KEYEVENTF_UNICODE의 wScan 값들).
+///
+/// 개행 정규화: CRLF/LF → CR 하나. 물리 Enter가 만드는 WM_CHAR는 0x0D(CR)라서
+/// LF를 그대로 주입하면 많은 편집 컨트롤이 개행으로 인식하지 못한다.
+///
+/// 명시적 한계 (클립보드 무변형 주입의 트레이드오프):
+/// - 길이: [`MAX_INJECT_UTF16_UNITS`] 초과 텍스트는 Err — Ctrl+V처럼 무제한
+///   길이를 즉시 붙여넣지 못한다.
+/// - 호환: KEYEVENTF_UNICODE는 VK_PACKET 경유라 raw input/스캔코드만 읽는 앱
+///   (일부 게임·가상화 콘솔)에선 무시될 수 있다. 사용자가 물리적으로 누르고
+///   있는 modifier가 일부 앱에서 문자 해석을 바꿀 수 있다 (Ctrl+문자 등).
+/// - 서식: 텍스트만 주입된다 (히스토리 자체가 텍스트 전용이라 기능 손실 없음).
+pub fn encode_for_injection(text: &str) -> Result<Vec<u16>, String> {
+    let mut units: Vec<u16> = Vec::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut buf = [0u16; 2];
+    while let Some(c) = chars.next() {
+        let mapped = match c {
+            '\r' => {
+                // CRLF는 CR 하나로 — LF까지 주입하면 개행이 두 번 된다.
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                '\r'
+            }
+            '\n' => '\r',
+            other => other,
+        };
+        units.extend_from_slice(mapped.encode_utf16(&mut buf));
+    }
+    if units.len() > MAX_INJECT_UTF16_UNITS {
+        return Err(format!(
+            "텍스트가 UTF-16 {}유닛으로 주입 상한({MAX_INJECT_UTF16_UNITS}유닛)을 넘습니다 — \
+             클립보드는 변경되지 않았습니다",
+            units.len()
+        ));
+    }
+    Ok(units)
 }
 
-/// 스냅샷 전 포맷 하나의 관측 결과.
-#[derive(Debug, Clone, Copy)]
-pub enum FormatProbe {
-    /// HGLOBAL 기반 — 바이트 복사 가능, size = GlobalSize 관측치.
-    Readable(u32, usize),
-    /// GDI 핸들이거나 크기/데이터를 얻지 못한 포맷.
-    Unreadable(u32),
-}
-
-/// 스냅샷 계획: 관측된 포맷들로부터 "안전하게 백업 가능한 포맷 목록"을 정한다.
-///
-/// 실패(Err) = 원본 클립보드를 손실 없이 복원할 수 없다는 뜻 — 호출자는
-/// 붙여넣기를 **중단**해 사용자의 클립보드를 절대 파괴하지 않는다 (fail-safe).
-///
-/// 읽지 못하는 포맷의 면책 규칙 (Windows가 자동 합성하는 동등 표현):
-/// - 비트맵/팔레트 등 **래스터** 계열은 CF_DIB/CF_DIBV5가 있으면 복원 시
-///   재합성된다. 메타파일(벡터)은 DIB로 재합성되지 않으므로 면책하지 않는다.
-/// - CF_DSPTEXT는 텍스트 포맷이 있으면 동등하다.
-pub fn plan_snapshot(probes: &[FormatProbe]) -> Result<Vec<u32>, String> {
-    let mut readable: Vec<(u32, usize)> = Vec::new();
-    let mut unreadable: Vec<u32> = Vec::new();
-    for probe in probes {
-        match *probe {
-            FormatProbe::Readable(format, size) => readable.push((format, size)),
-            FormatProbe::Unreadable(format) => unreadable.push(format),
+/// 주입 배치 경계 계획. 각 배치는 `chunk_units` 이하이며, **서러게이트 쌍을
+/// 배치 경계에서 쪼개지 않는다** — 배치 사이 양보 중 실제 키 입력이 끼어들면
+/// 반쪽 서러게이트가 깨진 문자로 남기 때문이다.
+pub fn injection_chunks(units: &[u16], chunk_units: usize) -> Vec<std::ops::Range<usize>> {
+    // 쌍(2유닛)을 절대 쪼개지 않으려면 배치가 최소 2유닛은 되어야 한다.
+    let chunk = chunk_units.max(2);
+    let mut ranges = Vec::with_capacity(units.len().div_ceil(chunk));
+    let mut start = 0;
+    while start < units.len() {
+        let mut end = (start + chunk).min(units.len());
+        if end < units.len() && is_high_surrogate(units[end - 1]) && is_low_surrogate(units[end]) {
+            end -= 1;
         }
+        ranges.push(start..end);
+        start = end;
     }
-
-    if readable.len() > MAX_SNAPSHOT_FORMATS {
-        return Err(format!(
-            "클립보드 포맷이 {}개로 스냅샷 상한({MAX_SNAPSHOT_FORMATS}개)을 넘습니다",
-            readable.len()
-        ));
-    }
-    let mut total: usize = 0;
-    for (format, size) in &readable {
-        // DIB(스크린샷 등 이미지)는 16MB를 쉽게 넘으므로 포맷당 상한을 면제하고
-        // 전체 예산(64MiB)으로만 막는다. 그 외 포맷은 포맷당 상한을 유지한다.
-        let per_format_capped = !matches!(*format, CF_DIB | CF_DIBV5);
-        if per_format_capped && *size > MAX_SNAPSHOT_FORMAT_BYTES {
-            return Err(format!(
-                "클립보드 포맷 {format}이 {size}바이트로 포맷당 상한({MAX_SNAPSHOT_FORMAT_BYTES}바이트)을 넘습니다"
-            ));
-        }
-        total = total.saturating_add(*size);
-    }
-    if total > MAX_SNAPSHOT_TOTAL_BYTES {
-        return Err(format!(
-            "클립보드 전체 {total}바이트로 스냅샷 상한({MAX_SNAPSHOT_TOTAL_BYTES}바이트)을 넘습니다"
-        ));
-    }
-
-    let has_dib = readable
-        .iter()
-        .any(|(f, _)| matches!(*f, CF_DIB | CF_DIBV5));
-    let has_text = readable
-        .iter()
-        .any(|(f, _)| matches!(*f, CF_TEXT | CF_UNICODETEXT));
-    let unpreserved: Vec<u32> = unreadable
-        .into_iter()
-        .filter(|f| !excused(*f, has_dib, has_text))
-        .collect();
-    if !unpreserved.is_empty() {
-        // 포맷 ID만 남긴다 — 이름/내용은 로그·에러에 싣지 않는다 (프라이버시).
-        return Err(format!(
-            "복원할 수 없는 클립보드 포맷이 있습니다: {unpreserved:?}"
-        ));
-    }
-
-    Ok(readable.into_iter().map(|(f, _)| f).collect())
+    ranges
 }
 
-/// 읽지 못한 포맷이 다른 백업 포맷으로 재합성 가능하면 true.
-///
-/// 래스터 계열만 DIB로 면책한다. 메타파일(CF_METAFILEPICT/CF_ENHMETAFILE 등,
-/// Office 개체·차트 복사의 벡터 원본)은 DIB 래스터로 재합성되지 않으므로 DIB가
-/// 있어도 면책하지 않는다 — 안전하게 deep-copy할 수 없는 조합은 plan_snapshot이
-/// 실패해 붙여넣기 스왑 자체가 중단된다 (벡터 포맷 손실 방지, fail-safe).
-fn excused(format: u32, has_dib: bool, has_text: bool) -> bool {
-    match format {
-        CF_BITMAP | CF_PALETTE | CF_DSPBITMAP => has_dib,
-        CF_DSPTEXT => has_text,
-        _ => false,
-    }
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
 }
 
-/// 복원 직전(클립보드 잠금 후) 세대 번호 재검증 — 사전 판정과 잠금(OpenClipboard)
-/// 사이에 끼어든 외부 복사(TOCTOU)를 덮어쓰지 않기 위한 최종 판정.
-/// `expected == 0`은 세대 미지원 또는 무조건 복원 경로 — 검증 없이 진행한다.
-pub fn generation_still_current(expected: isize, current: isize) -> bool {
-    expected == 0 || expected == current
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
 }
 
 // ── 민감 항목 마커 (수집 제외) ──────────────────────────────────────────────
@@ -169,113 +125,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 정상_포맷들은_모두_스냅샷에_포함된다() {
-        let probes = [
-            FormatProbe::Readable(CF_UNICODETEXT, 128),
-            FormatProbe::Readable(CF_DIB, 4096),
-            FormatProbe::Readable(0xC123, 256), // 커스텀 등록 포맷
-        ];
-        let plan = plan_snapshot(&probes).unwrap();
-        assert_eq!(plan, vec![CF_UNICODETEXT, CF_DIB, 0xC123]);
+    fn ascii_텍스트는_그대로_utf16이_된다() {
+        let units = encode_for_injection("abc 123!").unwrap();
+        assert_eq!(units, "abc 123!".encode_utf16().collect::<Vec<u16>>());
     }
 
     #[test]
-    fn gdi_비트맵은_dib가_있으면_면책된다() {
-        let probes = [
-            FormatProbe::Unreadable(CF_BITMAP),
-            FormatProbe::Unreadable(CF_PALETTE),
-            FormatProbe::Unreadable(CF_DSPBITMAP),
-            FormatProbe::Readable(CF_DIBV5, 4096),
-        ];
-        assert_eq!(plan_snapshot(&probes).unwrap(), vec![CF_DIBV5]);
+    fn 개행은_cr_하나로_정규화된다() {
+        // 물리 Enter의 WM_CHAR는 0x0D — LF/CRLF 모두 CR 하나로 주입해야
+        // 편집 컨트롤이 개행으로 인식하고, CRLF가 개행 두 번이 되지 않는다.
+        assert_eq!(encode_for_injection("a\nb").unwrap(), vec![97, 0x0D, 98]);
+        assert_eq!(encode_for_injection("a\r\nb").unwrap(), vec![97, 0x0D, 98]);
+        assert_eq!(encode_for_injection("a\rb").unwrap(), vec![97, 0x0D, 98]);
+        assert_eq!(
+            encode_for_injection("a\r\n\r\nb").unwrap(),
+            vec![97, 0x0D, 0x0D, 98]
+        );
     }
 
     #[test]
-    fn 메타파일은_dib가_있어도_면책되지_않는다() {
-        // Office 개체 복사 등의 벡터 원본 — DIB 래스터로 재합성되지 않으므로
-        // 스냅샷 계획이 실패해 붙여넣기 스왑이 중단되어야 한다 (손실 방지).
-        for metafile in [
-            CF_METAFILEPICT,
-            CF_ENHMETAFILE,
-            CF_DSPMETAFILEPICT,
-            CF_DSPENHMETAFILE,
-        ] {
-            let probes = [
-                FormatProbe::Unreadable(metafile),
-                FormatProbe::Readable(CF_DIBV5, 4096),
-                FormatProbe::Readable(CF_UNICODETEXT, 64),
-            ];
-            let err = plan_snapshot(&probes).unwrap_err();
-            assert!(err.contains("복원할 수 없는"), "포맷 {metafile}: {err}");
+    fn 비bmp_문자는_서러게이트_쌍으로_인코딩된다() {
+        let units = encode_for_injection("🦀").unwrap();
+        assert_eq!(units.len(), 2);
+        assert!(is_high_surrogate(units[0]));
+        assert!(is_low_surrogate(units[1]));
+    }
+
+    #[test]
+    fn 주입_상한을_넘으면_클립보드_무변형을_알리며_거부한다() {
+        let text = "가".repeat(MAX_INJECT_UTF16_UNITS + 1);
+        let err = encode_for_injection(&text).unwrap_err();
+        assert!(err.contains("주입 상한"), "{err}");
+        assert!(err.contains("클립보드는 변경되지 않았습니다"), "{err}");
+    }
+
+    #[test]
+    fn 상한_이내_최대_길이는_허용된다() {
+        let text = "a".repeat(MAX_INJECT_UTF16_UNITS);
+        assert_eq!(
+            encode_for_injection(&text).unwrap().len(),
+            MAX_INJECT_UTF16_UNITS
+        );
+    }
+
+    #[test]
+    fn 배치_경계는_서러게이트_쌍을_쪼개지_않는다() {
+        // 홀수 위치마다 쌍이 걸리도록: [BMP, high, low, high, low, ...]
+        let mut units = vec![97u16];
+        for _ in 0..8 {
+            units.extend_from_slice(&[0xD83E, 0xDD80]); // 🦀
         }
+        // 배치 크기 2 → 경계가 쌍 한가운데(97 | D83E, DD80 ...)를 지나가는 구성
+        let ranges = injection_chunks(&units, 2);
+        let mut covered = Vec::new();
+        for range in &ranges {
+            let slice = &units[range.clone()];
+            assert!(
+                !is_high_surrogate(*slice.last().unwrap()) || range.end == units.len(),
+                "배치가 high surrogate로 끝나면 쌍이 쪼개진 것: {range:?}"
+            );
+            assert!(
+                !is_low_surrogate(slice[0]) || range.start == 0,
+                "배치가 low surrogate로 시작하면 쌍이 쪼개진 것: {range:?}"
+            );
+            covered.extend_from_slice(slice);
+        }
+        assert_eq!(covered, units, "배치들을 이어 붙이면 원본과 같아야 한다");
     }
 
     #[test]
-    fn gdi_비트맵만_있고_dib가_없으면_실패한다() {
-        let probes = [FormatProbe::Unreadable(CF_BITMAP)];
-        let err = plan_snapshot(&probes).unwrap_err();
-        assert!(err.contains("복원할 수 없는"), "{err}");
+    fn 배치_크기와_전체_커버리지가_유지된다() {
+        let units: Vec<u16> = (0..1000).map(|i| 97 + (i % 26) as u16).collect();
+        let ranges = injection_chunks(&units, INJECT_CHUNK_UNITS);
+        assert!(ranges.iter().all(|r| r.len() <= INJECT_CHUNK_UNITS));
+        assert_eq!(ranges.iter().map(std::ops::Range::len).sum::<usize>(), 1000);
+        assert_eq!(ranges.first().unwrap().start, 0);
+        assert_eq!(ranges.last().unwrap().end, 1000);
     }
 
     #[test]
-    fn 지연_렌더_실패_등_읽지못한_일반_포맷은_실패한다() {
-        let probes = [
-            FormatProbe::Readable(CF_UNICODETEXT, 16),
-            FormatProbe::Unreadable(0xC456), // 읽지 못한 커스텀 포맷
-        ];
-        assert!(plan_snapshot(&probes).is_err());
-    }
-
-    #[test]
-    fn 포맷당_바이트_상한을_넘으면_실패한다() {
-        let probes = [FormatProbe::Readable(0xC789, MAX_SNAPSHOT_FORMAT_BYTES + 1)];
-        let err = plan_snapshot(&probes).unwrap_err();
-        assert!(err.contains("포맷당 상한"), "{err}");
-    }
-
-    #[test]
-    fn 대형_dib는_포맷당_상한을_면제받고_전체_예산_안에서_허용된다() {
-        // 4K 스크린샷 DIB는 16MB를 쉽게 넘는다 — 전체 64MiB 예산 안이면 백업한다.
-        let probes = [
-            FormatProbe::Readable(CF_DIB, 40 * 1024 * 1024),
-            FormatProbe::Readable(CF_UNICODETEXT, 128),
-        ];
-        let plan = plan_snapshot(&probes).unwrap();
-        assert_eq!(plan, vec![CF_DIB, CF_UNICODETEXT]);
-        // CF_DIBV5도 동일하게 면제된다.
-        let probes = [FormatProbe::Readable(
-            CF_DIBV5,
-            MAX_SNAPSHOT_FORMAT_BYTES + 1,
-        )];
-        assert!(plan_snapshot(&probes).is_ok());
-    }
-
-    #[test]
-    fn 대형_dib도_전체_상한은_넘지_못한다() {
-        let probes = [FormatProbe::Readable(CF_DIB, MAX_SNAPSHOT_TOTAL_BYTES + 1)];
-        let err = plan_snapshot(&probes).unwrap_err();
-        assert!(err.contains("전체"), "{err}");
-    }
-
-    #[test]
-    fn 전체_바이트_상한을_넘으면_실패한다() {
-        // 포맷당 상한 이하지만 합계가 전체 상한 초과
-        let per = MAX_SNAPSHOT_FORMAT_BYTES;
-        let count = MAX_SNAPSHOT_TOTAL_BYTES / per + 1;
-        let probes: Vec<FormatProbe> = (0..count as u32)
-            .map(|i| FormatProbe::Readable(0xC000 + i, per))
-            .collect();
-        let err = plan_snapshot(&probes).unwrap_err();
-        assert!(err.contains("전체"), "{err}");
-    }
-
-    #[test]
-    fn 포맷_개수_상한을_넘으면_실패한다() {
-        let probes: Vec<FormatProbe> = (0..MAX_SNAPSHOT_FORMATS as u32 + 1)
-            .map(|i| FormatProbe::Readable(0xC000 + i, 8))
-            .collect();
-        let err = plan_snapshot(&probes).unwrap_err();
-        assert!(err.contains("개"), "{err}");
+    fn 빈_텍스트는_빈_계획이_된다() {
+        assert!(encode_for_injection("").unwrap().is_empty());
+        assert!(injection_chunks(&[], INJECT_CHUNK_UNITS).is_empty());
     }
 
     #[test]
@@ -301,14 +232,5 @@ mod tests {
             &0u32.to_ne_bytes()
         ));
         assert!(!MARKERS_OPT_OUT_ZERO.contains(&"CanUploadToCloudClipboard"));
-    }
-
-    #[test]
-    fn 세대_재검증은_외부_복사를_감지한다() {
-        // 잠금 후 세대가 그대로면 복원 진행, 바뀌었으면(외부 복사) 중단.
-        assert!(generation_still_current(7, 7));
-        assert!(!generation_still_current(7, 8));
-        // 0 = 세대 미지원/무조건 복원 경로 — 검증 생략.
-        assert!(generation_still_current(0, 999));
     }
 }

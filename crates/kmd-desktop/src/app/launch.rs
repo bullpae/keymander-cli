@@ -27,7 +27,7 @@ impl App {
                     {
                         tracing::error!("관리자 실행 실패: {e}");
                     }
-                    return iced::exit();
+                    iced::exit()
                 }
                 #[cfg(not(target_os = "windows"))]
                 {

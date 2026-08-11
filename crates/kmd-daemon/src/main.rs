@@ -8,8 +8,9 @@ mod autostart;
 mod clipboard;
 mod keybind;
 mod server;
-// Windows 클립보드 스냅샷 정책(순수 로직) — 모든 플랫폼에서 컴파일·테스트되고
-// 실제 사용은 clipboard.rs의 cfg(windows) 경로뿐이라 그 외에선 dead_code 허용.
+// Windows 붙여넣기 주입/민감정보 정책(순수 로직) — 모든 플랫폼에서 컴파일·
+// 테스트되고 실제 사용은 clipboard.rs의 cfg(windows) 경로뿐이라 그 외에선
+// dead_code 허용.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod winclip;
 

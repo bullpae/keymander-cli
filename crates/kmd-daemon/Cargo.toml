@@ -30,7 +30,9 @@ arboard = "3.6.1"
 objc2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-# 클립보드 스냅샷/복원 — sequence number 감시, 전체 포맷 백업 (docs/12)
+# 클립보드 감시(읽기 전용) — sequence number + 수집 제외 마커 판정 (docs/12).
+# 붙여넣기는 클립보드를 변형하지 않는 SendInput 유니코드 주입이라 스냅샷/복원
+# 계열 API(DataExchange/Memory)는 쓰지 않는다 (clipboard.rs 설계 불변식).
 clipboard-win = "5.4.1"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
@@ -40,8 +42,4 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     # 훅 워치독의 GetTickCount (훅 생존 하트비트)
     "Win32_System_SystemInformation",
-    # 클립보드 복원 — EnumClipboardFormats 오류 구분 + SetClipboardData 직접 호출
-    "Win32_System_DataExchange",
-    # 복원 핸들 사전 할당 (GlobalAlloc/GMEM_MOVEABLE RAII)
-    "Win32_System_Memory",
 ] }

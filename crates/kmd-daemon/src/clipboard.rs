@@ -6,6 +6,14 @@
 //! 히스토리가 데몬에 사는 이유: 클립보드 감시는 상주 프로세스만 가능하고
 //! 상주 프로세스는 데몬뿐이다 (docs/11 R3 배경).
 //!
+//! 붙여넣기 전략 (설계 불변식):
+//! - **Windows**: 시스템 클립보드를 **변형하지 않는다** — 항목 텍스트를
+//!   SendInput KEYEVENTF_UNICODE 타이핑으로 직접 주입한다. 임시 교체·복원이
+//!   없으므로 "우리 값" 소유권 식별 레이스, 다중 SetClipboardData 부분 실패,
+//!   stale 스냅샷 복원이 **원천 불가능**하다 (근거: winclip.rs 모듈 문서).
+//! - **macOS/기타**: 텍스트 스냅샷 → 교체 → Cmd+V 주입 → "우리 값이 아직
+//!   현재일 때만" 복원 (기존 계약 유지).
+//!
 //! 프라이버시 (키 훅 프로그램의 의무):
 //! - **메모리에만** 산다. 디스크 비저장.
 //! - 1MB 초과 텍스트는 수집 제외 (메모리 보호).
@@ -28,8 +36,9 @@ const MAX_ITEM_BYTES: usize = 1024 * 1024;
 /// 감시 폴링 주기. macOS changeCount / Windows sequence number만 읽는 값싼
 /// 폴링이라 유휴 비용은 무시 가능한 수준 — 클립보드는 변화가 있을 때만 연다.
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-/// 붙여넣기 주입 후 원래 클립보드를 복원하기까지의 지연.
+/// 붙여넣기 주입 후 원래 클립보드를 복원하기까지의 지연 (클립보드 스왑 경로).
 /// 대상 앱이 Cmd+V를 처리할 시간을 준다 (클립보드 관리자 표준 기법).
+#[cfg(not(windows))]
 const RESTORE_DELAY: Duration = Duration::from_millis(300);
 
 /// 히스토리 항목. `id`는 데몬 수명 동안 안정적 — 같은 내용을 다시 복사해
@@ -44,8 +53,8 @@ struct ClipEntry {
 static HISTORY: Mutex<VecDeque<ClipEntry>> = Mutex::new(VecDeque::new());
 /// 안정 ID 발급기. 0은 "ID 없음"(구버전 프로토콜 폴백)으로 예약.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-/// 붙여넣기/복원 직렬화 — 두 요청이 스냅샷·복원을 교차해 클립보드를
-/// 손상하지 않게 한다 (IPC 커넥션 스레드가 여러 개다).
+/// 붙여넣기 직렬화 — 두 요청이 스냅샷·복원(스왑 경로)이나 타이핑 주입을
+/// 교차해 출력을 섞지 않게 한다 (IPC 커넥션 스레드가 여러 개다).
 static PASTE_LOCK: Mutex<()> = Mutex::new(());
 /// 감시 스레드 중복 기동 방지.
 static WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -107,6 +116,57 @@ pub fn len() -> usize {
     HISTORY.lock().map(|h| h.len()).unwrap_or(0)
 }
 
+// ── 감시 상태 기계 (순수 로직 — 레이스 회귀를 실기 없이 테스트) ─────────────
+
+/// 감시 스레드의 지속 상태. 전이는 [`watch_gate`]/[`watch_transition`]만 한다.
+struct WatchState {
+    /// 마지막으로 **소비한** 세대 번호. Busy(일시 잠김)는 소비하지 않아
+    /// 다음 틱에 같은 변화를 재시도한다 (복사 유실 방지).
+    last_generation: isize,
+    /// 마지막으로 기록한 텍스트 (세대 미지원 플랫폼의 diff 폴백 + dedupe).
+    last_text: String,
+}
+
+/// 클립보드를 **열기 전** 게이트: 스왑 주입 중이거나 세대가 그대로면 열지
+/// 않는다. 세대 0은 미지원 폴백 — 항상 열어 diff로 판정한다.
+fn watch_gate(suppressed: bool, generation: isize, last_generation: isize) -> bool {
+    !suppressed && (generation == 0 || generation != last_generation)
+}
+
+/// 게이트 통과 후 클립보드에서 관측한 결과.
+enum WatchRead {
+    /// 비밀번호 관리자 등이 수집 제외로 표시 — 확정 비수집.
+    Concealed,
+    /// 텍스트 읽기 성공.
+    Text(String),
+    /// 다른 앱이 클립보드를 잠깐 쥐고 있는 일시 오류 (arboard Occupied).
+    Busy,
+    /// 텍스트가 없는 클립보드(이미지 등) 등 확정 실패.
+    NoText,
+}
+
+/// 관측 결과 하나로 상태를 전이하고, 기록할 텍스트를 돌려준다 (순수).
+/// Busy만 세대를 소비하지 않는다 — 나머지는 확정 판정이라 소비해, 같은
+/// 내용에 매 폴링 클립보드를 다시 열지 않는다.
+fn watch_transition(state: &mut WatchState, generation: isize, read: WatchRead) -> Option<String> {
+    match read {
+        WatchRead::Busy => None,
+        WatchRead::Concealed | WatchRead::NoText => {
+            state.last_generation = generation;
+            None
+        }
+        WatchRead::Text(text) => {
+            state.last_generation = generation;
+            if !text.is_empty() && text != state.last_text {
+                state.last_text = text.clone();
+                Some(text)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 클립보드 감시 스레드 시작 — 변화가 있을 때만 읽어 수집한다.
 /// `enabled`가 false면 아무것도 하지 않는다 (opt-in). 중복 호출은 무시.
 pub fn spawn_watcher(enabled: bool, history_size: usize) {
@@ -131,12 +191,14 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
         // 실제 변화만 감지한다 — get_text를 매 폴링마다 부르면 클립보드를 계속
         // 열어 다른 클립보드 관리자·복사 중인 앱과 경합하고 비용도 크다.
         // 세대 번호가 없는 플랫폼(change_count=0)은 get_text diff로 폴백한다.
-        let mut last_change = platform::change_count();
-        let mut last_text = String::new();
+        let mut state = WatchState {
+            last_generation: platform::change_count(),
+            last_text: String::new(),
+        };
         if !platform::is_concealed() {
             if let Ok(t) = board.get_text() {
                 record(t.clone()); // 시작 시점 클립보드는 "직전 항목"
-                last_text = t;
+                state.last_text = t;
             }
         }
         tracing::info!(
@@ -146,45 +208,32 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
 
         loop {
             std::thread::sleep(POLL_INTERVAL);
-            // 우리가 붙여넣기 위해 클립보드를 스왑하는 동안엔 수집을 멈춘다
-            // (스왑한 슬롯 내용이 "새 복사"로 잡혀 순서가 흐트러지는 것 방지).
-            if SUPPRESS_CAPTURE.load(Ordering::Relaxed) {
+            let generation = platform::change_count();
+            if !watch_gate(
+                SUPPRESS_CAPTURE.load(Ordering::Relaxed),
+                generation,
+                state.last_generation,
+            ) {
                 continue;
             }
-            // 세대 번호가 그대로면 변화 없음 — 클립보드를 열지 않는다.
-            // 세대 번호 미지원(0)이면 이 가드를 통과해 diff로 판정.
-            let cc = platform::change_count();
-            if cc != 0 && cc == last_change {
-                continue;
-            }
-            // 비밀번호 관리자 등이 수집 제외로 표시한 항목은 수집하지 않는다.
-            // (확정 판정이므로 세대를 소비한다.)
-            if platform::is_concealed() {
-                last_change = cc;
-                continue;
-            }
-            match board.get_text() {
-                Ok(cur) => {
-                    last_change = cc;
-                    if cur != last_text && !cur.is_empty() {
-                        record(cur.clone());
-                        last_text = cur;
-                    }
+            let read = if platform::is_concealed() {
+                WatchRead::Concealed
+            } else {
+                match board.get_text() {
+                    Ok(text) => WatchRead::Text(text),
+                    Err(arboard::Error::ClipboardOccupied) => WatchRead::Busy,
+                    Err(_) => WatchRead::NoText,
                 }
-                // 다른 앱이 클립보드를 잠깐 쥐고 있는 일시 오류 — 세대를
-                // 소비하지 않고 다음 폴링에서 재시도한다 (복사 유실 방지).
-                Err(arboard::Error::ClipboardOccupied) => {}
-                // 텍스트가 없는 클립보드(이미지 등) 등 확정 실패 — 세대를
-                // 소비해 같은 내용에 매 폴링 클립보드를 다시 열지 않는다.
-                Err(_) => {
-                    last_change = cc;
-                }
+            };
+            if let Some(text) = watch_transition(&mut state, generation, read) {
+                record(text);
             }
         }
     });
 }
 
-/// 붙여넣기 주입 동안 수집을 멈추는 플래그 (슬롯 스왑이 새 복사로 잡히지 않게).
+/// 스왑 주입(비-Windows) 동안 수집을 멈추는 플래그 — 슬롯 스왑이 새 복사로
+/// 잡히지 않게. Windows 타이핑 주입은 클립보드를 안 바꾸므로 세울 일이 없다.
 static SUPPRESS_CAPTURE: AtomicBool = AtomicBool::new(false);
 
 /// 런처를 열기 직전의 전경 앱 대상 (macOS PID / Windows HWND, docs/12 흐름 B).
@@ -253,9 +302,11 @@ pub fn paste_item(id: u64, to_previous: bool) -> Result<(), String> {
     paste_impl(entry, to_previous)
 }
 
-/// 복원 판단: 우리가 넣은 임시 값이 **여전히 현재 클립보드일 때만** 복원한다.
-/// 그 사이 사용자/다른 앱이 복사했다면 덮어쓰지 않는다 (사용자 데이터 보호).
-/// 세대 번호가 있으면(swap≠0) 세대 비교, 없으면 텍스트 일치로 판정한다.
+/// 복원 판단 (클립보드 스왑 경로): 우리가 넣은 임시 값이 **여전히 현재
+/// 클립보드일 때만** 복원한다. 그 사이 사용자/다른 앱이 복사했다면 덮어쓰지
+/// 않는다 (사용자 데이터 보호). 세대 번호가 있으면(swap≠0) 세대 비교,
+/// 없으면 텍스트 일치로 판정한다.
+#[cfg(not(windows))]
 fn should_restore(
     swap_generation: isize,
     current_generation: isize,
@@ -271,11 +322,13 @@ fn should_restore(
 /// 슬롯/ID 붙여넣기 공통 구현.
 /// `to_previous`면 먼저 이전 전경 앱으로 포커스를 되돌린다.
 ///
-/// 1) (선택) 이전 앱 활성화 → 2) 현재 클립보드 스냅샷(실패 시 **중단** — 원본을
-///    파괴하지 않는다) → 3) 항목 텍스트로 교체 → 4) Cmd+V/Ctrl+V 주입 →
-///    5) 우리 값이 아직 현재일 때만 복원. 스왑 구간엔 수집을 멈춘다.
+/// 플랫폼 전략 (모듈 문서의 설계 불변식):
+/// - Windows: 클립보드 무변형 타이핑 주입 — `platform::paste_text`.
+/// - macOS/기타: 스냅샷(실패 시 **중단** — 원본을 파괴하지 않는다) → 교체 →
+///   Cmd+V → 우리 값이 아직 현재일 때만 복원. 스왑 구간엔 수집을 멈춘다.
 ///
-/// **액션 워커/커넥션 스레드에서 호출** — RESTORE_DELAY 만큼 블로킹한다.
+/// **액션 워커/커넥션 스레드에서 호출** — macOS는 RESTORE_DELAY(300ms),
+/// Windows는 텍스트 길이에 비례한 주입 시간만큼 블로킹한다.
 fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
     let _guard = PASTE_LOCK
         .lock()
@@ -291,18 +344,29 @@ fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
         }
     }
 
-    // 스냅샷 실패 = 원본을 손실 없이 복원할 수 없음 → 붙여넣기 자체를 포기한다.
-    // (사용자의 클립보드가 그대로 남으므로 수동 Ctrl+V로 항상 복구 가능.)
+    #[cfg(windows)]
+    let result = platform::paste_text(&entry.text);
+    #[cfg(not(windows))]
+    let result = paste_via_swap(&entry);
+    result
+}
+
+/// 클립보드 스왑 경로 (비-Windows): 스냅샷 실패 = 원본을 손실 없이 복원할 수
+/// 없음 → 붙여넣기 자체를 포기한다. (사용자의 클립보드가 그대로 남으므로
+/// 수동 Cmd+V로 항상 복구 가능.)
+#[cfg(not(windows))]
+fn paste_via_swap(entry: &ClipEntry) -> Result<(), String> {
     let saved = platform::snapshot().map_err(|e| format!("클립보드 백업 실패로 중단: {e}"))?;
     let mut board = arboard::Clipboard::new().map_err(|e| format!("클립보드 접근 실패: {e}"))?;
 
     SUPPRESS_CAPTURE.store(true, Ordering::Relaxed);
-    let result = paste_swap(&mut board, &entry, saved);
+    let result = paste_swap(&mut board, entry, saved);
     SUPPRESS_CAPTURE.store(false, Ordering::Relaxed);
     result
 }
 
-/// 스왑→주입→조건부 복원. SUPPRESS_CAPTURE 해제를 위해 paste_impl에서 분리.
+/// 스왑→주입→조건부 복원. SUPPRESS_CAPTURE 해제를 위해 paste_via_swap에서 분리.
+#[cfg(not(windows))]
 fn paste_swap(
     board: &mut arboard::Clipboard,
     entry: &ClipEntry,
@@ -313,7 +377,7 @@ fn paste_swap(
     if let Err(e) = board.set_text(&entry.text) {
         return Err(swap_failure_message(
             &e.to_string(),
-            platform::restore(saved, 0),
+            platform::restore(saved),
         ));
     }
     // 우리 스왑 직후의 세대 번호 — 복원 시점에 이 값이면 "그 사이 아무도 안 씀".
@@ -330,15 +394,7 @@ fn paste_swap(
         platform::change_count(),
         injected_text_matches,
     ) {
-        // Windows는 클립보드 잠금 후 세대를 다시 검증한다 — 위 판정과 잠금
-        // 사이(TOCTOU)에 끼어든 외부 복사를 덮어쓰지 않는다. false = 생략.
-        match platform::restore(saved, swap_generation) {
-            Ok(true) => {}
-            Ok(false) => {
-                tracing::info!("복원 직전 클립보드가 바뀜 — 복원 생략 (새 복사 보존)");
-            }
-            Err(e) => return Err(format!("기존 클립보드 복원 실패: {e}")),
-        }
+        platform::restore(saved).map_err(|e| format!("기존 클립보드 복원 실패: {e}"))?;
     } else {
         tracing::info!("붙여넣기 후 클립보드가 이미 바뀜 — 복원 생략 (새 복사 보존)");
     }
@@ -347,9 +403,10 @@ fn paste_swap(
 
 /// set 실패 시 원본 복원까지 시도한 결과를 하나의 에러로 합친다 — 호출자/사용자가
 /// "내 클립보드 원본이 살아있는가"를 알 수 있어야 한다 (실패 원자성 보고).
-fn swap_failure_message(set_error: &str, restore_result: Result<bool, String>) -> String {
+#[cfg(not(windows))]
+fn swap_failure_message(set_error: &str, restore_result: Result<(), String>) -> String {
     match restore_result {
-        Ok(_) => format!("클립보드 세팅 실패: {set_error} (원본은 복원됨)"),
+        Ok(()) => format!("클립보드 세팅 실패: {set_error} (원본은 복원됨)"),
         Err(restore_error) => {
             format!("클립보드 세팅 실패: {set_error}; 원본 복원도 실패: {restore_error}")
         }
@@ -382,14 +439,14 @@ mod platform {
     }
 
     /// 백업 복원. None 스냅샷은 아무것도 하지 않는다 (기존 동작과 동일).
-    /// NSPasteboard엔 잠금이 없어 세대 재검증 없이 복원한다 — 호출부의
-    /// should_restore 사전 판정이 전부다. 항상 Ok(true)(복원 수행) 반환.
-    pub fn restore(snapshot: Snapshot, _expected_generation: isize) -> Result<bool, String> {
+    /// NSPasteboard엔 잠금이 없어 잠금 후 재검증이 불가능하다 — 호출부의
+    /// should_restore 사전 판정이 전부다.
+    pub fn restore(snapshot: Snapshot) -> Result<(), String> {
         if let Some(text) = snapshot.text {
             let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             board.set_text(text).map_err(|e| e.to_string())?;
         }
-        Ok(true)
+        Ok(())
     }
 
     /// `[[NSPasteboard generalPasteboard] changeCount]`. 실패 시 0.
@@ -474,30 +531,20 @@ mod platform {
     }
 }
 
-// ── Windows 클립보드 ────────────────────────────────────────────────────────
+// ── Windows ─────────────────────────────────────────────────────────────────
 //
 // 감시는 GetClipboardSequenceNumber(클립보드를 열지 않는 세대 번호)로 변화를
-// 감지하고, 변화가 있을 때만 연다. 붙여넣기 전 백업은 HGLOBAL 기반 포맷 전부를
-// 상한(crate::winclip) 안에서 바이트 복사한다 — 텍스트/DIB 이미지/파일 목록
-// (CF_HDROP)/커스텀 등록 포맷 보존. GDI 핸들 포맷은 DIB가 있으면 재합성에
-// 맡기고, 그마저 없으면 붙여넣기를 중단해 원본을 지킨다 (fail-safe).
+// 감지하고, 변화가 있을 때만 연다 (읽기 전용). 붙여넣기는 클립보드를 **읽지도
+// 쓰지도 않는다** — SendInput KEYEVENTF_UNICODE 타이핑 주입 (설계 불변식은
+// winclip.rs 모듈 문서). 스냅샷/복원 경로가 없으므로 SetClipboardData·
+// HGLOBAL 수명·WM_DESTROYCLIPBOARD 관련 코드도 존재하지 않는다.
 #[cfg(windows)]
 mod platform {
     use crate::winclip;
     use clipboard_win::{raw, Clipboard};
-    use windows_sys::Win32::Foundation::{
-        GetLastError, GlobalFree, SetLastError, ERROR_SUCCESS, HGLOBAL,
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
     };
-    use windows_sys::Win32::System::DataExchange::{EnumClipboardFormats, SetClipboardData};
-    use windows_sys::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
-    };
-
-    /// 전체 포맷 바이트 스냅샷.
-    #[derive(Debug)]
-    pub struct Snapshot {
-        formats: Vec<(u32, Vec<u8>)>,
-    }
 
     /// GetClipboardSequenceNumber — 클립보드를 열지 않고 읽는 세대 번호.
     /// 권한 없는 세션 등 실패 시 0 (호출부가 텍스트 diff로 폴백).
@@ -515,11 +562,10 @@ mod platform {
                 return true;
             }
         }
-        let value_markers: Vec<u32> = winclip::MARKERS_OPT_OUT_ZERO
+        let value_markers: Vec<(&str, u32)> = winclip::MARKERS_OPT_OUT_ZERO
             .iter()
-            .filter_map(|name| clipboard_win::register_format(name))
-            .map(|f| f.get())
-            .filter(|f| clipboard_win::is_format_avail(*f))
+            .filter_map(|name| clipboard_win::register_format(name).map(|f| (*name, f.get())))
+            .filter(|(_, f)| clipboard_win::is_format_avail(*f))
             .collect();
         if value_markers.is_empty() {
             return false;
@@ -527,10 +573,11 @@ mod platform {
         let Ok(_clip) = Clipboard::new_attempts(5) else {
             return true;
         };
-        for format in value_markers {
+        for (name, format) in value_markers {
             let mut data = Vec::new();
             match raw::get_vec(format, &mut data) {
-                Ok(_) if data.len() >= 4 && !winclip::opt_out_value_is_exclusion(&data) => {}
+                // 판정은 winclip::format_is_sensitive 단일 정책을 따른다.
+                Ok(_) if data.len() >= 4 && !winclip::format_is_sensitive(name, &data) => {}
                 // 값이 0(제외) 또는 못 읽음/형식 이상 → 보수적으로 제외
                 _ => return true,
             }
@@ -560,121 +607,77 @@ mod platform {
         }
     }
 
-    /// EnumClipboardFormats로 전체 포맷을 나열한다 (클립보드를 연 상태에서 호출).
-    /// 반환값 0은 "정상 끝"과 "오류"가 겹치므로 GetLastError로 구분한다 — 오류를
-    /// 정상 종료로 오인하면 일부 포맷이 빠진 스냅샷을 원본으로 믿고 덮어쓴다.
-    fn enum_formats_checked() -> Result<Vec<u32>, String> {
-        let mut formats = Vec::new();
-        unsafe {
-            SetLastError(ERROR_SUCCESS);
-            let mut format = EnumClipboardFormats(0);
-            while format != 0 {
-                formats.push(format);
-                format = EnumClipboardFormats(format);
-            }
-            let err = GetLastError();
-            if err != ERROR_SUCCESS {
-                return Err(format!("클립보드 포맷 나열 실패 (Win32 오류 {err})"));
-            }
-        }
-        Ok(formats)
-    }
-
-    /// GlobalAlloc(GMEM_MOVEABLE) 핸들 RAII — SetClipboardData로 소유권이
-    /// 시스템에 넘어가기 전까지 drop 시 GlobalFree로 해제한다 (누수 방지).
-    struct HGlobalGuard(HGLOBAL);
-
-    impl HGlobalGuard {
-        /// data 사본을 담은 GMEM_MOVEABLE 핸들을 할당한다.
-        fn alloc_copy(data: &[u8]) -> Result<Self, String> {
-            unsafe {
-                let handle = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1));
-                if handle.is_null() {
-                    return Err(format!("GlobalAlloc({}바이트) 실패", data.len()));
-                }
-                let guard = Self(handle);
-                let ptr = GlobalLock(handle);
-                if ptr.is_null() {
-                    return Err("GlobalLock 실패".to_string());
-                }
-                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
-                GlobalUnlock(handle);
-                Ok(guard)
-            }
-        }
-    }
-
-    impl Drop for HGlobalGuard {
-        fn drop(&mut self) {
-            unsafe { GlobalFree(self.0) };
-        }
-    }
-
-    /// 현재 클립보드의 모든 보존 가능 포맷을 상한 안에서 백업한다.
-    /// 상한 초과·복원 불가 포맷·나열/읽기 실패는 Err — 호출부가 붙여넣기를 중단한다.
-    pub fn snapshot() -> Result<Snapshot, String> {
-        let _clip = Clipboard::new_attempts(10).map_err(|e| format!("클립보드 열기 실패: {e}"))?;
-        let mut probes = Vec::new();
-        for format in enum_formats_checked()? {
-            if winclip::is_gdi_or_owner_format(format) {
-                probes.push(winclip::FormatProbe::Unreadable(format));
-                continue;
-            }
-            // 크기를 먼저 관측해 상한 검사를 통과한 포맷만 실제로 복사한다
-            // (거대 데이터를 읽어놓고 버리는 일이 없게).
-            match raw::size(format) {
-                Some(size) => probes.push(winclip::FormatProbe::Readable(format, size.get())),
-                None => probes.push(winclip::FormatProbe::Unreadable(format)),
-            }
-        }
-        let plan = winclip::plan_snapshot(&probes)?;
-        let mut formats = Vec::with_capacity(plan.len());
-        for format in plan {
-            let mut data = Vec::new();
-            raw::get_vec(format, &mut data)
-                .map_err(|e| format!("클립보드 포맷 {format} 읽기 실패: {e}"))?;
-            formats.push((format, data));
-        }
-        Ok(Snapshot { formats })
-    }
-
-    /// 백업을 되돌린다. 빈 스냅샷은 빈 클립보드로 복원.
+    /// 항목 텍스트를 KEYEVENTF_UNICODE 타이핑으로 전경 앱에 직접 주입한다.
     ///
-    /// 실패 원자성: EmptyClipboard **전에** 모든 핸들을 먼저 할당해, 할당 실패가
-    /// 비워진 클립보드를 남기지 않는다 (실패 시 원본이 그대로 남는다).
-    /// TOCTOU 제거: 잠금(OpenClipboard) 후 세대 번호를 재검증한다 — 잠금을 쥔
-    /// 동안엔 다른 프로세스가 클립보드를 못 바꾸므로 이 비교가 최종 판정이다.
-    /// 그 사이 외부 복사가 있었으면 Ok(false)(복원 생략)로 새 복사를 보존한다.
-    pub fn restore(snapshot: Snapshot, expected_generation: isize) -> Result<bool, String> {
-        let mut staged = Vec::with_capacity(snapshot.formats.len());
-        for (format, data) in &snapshot.formats {
-            let guard = HGlobalGuard::alloc_copy(data)
-                .map_err(|e| format!("클립보드 포맷 {format} 복원 준비 실패: {e}"))?;
-            staged.push((*format, guard));
+    /// 시스템 클립보드는 읽지도 쓰지도 않는다 — 원본(이미지·파일·커스텀 포맷
+    /// 전부)이 그대로 남아 부분 소실·소유권 레이스가 원천 불가능하다.
+    /// 우리 훅은 LLKHF_INJECTED로 주입 이벤트를 통과시키므로 되먹임도 없다.
+    /// 길이·호환 한계는 `winclip::encode_for_injection` 문서 참고.
+    pub fn paste_text(text: &str) -> Result<(), String> {
+        let units = winclip::encode_for_injection(text)?;
+        for range in winclip::injection_chunks(&units, winclip::INJECT_CHUNK_UNITS) {
+            let inputs = build_unicode_inputs(&units[range]);
+            let sent = unsafe {
+                SendInput(
+                    inputs.len() as u32,
+                    inputs.as_ptr(),
+                    std::mem::size_of::<INPUT>() as i32,
+                )
+            };
+            if sent != inputs.len() as u32 {
+                // UIPI 차단 등 — 이미 보낸 문자는 회수 불가지만 클립보드는 무변형.
+                return Err(format!(
+                    "유니코드 주입이 이벤트 {}개 중 {sent}개에서 중단됐습니다 — \
+                     클립보드는 변경되지 않았습니다",
+                    inputs.len()
+                ));
+            }
+            // 배치 사이 양보 — 대상 앱 메시지 큐가 소화할 시간을 주고
+            // CPU 포화를 피한다 (키 훅 중 CPU 포화 금지 수칙).
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        Ok(())
+    }
 
-        let _clip = Clipboard::new_attempts(10).map_err(|e| format!("클립보드 열기 실패: {e}"))?;
-        if !winclip::generation_still_current(expected_generation, change_count()) {
-            return Ok(false);
-        }
-
-        raw::empty().map_err(|e| format!("클립보드 비우기 실패: {e}"))?;
-        let mut failed: Vec<u32> = Vec::new();
-        for (format, guard) in staged {
-            // SetClipboardData 성공 시 핸들 소유권은 시스템으로 넘어간다 —
-            // guard를 잊어 이중 해제를 막는다. 실패한 핸들만 drop으로 해제.
-            let set = unsafe { SetClipboardData(format, guard.0) };
-            if set.is_null() {
-                failed.push(format);
-            } else {
-                std::mem::forget(guard);
+    /// code unit들을 down/up INPUT 쌍으로 변환. wVk=0 + KEYEVENTF_UNICODE →
+    /// VK_PACKET 경유로 대상 앱에 WM_CHAR가 전달된다.
+    fn build_unicode_inputs(units: &[u16]) -> Vec<INPUT> {
+        let mut inputs = Vec::with_capacity(units.len() * 2);
+        for &unit in units {
+            for flags in [KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP] {
+                let mut input: INPUT = unsafe { std::mem::zeroed() };
+                input.r#type = INPUT_KEYBOARD;
+                input.Anonymous.ki.wScan = unit;
+                input.Anonymous.ki.dwFlags = flags;
+                inputs.push(input);
             }
         }
-        if failed.is_empty() {
-            Ok(true)
-        } else {
-            // 내용 없이 포맷 ID만 보고한다 (프라이버시).
-            Err(format!("클립보드 포맷 복원 실패: {failed:?}"))
+        inputs
+    }
+
+    // Windows 전용 테스트 — 크로스 체크(cargo check --tests --target
+    // x86_64-pc-windows-msvc)로 컴파일이 검증되고, Windows에서 실행된다.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn 유니코드_input은_유닛당_down_up_쌍이고_vk를_쓰지_않는다() {
+            let units: Vec<u16> = "한a🦀".encode_utf16().collect();
+            let inputs = build_unicode_inputs(&units);
+            assert_eq!(inputs.len(), units.len() * 2);
+            for (i, input) in inputs.iter().enumerate() {
+                assert_eq!(input.r#type, INPUT_KEYBOARD);
+                let ki = unsafe { input.Anonymous.ki };
+                assert_eq!(ki.wVk, 0, "VK_PACKET 경유 — 가상 키를 지정하지 않는다");
+                assert_eq!(ki.wScan, units[i / 2]);
+                assert_eq!(ki.dwFlags & KEYEVENTF_UNICODE, KEYEVENTF_UNICODE);
+                assert_eq!(
+                    ki.dwFlags & KEYEVENTF_KEYUP != 0,
+                    i % 2 == 1,
+                    "짝수 = down, 홀수 = up"
+                );
+            }
         }
     }
 }
@@ -695,12 +698,12 @@ mod platform {
         })
     }
 
-    pub fn restore(snapshot: Snapshot, _expected_generation: isize) -> Result<bool, String> {
+    pub fn restore(snapshot: Snapshot) -> Result<(), String> {
         if let Some(text) = snapshot.text {
             let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             board.set_text(text).map_err(|e| e.to_string())?;
         }
-        Ok(true)
+        Ok(())
     }
 
     pub fn change_count() -> isize {
@@ -815,16 +818,18 @@ mod tests {
         assert!(paste_item(u64::MAX, false).is_err());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn set_실패_보고는_원본_생존_여부를_담는다() {
         // 실패 원자성: set 실패 시 즉시 복원을 시도하고, 사용자가 "원본이
         // 살아있는가"를 에러 메시지에서 알 수 있어야 한다.
-        let restored = swap_failure_message("잠김", Ok(true));
+        let restored = swap_failure_message("잠김", Ok(()));
         assert!(restored.contains("원본은 복원됨"), "{restored}");
         let lost = swap_failure_message("잠김", Err("열기 실패".into()));
         assert!(lost.contains("원본 복원도 실패"), "{lost}");
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn 복원은_우리가_넣은_값이_현재일_때만_한다() {
         // 세대 번호 지원: 세대가 그대로면 복원, 바뀌었으면(외부 복사) 생략
@@ -833,5 +838,94 @@ mod tests {
         // 세대 번호 미지원(0): 텍스트 일치로 판정
         assert!(should_restore(0, 0, true));
         assert!(!should_restore(0, 0, false));
+    }
+
+    // ── 감시 상태 기계 (레이스 시나리오를 순수 로직으로 재현) ───────────────
+
+    #[test]
+    fn 감시_게이트는_세대가_그대로면_클립보드를_열지_않는다() {
+        assert!(!watch_gate(false, 5, 5), "변화 없음 → 열지 않음");
+        assert!(watch_gate(false, 6, 5), "세대 변화 → 연다");
+        assert!(watch_gate(false, 0, 0), "세대 미지원(0) → 항상 열어 diff");
+    }
+
+    #[test]
+    fn 감시_게이트는_스왑_주입_중이면_열지_않는다() {
+        // 스왑 경로가 클립보드를 바꾸는 동안엔 세대가 변해도 수집하지 않는다
+        // (우리가 넣은 임시 값이 "새 복사"로 잡히는 것 방지).
+        assert!(!watch_gate(true, 6, 5));
+        assert!(!watch_gate(true, 0, 0));
+    }
+
+    #[test]
+    fn 감시_busy는_세대를_소비하지_않아_다음_틱에_재시도한다() {
+        // 레이스: 외부 복사(세대 6) 직후 복사 주체가 클립보드를 아직 쥐고 있어
+        // 첫 시도는 Busy — 세대를 소비하면 이 복사를 영영 잃는다.
+        let mut state = WatchState {
+            last_generation: 5,
+            last_text: String::new(),
+        };
+        assert_eq!(watch_transition(&mut state, 6, WatchRead::Busy), None);
+        assert_eq!(state.last_generation, 5, "Busy는 세대 미소비");
+        // 다음 틱: 세대는 여전히 6 → 게이트 통과 → 이번엔 읽기 성공 → 기록.
+        assert!(watch_gate(false, 6, state.last_generation));
+        assert_eq!(
+            watch_transition(&mut state, 6, WatchRead::Text("복사본".into())).as_deref(),
+            Some("복사본")
+        );
+        assert_eq!(state.last_generation, 6);
+        // 그 다음 틱: 변화 없음 → 게이트가 닫힌다 (클립보드 재열기 없음).
+        assert!(!watch_gate(false, 6, state.last_generation));
+    }
+
+    #[test]
+    fn 감시_민감_항목과_비텍스트는_세대를_소비하고_기록하지_않는다() {
+        let mut state = WatchState {
+            last_generation: 5,
+            last_text: String::new(),
+        };
+        assert_eq!(watch_transition(&mut state, 6, WatchRead::Concealed), None);
+        assert_eq!(state.last_generation, 6, "확정 비수집 → 세대 소비");
+        assert_eq!(watch_transition(&mut state, 7, WatchRead::NoText), None);
+        assert_eq!(state.last_generation, 7, "이미지 등 비텍스트 → 세대 소비");
+        assert!(
+            !watch_gate(false, 7, state.last_generation),
+            "같은 내용에 매 폴링 클립보드를 다시 열지 않는다"
+        );
+    }
+
+    #[test]
+    fn 감시_세대_미지원_플랫폼은_텍스트_diff로_중복을_거른다() {
+        let mut state = WatchState {
+            last_generation: 0,
+            last_text: String::new(),
+        };
+        assert_eq!(
+            watch_transition(&mut state, 0, WatchRead::Text("a".into())).as_deref(),
+            Some("a")
+        );
+        // 게이트는 늘 통과하지만(세대 0) 같은 텍스트는 기록하지 않는다.
+        assert!(watch_gate(false, 0, state.last_generation));
+        assert_eq!(
+            watch_transition(&mut state, 0, WatchRead::Text("a".into())),
+            None
+        );
+        assert_eq!(
+            watch_transition(&mut state, 0, WatchRead::Text("b".into())).as_deref(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn 감시_빈_텍스트는_기록하지_않는다() {
+        let mut state = WatchState {
+            last_generation: 1,
+            last_text: "이전".into(),
+        };
+        assert_eq!(
+            watch_transition(&mut state, 2, WatchRead::Text(String::new())),
+            None
+        );
+        assert_eq!(state.last_generation, 2);
     }
 }

@@ -461,8 +461,9 @@ fn process_request(
         }
 
         Request::ClipPaste { slot, to_previous } => {
-            // 워커가 아니라 여기서 직접 실행 — RESTORE_DELAY(300ms)만큼 블로킹하나
-            // 이 커넥션 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
+            // 워커가 아니라 여기서 직접 실행 — macOS는 RESTORE_DELAY(300ms),
+            // Windows는 텍스트 길이에 비례한 주입 시간만큼 블로킹하나 이 커넥션
+            // 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
             // 빈 슬롯/스냅샷·주입 실패는 성공으로 위장하지 않고 Error로 알린다.
             match crate::clipboard::paste_slot_checked(slot, to_previous) {
                 Ok(()) => Response::Ok {
