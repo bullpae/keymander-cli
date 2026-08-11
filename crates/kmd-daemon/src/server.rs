@@ -2,13 +2,68 @@
 
 use crate::autostart;
 use crate::keybind::{self, KeybindConfig};
+use fs2::FileExt;
 use kmd_core::ipc::{self, Request, Response, SearchHit};
 use kmd_core::{Config, Index, SearchEngine};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
+
+const DAEMON_LOCK_FILE: &str = "daemon.lock";
+
+/// OS가 프로세스 종료 시 자동으로 해제하는 데몬 단일 인스턴스 잠금.
+///
+/// 잠금 파일 자체는 지우지 않는다. 잠금을 쥔 채 파일을 지우면 새 프로세스가
+/// 같은 경로에 다른 inode를 만들어 두 프로세스가 서로 다른 파일을 잠글 수 있다.
+struct DaemonInstanceGuard {
+    _file: File,
+}
+
+enum DaemonInstanceAction {
+    Acquired(DaemonInstanceGuard),
+    AlreadyRunning,
+}
+
+fn daemon_lock_path() -> PathBuf {
+    ipc::runtime_dir().join(DAEMON_LOCK_FILE)
+}
+
+/// 파일 생성과 OS 배타 잠금을 한 단계로 묶어 동시 기동의 check-then-start
+/// 레이스를 없앤다. 프로세스가 비정상 종료해도 파일 핸들이 닫히며 잠금은
+/// 자동 해제되므로 남은 daemon.lock 파일은 다음 기동을 막지 않는다.
+fn acquire_daemon_instance() -> color_eyre::Result<DaemonInstanceAction> {
+    std::fs::create_dir_all(ipc::runtime_dir())?;
+    let path = daemon_lock_path();
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            // 잠금 소유자만 진단용 PID를 갱신한다. 실패해도 잠금 자체는 유효하다.
+            use std::io::{Seek, SeekFrom};
+            let _ = file.set_len(0);
+            let _ = file.seek(SeekFrom::Start(0));
+            let _ = write!(file, "{}", std::process::id());
+            Ok(DaemonInstanceAction::Acquired(DaemonInstanceGuard {
+                _file: file,
+            }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Ok(DaemonInstanceAction::AlreadyRunning)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 /// 전체 인덱스를 공유 캐시(index.bin/index.json)에 저장
 fn save_full_index_cache(index: &Index) {
@@ -179,16 +234,24 @@ fn spawn_index_refresher(
 
 /// 데몬 메인 루프
 pub fn run() -> color_eyre::Result<()> {
-    // 단일 인스턴스 가드 — 살아 있는 데몬이 이미 있으면 아무것도 건드리지 않고
-    // 종료한다. kmd CLI는 spawn 전에 포트를 확인하지만 launchd·직접 실행
-    // 경로에는 이 가드가 유일하다. 가드가 없으면 두 번째 데몬이 이벤트 탭을
-    // 이중 설치하고(키 이벤트 이중 처리) 포트 파일을 덮어써 원래 데몬이
-    // CLI에서 유령이 된다. Ping 응답(토큰 인증 포함)으로 생존을 판정하므로
-    // 죽은 데몬의 낡은 포트 파일은 통과한다.
+    // Ping 선확인은 두 프로세스가 동시에 통과할 수 있다. OS 배타 잠금을 먼저
+    // 획득해 check→초기화 전체를 직렬화하고 프로세스 수명 동안 보유한다.
+    let _instance_guard = match acquire_daemon_instance()? {
+        DaemonInstanceAction::Acquired(guard) => guard,
+        DaemonInstanceAction::AlreadyRunning => {
+            println!("이미 실행 중인 데몬이 있어 종료합니다.");
+            return Ok(());
+        }
+    };
+
+    // 잠금 도입 전 버전의 살아 있는 데몬과도 공존하지 않는다. 잠금 소유권을
+    // 얻은 뒤 Ping이 실패하면 남은 포트/PID는 죽은 데몬의 stale runtime이므로
+    // 소유자만 정리한다.
     if let Ok(ipc::Response::Pong) = ipc::send_request_result(&ipc::Request::Ping) {
         println!("이미 실행 중인 데몬이 있어 종료합니다.");
         return Ok(());
     }
+    ipc::cleanup_stale_files();
 
     let started_at = Instant::now();
     let shutdown = Arc::new(AtomicBool::new(false));

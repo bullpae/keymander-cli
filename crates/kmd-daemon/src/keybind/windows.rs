@@ -77,7 +77,8 @@ static HOOK_REINSTALL_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// 합성 key-up/마우스 button-up 실패는 성공할 때까지 추적한다. 콜백에서는
 /// 최초 시도와 기록만 하고, 재시도는 워치독/fast worker에서 제한된 묶음으로 한다.
-static PENDING_SYNTHETIC_RELEASES: OnceLock<Mutex<PendingReleases<u16>>> = OnceLock::new();
+static PENDING_SYNTHETIC_RELEASES: OnceLock<Mutex<PendingReleases<SyntheticRelease>>> =
+    OnceLock::new();
 static PENDING_MOUSE_RELEASES: OnceLock<Mutex<PendingReleases<MouseBind>>> = OnceLock::new();
 
 /// 훅 스레드에 재설치를 요청하는 커스텀 메시지.
@@ -167,6 +168,14 @@ struct PendingRelease<T> {
     generation: u64,
 }
 
+/// 재시도해야 할 키보드 해제. 일반 리맵 키는 VK 기반이고, 클립보드 타이핑은
+/// KEYEVENTF_UNICODE의 UTF-16 code unit 기반이라 입력 형식을 함께 보존한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyntheticRelease {
+    VirtualKey(u16),
+    UnicodeUnit(u16),
+}
+
 #[derive(Debug)]
 struct PendingReleases<T> {
     entries: Vec<PendingRelease<T>>,
@@ -239,7 +248,7 @@ fn retry_pending_releases<T: Copy + Eq>(
     completed_items
 }
 
-fn pending_synthetic_releases() -> &'static Mutex<PendingReleases<u16>> {
+fn pending_synthetic_releases() -> &'static Mutex<PendingReleases<SyntheticRelease>> {
     PENDING_SYNTHETIC_RELEASES.get_or_init(|| Mutex::new(PendingReleases::default()))
 }
 
@@ -471,6 +480,16 @@ fn keyboard_input(event: KeyboardEvent) -> INPUT {
     }
 }
 
+fn unicode_key_up_input(unit: u16) -> INPUT {
+    unsafe {
+        let mut input: INPUT = std::mem::zeroed();
+        input.r#type = INPUT_KEYBOARD;
+        input.Anonymous.ki.wScan = unit;
+        input.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        input
+    }
+}
+
 /// SendInput 반환 개수를 항상 검증한다. operation은 고정된 동작 분류만 받고
 /// VK/사용자 입력 내용은 진단에 남기지 않는다.
 fn submit_inputs(inputs: &[INPUT], _operation: &'static str) -> Result<(), SendInputFailure> {
@@ -521,6 +540,20 @@ fn cleanup_events_for_accepted_prefix(
     held.into_iter().rev().map(KeyboardEvent::Up).collect()
 }
 
+fn unaccepted_cleanup_releases(
+    cleanup: &[KeyboardEvent],
+    accepted: usize,
+) -> Vec<SyntheticRelease> {
+    cleanup
+        .iter()
+        .skip(accepted)
+        .filter_map(|event| match *event {
+            KeyboardEvent::Up(vk) => Some(SyntheticRelease::VirtualKey(vk)),
+            KeyboardEvent::Down(_) => None,
+        })
+        .collect()
+}
+
 fn send_keyboard_events(
     events: &[KeyboardEvent],
     operation: &'static str,
@@ -535,33 +568,61 @@ fn send_keyboard_events(
                     cleanup.iter().copied().map(keyboard_input).collect();
                 // 훅 콜백에서는 정리 batch를 한 번만 시도한다. UIPI처럼 주입이
                 // 막힌 상황에서 키마다 재시도하면 LowLevelHooksTimeout을 넘길 수 있다.
-                let _ = submit_inputs(&cleanup_inputs, "부분 실패 수정자 정리");
+                if let Err(cleanup_failure) =
+                    submit_inputs(&cleanup_inputs, "부분 실패 수정자 정리")
+                {
+                    // 정리 batch마저 부분 실패하면 실제 전송되지 않은 up만 기존
+                    // 워치독 재시도 큐로 넘긴다. 즉시 호출의 prefix는 이미
+                    // 해제됐으므로 다시 기록하지 않는다.
+                    let unsent =
+                        unaccepted_cleanup_releases(&cleanup, cleanup_failure.sent as usize);
+                    let mut pending = lock_pending(pending_synthetic_releases());
+                    for release in unsent {
+                        pending.record(release);
+                    }
+                }
             }
             Err(failure)
         }
     }
 }
 
-fn send_key_up(vk: u16) -> Result<(), SendInputFailure> {
-    send_keyboard_events(&[KeyboardEvent::Up(vk)], "키 up")
+fn send_synthetic_release(release: SyntheticRelease) -> Result<(), SendInputFailure> {
+    let input = match release {
+        SyntheticRelease::VirtualKey(vk) => keyboard_input(KeyboardEvent::Up(vk)),
+        SyntheticRelease::UnicodeUnit(unit) => unicode_key_up_input(unit),
+    };
+    submit_inputs(&[input], "키 up")
+}
+
+fn release_synthetic_or_track(release: SyntheticRelease) -> bool {
+    if send_synthetic_release(release).is_ok() {
+        lock_pending(pending_synthetic_releases()).remove(release);
+        true
+    } else {
+        lock_pending(pending_synthetic_releases()).record(release);
+        false
+    }
 }
 
 /// 콜백에서는 key-up을 한 번만 시도하고 실패를 기록한다. 기록된 항목은
 /// 워치독이 성공할 때까지 보존하며 한 주기당 제한된 수만 재시도한다.
 fn release_key_up_or_track(vk: u16) -> bool {
-    if send_key_up(vk).is_ok() {
-        lock_pending(pending_synthetic_releases()).remove(vk);
-        true
-    } else {
-        lock_pending(pending_synthetic_releases()).record(vk);
-        false
-    }
+    release_synthetic_or_track(SyntheticRelease::VirtualKey(vk))
+}
+
+/// 클립보드 유니코드 주입이 down에서 끊겼을 때 대응 up을 즉시 시도하고,
+/// 실패하면 일반 합성 키와 같은 워치독 재시도 큐에 등록한다.
+pub(crate) fn release_unicode_unit_or_track(unit: u16) -> bool {
+    release_synthetic_or_track(SyntheticRelease::UnicodeUnit(unit))
 }
 
 fn retry_pending_synthetic_releases() {
-    retry_pending_releases(pending_synthetic_releases(), RELEASE_RETRY_BATCH, |vk| {
-        send_key_up(vk).is_ok()
-    });
+    retry_pending_releases(
+        pending_synthetic_releases(),
+        RELEASE_RETRY_BATCH,
+        |release| send_synthetic_release(release).is_ok(),
+    );
 }
 
 fn key_press_events(vk: u16) -> [KeyboardEvent; 2] {
@@ -1591,6 +1652,44 @@ mod tests {
             cleanup_events_for_accepted_prefix(&events, events.len()).is_empty(),
             "정상 완료된 batch에는 추가 해제가 없어야 한다"
         );
+    }
+
+    #[test]
+    fn 즉시_정리도_부분_실패하면_전송되지_않은_up을_재시도_대상으로_남긴다() {
+        let cleanup = vec![
+            KeyboardEvent::Up(0x41),
+            KeyboardEvent::Up(VK_LSHIFT),
+            KeyboardEvent::Up(VK_LCONTROL),
+        ];
+        assert_eq!(
+            unaccepted_cleanup_releases(&cleanup, 1),
+            vec![
+                SyntheticRelease::VirtualKey(VK_LSHIFT),
+                SyntheticRelease::VirtualKey(VK_LCONTROL),
+            ],
+            "첫 up만 성공했으면 나머지 두 키는 pending release여야 한다"
+        );
+        assert_eq!(
+            unaccepted_cleanup_releases(&cleanup, 0),
+            vec![
+                SyntheticRelease::VirtualKey(0x41),
+                SyntheticRelease::VirtualKey(VK_LSHIFT),
+                SyntheticRelease::VirtualKey(VK_LCONTROL),
+            ],
+            "정리 호출 전체 실패면 모든 up을 추적해야 한다"
+        );
+    }
+
+    #[test]
+    fn 유니코드_unit_release도_일반_키와_같은_재시도_큐를_사용한다() {
+        let pending = Mutex::new(PendingReleases::default());
+        let release = SyntheticRelease::UnicodeUnit('한' as u16);
+        lock_pending(&pending).record(release);
+
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| false);
+        assert_eq!(lock_pending(&pending).items(), vec![release]);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
     }
 
     #[test]

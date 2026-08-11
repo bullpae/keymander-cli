@@ -334,21 +334,55 @@ fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
         .lock()
         .map_err(|_| "클립보드 동작 잠금이 손상되었습니다".to_string())?;
 
-    if to_previous {
-        let target = PREV_APP_TARGET.load(Ordering::Relaxed);
-        if target != 0 && platform::activate_target(target) {
-            // 앱 전환이 반영될 시간을 준다 (포커스가 도착해야 Cmd+V가 먹는다).
+    paste_after_target_activation(
+        to_previous,
+        PREV_APP_TARGET.load(Ordering::Relaxed),
+        platform::activate_target,
+        || {
+            // 앱 전환이 반영될 시간을 준다 (포커스가 도착해야 주입이 대상에 간다).
             std::thread::sleep(Duration::from_millis(120));
-        } else {
-            tracing::warn!("이전 전경 앱 활성화 실패 (target={target}) — 현재 포커스에 붙여넣기");
-        }
-    }
+        },
+        || {
+            #[cfg(windows)]
+            {
+                platform::paste_text(&entry.text)
+            }
+            #[cfg(not(windows))]
+            {
+                paste_via_swap(&entry)
+            }
+        },
+    )
+}
 
-    #[cfg(windows)]
-    let result = platform::paste_text(&entry.text);
-    #[cfg(not(windows))]
-    let result = paste_via_swap(&entry);
-    result
+/// 이전 앱 대상 붙여넣기의 안전 경계. 대상이 없거나 활성화가 실패하면 현재
+/// 포커스에는 절대 주입하지 않고 즉시 Err를 반환한다.
+///
+/// 활성화·대기·주입을 콜백으로 받아 OS 포커스 없이도 순서와 fail-closed 계약을
+/// 결정적으로 검증한다.
+fn paste_after_target_activation(
+    to_previous: bool,
+    target: isize,
+    activate: impl FnOnce(isize) -> bool,
+    wait_for_focus: impl FnOnce(),
+    paste: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if to_previous {
+        if target == 0 {
+            return Err(
+                "런처를 열기 전 앱을 찾지 못해 붙여넣기를 중단했습니다 — 현재 포커스에는 주입하지 않았습니다"
+                    .to_string(),
+            );
+        }
+        if !activate(target) {
+            return Err(
+                "런처를 열기 전 앱을 활성화하지 못해 붙여넣기를 중단했습니다 — 현재 포커스에는 주입하지 않았습니다"
+                    .to_string(),
+            );
+        }
+        wait_for_focus();
+    }
+    paste()
 }
 
 /// 클립보드 스왑 경로 (비-Windows): 스냅샷 실패 = 원본을 손실 없이 복원할 수
@@ -644,18 +678,14 @@ mod platform {
         let last_error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         let cleanup = match winclip::dangling_down_unit(&units, sent as usize) {
             Some(unit) => {
-                // 홀수에서 끊기면 마지막 이벤트가 짝 없는 key-down — 대상 앱에
-                // 눌린 채 남지 않도록 대응 key-up만 best-effort로 단독 전송한다.
-                let mut up: INPUT = unsafe { std::mem::zeroed() };
-                up.r#type = INPUT_KEYBOARD;
-                up.Anonymous.ki.wScan = unit;
-                up.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-                let cleaned =
-                    unsafe { SendInput(1, &up, std::mem::size_of::<INPUT>() as i32) } == 1;
+                // 홀수에서 끊기면 마지막 이벤트가 짝 없는 key-down이다. 대응
+                // key-up을 즉시 시도하고, 실패하면 키 훅 워치독의 기존 pending
+                // release 큐에 등록해 성공할 때까지 제한적으로 재시도한다.
+                let cleaned = crate::keybind::windows::release_unicode_unit_or_track(unit);
                 if cleaned {
                     "; 짝 잃은 마지막 key-down은 key-up으로 정리했습니다"
                 } else {
-                    "; 짝 잃은 마지막 key-down의 key-up 정리 전송도 실패했습니다"
+                    "; 짝 잃은 마지막 key-down의 key-up 정리 전송도 실패해 재시도 큐에 등록했습니다"
                 }
             }
             None => "",
@@ -761,6 +791,7 @@ mod tests {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         HISTORY.lock().unwrap().clear();
         CAP.store(50, Ordering::Relaxed);
+        PREV_APP_TARGET.store(0, Ordering::Relaxed);
         guard
     }
 
@@ -846,6 +877,74 @@ mod tests {
         // 항목 조회가 클립보드 접근보다 먼저 실패하므로 실제 클립보드를 건드리지 않는다.
         assert!(paste_slot_checked(1, false).is_err());
         assert!(paste_item(u64::MAX, false).is_err());
+    }
+
+    #[test]
+    fn 이전_대상이_없으면_현재_포커스에_주입하지_않는다() {
+        let mut activated = false;
+        let mut pasted = false;
+        let error = paste_after_target_activation(
+            true,
+            0,
+            |_| {
+                activated = true;
+                true
+            },
+            || {},
+            || {
+                pasted = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(!activated, "대상이 없으면 활성화를 시도하지 않는다");
+        assert!(!pasted, "현재 포커스에 텍스트가 주입되면 안 된다");
+        assert!(error.contains("현재 포커스에는 주입하지 않았습니다"));
+    }
+
+    #[test]
+    fn 이전_대상_활성화가_실패하면_주입을_중단한다() {
+        let mut waited = false;
+        let mut pasted = false;
+        let error = paste_after_target_activation(
+            true,
+            42,
+            |target| {
+                assert_eq!(target, 42);
+                false
+            },
+            || waited = true,
+            || {
+                pasted = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(!waited, "활성화 실패 뒤 포커스 대기를 하면 안 된다");
+        assert!(!pasted, "활성화 실패 뒤 현재 포커스에 주입하면 안 된다");
+        assert!(error.contains("활성화하지 못해"));
+    }
+
+    #[test]
+    fn 이전_대상_활성화_성공_뒤에만_대기하고_주입한다() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        paste_after_target_activation(
+            true,
+            42,
+            |_| {
+                steps.borrow_mut().push("activate");
+                true
+            },
+            || steps.borrow_mut().push("wait"),
+            || {
+                steps.borrow_mut().push("paste");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*steps.borrow(), ["activate", "wait", "paste"]);
     }
 
     #[cfg(not(windows))]
