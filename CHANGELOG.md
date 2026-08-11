@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.13.3] — 2026-08-11
+
 ### Added
 - **`kmd daemon e2e` — 키 주입 셀프테스트 (macOS)** — 접근성이 부여된
   실기기에서 마커 없는 합성 키를 HID 위치에 주입해, 데몬의 실제 이벤트 탭
