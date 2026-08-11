@@ -75,6 +75,11 @@ static QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 /// 재설치 실패 뒤에는 훅 프로브를 주입하지 않고 제한된 backoff로 직접 재시도한다.
 static HOOK_REINSTALL_PENDING: AtomicBool = AtomicBool::new(false);
 
+/// 합성 key-up/마우스 button-up 실패는 성공할 때까지 추적한다. 콜백에서는
+/// 최초 시도와 기록만 하고, 재시도는 워치독/fast worker에서 제한된 묶음으로 한다.
+static PENDING_SYNTHETIC_RELEASES: OnceLock<Mutex<PendingReleases<u16>>> = OnceLock::new();
+static PENDING_MOUSE_RELEASES: OnceLock<Mutex<PendingReleases<MouseBind>>> = OnceLock::new();
+
 /// 훅 스레드에 재설치를 요청하는 커스텀 메시지.
 /// LL 훅은 설치한 스레드의 메시지 큐로 디스패치되므로 재설치도 그 스레드에서
 /// 해야 한다 (다른 스레드에서 SetWindowsHookExW를 부르면 훅이 그쪽에 붙는다).
@@ -100,6 +105,11 @@ const PROBE_WAIT_MS: u64 = 120;
 /// 재설치 실패 재시도 backoff. 프로브 입력 없이 메시지만 전송한다.
 const REINSTALL_RETRY_INITIAL_MS: u32 = 2_000;
 const REINSTALL_RETRY_MAX_MS: u32 = 60_000;
+
+/// 한 주기에서 처리하는 release 재시도 수와 fast worker 점검 주기.
+const RELEASE_RETRY_BATCH: usize = 8;
+const STOP_RELEASE_RETRY_PASSES: usize = 3;
+const MOUSE_RELEASE_RETRY_MS: u64 = 25;
 
 /// 훅 콜백 지연 경고 기준. SendInput fast path가 비정상적으로 오래 걸리는지 감시한다.
 const HOOK_LATENCY_WARN_MS: u32 = 20;
@@ -150,6 +160,92 @@ enum FastJob {
 
 static FAST_TX: Mutex<Option<mpsc::Sender<FastJob>>> = Mutex::new(None);
 static SLOW_TX: Mutex<Option<mpsc::Sender<BindAction>>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingRelease<T> {
+    item: T,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct PendingReleases<T> {
+    entries: Vec<PendingRelease<T>>,
+    next_generation: u64,
+}
+
+impl<T> Default for PendingReleases<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_generation: 0,
+        }
+    }
+}
+
+impl<T: Copy + Eq> PendingReleases<T> {
+    fn record(&mut self, item: T) {
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.item == item) {
+            entry.generation = self.next_generation;
+        } else {
+            self.entries.push(PendingRelease {
+                item,
+                generation: self.next_generation,
+            });
+        }
+    }
+
+    fn snapshot(&self, limit: usize) -> Vec<PendingRelease<T>> {
+        self.entries.iter().take(limit).copied().collect()
+    }
+
+    fn complete(&mut self, completed: PendingRelease<T>) -> bool {
+        let Some(pos) = self.entries.iter().position(|entry| *entry == completed) else {
+            return false;
+        };
+        self.entries.remove(pos);
+        true
+    }
+
+    fn remove(&mut self, item: T) {
+        self.entries.retain(|entry| entry.item != item);
+    }
+
+    fn items(&self) -> Vec<T> {
+        self.entries.iter().map(|entry| entry.item).collect()
+    }
+}
+
+fn lock_pending<T>(
+    pending: &Mutex<PendingReleases<T>>,
+) -> std::sync::MutexGuard<'_, PendingReleases<T>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn retry_pending_releases<T: Copy + Eq>(
+    pending: &Mutex<PendingReleases<T>>,
+    limit: usize,
+    mut release: impl FnMut(T) -> bool,
+) -> Vec<T> {
+    let snapshot = lock_pending(pending).snapshot(limit);
+    let mut completed_items = Vec::new();
+    for entry in snapshot {
+        if release(entry.item) && lock_pending(pending).complete(entry) {
+            completed_items.push(entry.item);
+        }
+    }
+    completed_items
+}
+
+fn pending_synthetic_releases() -> &'static Mutex<PendingReleases<u16>> {
+    PENDING_SYNTHETIC_RELEASES.get_or_init(|| Mutex::new(PendingReleases::default()))
+}
+
+fn pending_mouse_releases() -> &'static Mutex<PendingReleases<MouseBind>> {
+    PENDING_MOUSE_RELEASES.get_or_init(|| Mutex::new(PendingReleases::default()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionLane {
@@ -450,6 +546,24 @@ fn send_key_up(vk: u16) -> Result<(), SendInputFailure> {
     send_keyboard_events(&[KeyboardEvent::Up(vk)], "키 up")
 }
 
+/// 콜백에서는 key-up을 한 번만 시도하고 실패를 기록한다. 기록된 항목은
+/// 워치독이 성공할 때까지 보존하며 한 주기당 제한된 수만 재시도한다.
+fn release_key_up_or_track(vk: u16) -> bool {
+    if send_key_up(vk).is_ok() {
+        lock_pending(pending_synthetic_releases()).remove(vk);
+        true
+    } else {
+        lock_pending(pending_synthetic_releases()).record(vk);
+        false
+    }
+}
+
+fn retry_pending_synthetic_releases() {
+    retry_pending_releases(pending_synthetic_releases(), RELEASE_RETRY_BATCH, |vk| {
+        send_key_up(vk).is_ok()
+    });
+}
+
 fn key_press_events(vk: u16) -> [KeyboardEvent; 2] {
     [KeyboardEvent::Down(vk), KeyboardEvent::Up(vk)]
 }
@@ -554,6 +668,23 @@ fn is_mouse_button(bind: MouseBind) -> bool {
         bind,
         MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle
     )
+}
+
+fn release_mouse_button_or_track(bind: MouseBind) -> bool {
+    if send_mouse_button(bind, false).is_ok() {
+        lock_pending(pending_mouse_releases()).remove(bind);
+        true
+    } else {
+        lock_pending(pending_mouse_releases()).record(bind);
+        false
+    }
+}
+
+fn retry_pending_mouse_buttons(pressed_buttons: &mut Vec<MouseBind>) {
+    let completed = retry_pending_releases(pending_mouse_releases(), RELEASE_RETRY_BATCH, |bind| {
+        send_mouse_button(bind, false).is_ok()
+    });
+    pressed_buttons.retain(|bind| !completed.contains(bind));
 }
 
 /// SendInput 기반 [`MouseSink`] — 모션 워커가 틱마다 호출
@@ -792,11 +923,12 @@ unsafe fn keyboard_hook_proc_inner(code: i32, w_param: WPARAM, l_param: LPARAM) 
             deferred_action,
         } => {
             drop(guard);
-            let release_failed = send_key_up(vkey_to_vk(trigger)).is_err();
+            let release_failed = !release_key_up_or_track(vkey_to_vk(trigger));
             if release_failed {
                 // 합성 up 실패 시 물리 trigger up을 전달해 이미 내려간 수정자를
-                // OS가 해제할 마지막 기회를 보존한다. 해제 전 지연 액션 실행은
-                // modifier 간섭을 되살리므로 이번 액션은 실행하지 않는다.
+                // OS가 해제할 기회를 보존한다. tap-hold처럼 물리 키와 합성
+                // modifier가 달라도 워치독이 기록된 합성 up을 계속 재시도한다.
+                // 해제 전 지연 액션은 modifier 간섭을 되살리므로 실행하지 않는다.
                 recover_engine_after_injection_failure();
                 CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
             } else {
@@ -850,7 +982,7 @@ unsafe fn reinstall_hook(hook: &mut HHOOK) -> Result<(), String> {
     if let Some(state) = HOOK_STATE.get() {
         if let Ok(mut guard) = state.lock() {
             if let Some(trigger) = guard.engaged_chord_trigger() {
-                let _ = send_key_up(vkey_to_vk(trigger));
+                release_key_up_or_track(vkey_to_vk(trigger));
             }
             guard.reset_transient_state();
         }
@@ -999,6 +1131,7 @@ fn spawn_hook_watchdog(running: Arc<AtomicBool>) -> std::thread::JoinHandle<()> 
 
             let now = unsafe { GetTickCount() };
             report_hook_diagnostics(&mut diagnostics);
+            retry_pending_synthetic_releases();
 
             // 이미 재설치 실패를 확인한 상태에서는 SendInput 프로브를 다시 쏘지
             // 않는다. 유휴 타이머를 계속 갱신하지 않고 메시지만 backoff 재전송한다.
@@ -1186,45 +1319,61 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         self.fast_worker = Some(std::thread::spawn(move || {
             // 모션 워커(이동/휠 틱 스레드)와 버튼 상태는 fast worker가 소유한다.
             let motion = MouseWorker::start(WinMouseSink);
-            let mut pressed_buttons: Vec<MouseBind> = Vec::new();
+            let mut pressed_buttons = lock_pending(pending_mouse_releases()).items();
 
-            for job in fast_rx {
-                FAST_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
-                match job {
-                    FastJob::Engage(mb) => {
-                        if is_mouse_button(mb) {
-                            if !pressed_buttons.contains(&mb) {
-                                pressed_buttons.push(mb);
-                                let _ = send_mouse_button(mb, true);
+            loop {
+                match fast_rx.recv_timeout(std::time::Duration::from_millis(MOUSE_RELEASE_RETRY_MS))
+                {
+                    Ok(job) => {
+                        FAST_QUEUE_DEPTH.fetch_sub(1, Ordering::Relaxed);
+                        match job {
+                            FastJob::Engage(mb) => {
+                                if is_mouse_button(mb) {
+                                    lock_pending(pending_mouse_releases()).remove(mb);
+                                    if !pressed_buttons.contains(&mb)
+                                        && send_mouse_button(mb, true).is_ok()
+                                    {
+                                        pressed_buttons.push(mb);
+                                    }
+                                } else {
+                                    motion.engage(mb);
+                                }
                             }
-                        } else {
-                            motion.engage(mb);
-                        }
-                    }
-                    FastJob::Release(mb) => {
-                        if is_mouse_button(mb) {
-                            if let Some(pos) = pressed_buttons.iter().position(|&b| b == mb) {
-                                pressed_buttons.remove(pos);
-                                let _ = send_mouse_button(mb, false);
+                            FastJob::Release(mb) => {
+                                if is_mouse_button(mb) {
+                                    if pressed_buttons.contains(&mb)
+                                        && release_mouse_button_or_track(mb)
+                                    {
+                                        pressed_buttons.retain(|&button| button != mb);
+                                    }
+                                } else {
+                                    motion.release(mb);
+                                }
                             }
-                        } else {
-                            motion.release(mb);
+                            FastJob::StopAll => {
+                                motion.stop_all();
+                                for &mb in &pressed_buttons {
+                                    lock_pending(pending_mouse_releases()).record(mb);
+                                }
+                            }
+                            FastJob::Pulse(mb) => {
+                                let _ = execute_mouse_pulse(mb);
+                            }
                         }
+                        retry_pending_mouse_buttons(&mut pressed_buttons);
                     }
-                    FastJob::StopAll => {
-                        motion.stop_all();
-                        for mb in pressed_buttons.drain(..) {
-                            let _ = send_mouse_button(mb, false);
-                        }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        retry_pending_mouse_buttons(&mut pressed_buttons);
                     }
-                    FastJob::Pulse(mb) => {
-                        let _ = execute_mouse_pulse(mb);
-                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            // 종료 정리 — 눌린 버튼 해제 (모션은 MouseWorker Drop이 정지)
-            for mb in pressed_buttons.drain(..) {
-                let _ = send_mouse_button(mb, false);
+            // 종료 정리 — 실패 항목은 전역 추적에 남겨 다음 start에서도 재시도한다.
+            for &mb in &pressed_buttons {
+                lock_pending(pending_mouse_releases()).record(mb);
+            }
+            for _ in 0..STOP_RELEASE_RETRY_PASSES {
+                retry_pending_mouse_buttons(&mut pressed_buttons);
             }
             tracing::debug!("입력 fast worker 종료");
         }));
@@ -1238,6 +1387,8 @@ impl KeyboardBackend for WindowsKeyboardBackend {
 
         let running = self.running.clone();
         running.store(true, Ordering::Relaxed);
+        HOOK_THREAD_ID.store(0, Ordering::SeqCst);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
 
         let thread = std::thread::spawn(move || {
             unsafe {
@@ -1249,11 +1400,14 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 );
 
                 if hook.is_null() {
-                    super::set_hook_error(Some(
-                        "키보드 훅 설치 실패 — SetWindowsHookExW 실패".into(),
-                    ));
+                    let reason = format!(
+                        "키보드 훅 설치 실패 — SetWindowsHookExW 실패: OS 오류={}",
+                        GetLastError()
+                    );
+                    super::set_hook_error(Some(reason.clone()));
                     tracing::error!("SetWindowsHookExW 실패");
                     running.store(false, Ordering::Relaxed);
+                    let _ = ready_tx.send(Err(reason));
                     return;
                 }
 
@@ -1268,6 +1422,7 @@ impl KeyboardBackend for WindowsKeyboardBackend {
                 let mut msg: MSG = std::mem::zeroed();
                 PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
                 HOOK_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
+                let _ = ready_tx.send(Ok(()));
 
                 // 메시지 루프 (훅이 동작하려면 필수).
                 // GetMessageW 블로킹 대기 — 기존 PeekMessageW + 1ms sleep은
@@ -1318,6 +1473,19 @@ impl KeyboardBackend for WindowsKeyboardBackend {
         });
 
         self.thread = Some(thread);
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(reason)) => {
+                let _ = self.stop();
+                return Err(reason);
+            }
+            Err(_) => {
+                let reason = "키보드 훅 준비 신호 수신 실패".to_string();
+                super::set_hook_error(Some(reason.clone()));
+                let _ = self.stop();
+                return Err(reason);
+            }
+        }
         self.watchdog = Some(spawn_hook_watchdog(self.running.clone()));
         Ok(())
     }
@@ -1346,9 +1514,12 @@ impl KeyboardBackend for WindowsKeyboardBackend {
             if let Ok(guard) = state.lock() {
                 if let Some(trigger) = guard.engaged_chord_trigger() {
                     tracing::info!("중지 시 코드 트리거 해제: {trigger:?}");
-                    let _ = send_key_up(vkey_to_vk(trigger));
+                    release_key_up_or_track(vkey_to_vk(trigger));
                 }
             }
+        }
+        for _ in 0..STOP_RELEASE_RETRY_PASSES {
+            retry_pending_synthetic_releases();
         }
         // 센더를 드롭하면 각 worker의 recv 루프가 끝난다.
         if let Ok(mut g) = FAST_TX.lock() {
@@ -1420,6 +1591,54 @@ mod tests {
             cleanup_events_for_accepted_prefix(&events, events.len()).is_empty(),
             "정상 완료된 batch에는 추가 해제가 없어야 한다"
         );
+    }
+
+    #[test]
+    fn 합성_release는_실패하면_추적을_유지하고_성공할_때만_제거한다() {
+        let pending = Mutex::new(PendingReleases::default());
+        lock_pending(&pending).record(VK_LCONTROL);
+
+        let mut attempts = 0;
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| {
+            attempts += 1;
+            false
+        });
+        assert_eq!(attempts, 1);
+        assert_eq!(lock_pending(&pending).items(), vec![VK_LCONTROL]);
+
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
+    }
+
+    #[test]
+    fn release_재시도는_묶음_상한과_재기록_세대를_지킨다() {
+        let pending = Mutex::new(PendingReleases::default());
+        for vk in 1..=(RELEASE_RETRY_BATCH as u16 + 2) {
+            lock_pending(&pending).record(vk);
+        }
+        let stale = lock_pending(&pending).snapshot(1)[0];
+        lock_pending(&pending).record(stale.item);
+        assert!(
+            !lock_pending(&pending).complete(stale),
+            "재시도 중 다시 실패한 release를 오래된 성공이 지우면 안 된다"
+        );
+
+        let mut attempts = 0;
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| {
+            attempts += 1;
+            false
+        });
+        assert_eq!(attempts, RELEASE_RETRY_BATCH);
+    }
+
+    #[test]
+    fn 마우스_release도_성공_전에는_추적에서_제거하지_않는다() {
+        let pending = Mutex::new(PendingReleases::default());
+        lock_pending(&pending).record(MouseBind::BtnLeft);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| false);
+        assert_eq!(lock_pending(&pending).items(), vec![MouseBind::BtnLeft]);
+        retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
+        assert!(lock_pending(&pending).items().is_empty());
     }
 
     #[test]

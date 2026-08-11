@@ -240,10 +240,18 @@ impl EngineState {
     }
 
     /// 어댑터의 합성 입력이 실패했을 때 이미 계산 과정에서 전진한 일시 상태를
-    /// 되돌린다. 특히 실제로 주입되지 않은 chord를 활성 상태로 남기지 않는다.
+    /// 되돌린다. 물리 modifier 추적과 이미 소비한 keyup 억제 상태는 보존하고,
+    /// 실제로 주입되지 않은 chord/tap-hold 및 레이어 실행 상태만 정리한다.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn recover_from_injection_failure(&mut self) {
-        self.reset_transient_state();
+        self.active_layer = None;
+        self.layer_key_used = false;
+        self.pending_layer_launch = None;
+        self.layer_dt_last_key = None;
+        self.deactivate_layer_keys();
+        self.chord_engaged = false;
+        self.active_tap_hold = None;
+        self.tap_hold_engaged = false;
     }
 
     /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백)
@@ -1314,6 +1322,7 @@ mod tests {
     #[test]
     fn 주입_실패_복구는_거짓_chord_상태를_제거한다() {
         let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LShift, true, 900);
         e.process_key(VKey::LAlt, true, 1000);
         assert!(matches!(
             e.process_key(VKey::Tab, true, 1050),
@@ -1324,6 +1333,8 @@ mod tests {
         e.recover_from_injection_failure();
 
         assert_eq!(e.engaged_chord_trigger(), None);
+        assert!(e.is_modifier_held(VKey::LShift));
+        assert!(e.is_modifier_held(VKey::LAlt));
         assert!(matches!(
             e.process_key(VKey::Tab, false, 1080),
             KeyDecision::PassThrough
@@ -1332,11 +1343,14 @@ mod tests {
             e.process_key(VKey::LAlt, false, 1100),
             KeyDecision::PassThrough
         ));
+        assert!(!e.is_modifier_held(VKey::LAlt));
+        assert!(e.is_modifier_held(VKey::LShift));
     }
 
     #[test]
     fn 주입_실패_복구는_tap_hold_chord도_제거한다() {
         let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::LShift, true, 900);
         e.process_key(VKey::CapsLock, true, 1000);
         assert!(matches!(
             e.process_key(VKey::C, true, 1050),
@@ -1347,10 +1361,27 @@ mod tests {
         e.recover_from_injection_failure();
 
         assert_eq!(e.engaged_chord_trigger(), None);
+        assert!(e.is_modifier_held(VKey::LShift));
         assert!(matches!(
             e.process_key(VKey::CapsLock, false, 1100),
             KeyDecision::PassThrough
         ));
+    }
+
+    #[test]
+    fn 주입_실패_복구_후에도_물리_modifier_콤보가_동작한다() {
+        let mut e = EngineState::new(combo_config());
+        e.process_key(VKey::LShift, true, 1000);
+        assert_execute_sendkey(e.process_key(VKey::Space, true, 1050), VKey::Hangul);
+
+        e.recover_from_injection_failure();
+
+        assert!(e.is_modifier_held(VKey::LShift));
+        assert!(matches!(
+            e.process_key(VKey::Space, false, 1080),
+            KeyDecision::Suppress
+        ));
+        assert_execute_sendkey(e.process_key(VKey::Space, true, 1100), VKey::Hangul);
     }
 
     // ── 콤보 ──
