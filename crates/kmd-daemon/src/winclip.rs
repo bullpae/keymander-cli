@@ -62,7 +62,8 @@ pub enum FormatProbe {
 /// 붙여넣기를 **중단**해 사용자의 클립보드를 절대 파괴하지 않는다 (fail-safe).
 ///
 /// 읽지 못하는 포맷의 면책 규칙 (Windows가 자동 합성하는 동등 표현):
-/// - 비트맵/팔레트/메타파일 계열은 CF_DIB/CF_DIBV5가 있으면 복원 시 재합성된다.
+/// - 비트맵/팔레트 등 **래스터** 계열은 CF_DIB/CF_DIBV5가 있으면 복원 시
+///   재합성된다. 메타파일(벡터)은 DIB로 재합성되지 않으므로 면책하지 않는다.
 /// - CF_DSPTEXT는 텍스트 포맷이 있으면 동등하다.
 pub fn plan_snapshot(probes: &[FormatProbe]) -> Result<Vec<u32>, String> {
     let mut readable: Vec<(u32, usize)> = Vec::new();
@@ -82,7 +83,10 @@ pub fn plan_snapshot(probes: &[FormatProbe]) -> Result<Vec<u32>, String> {
     }
     let mut total: usize = 0;
     for (format, size) in &readable {
-        if *size > MAX_SNAPSHOT_FORMAT_BYTES {
+        // DIB(스크린샷 등 이미지)는 16MB를 쉽게 넘으므로 포맷당 상한을 면제하고
+        // 전체 예산(64MiB)으로만 막는다. 그 외 포맷은 포맷당 상한을 유지한다.
+        let per_format_capped = !matches!(*format, CF_DIB | CF_DIBV5);
+        if per_format_capped && *size > MAX_SNAPSHOT_FORMAT_BYTES {
             return Err(format!(
                 "클립보드 포맷 {format}이 {size}바이트로 포맷당 상한({MAX_SNAPSHOT_FORMAT_BYTES}바이트)을 넘습니다"
             ));
@@ -116,22 +120,36 @@ pub fn plan_snapshot(probes: &[FormatProbe]) -> Result<Vec<u32>, String> {
 }
 
 /// 읽지 못한 포맷이 다른 백업 포맷으로 재합성 가능하면 true.
+///
+/// 래스터 계열만 DIB로 면책한다. 메타파일(CF_METAFILEPICT/CF_ENHMETAFILE 등,
+/// Office 개체·차트 복사의 벡터 원본)은 DIB 래스터로 재합성되지 않으므로 DIB가
+/// 있어도 면책하지 않는다 — 안전하게 deep-copy할 수 없는 조합은 plan_snapshot이
+/// 실패해 붙여넣기 스왑 자체가 중단된다 (벡터 포맷 손실 방지, fail-safe).
 fn excused(format: u32, has_dib: bool, has_text: bool) -> bool {
     match format {
-        CF_BITMAP | CF_PALETTE | CF_METAFILEPICT | CF_ENHMETAFILE | CF_DSPBITMAP
-        | CF_DSPMETAFILEPICT | CF_DSPENHMETAFILE => has_dib,
+        CF_BITMAP | CF_PALETTE | CF_DSPBITMAP => has_dib,
         CF_DSPTEXT => has_text,
         _ => false,
     }
+}
+
+/// 복원 직전(클립보드 잠금 후) 세대 번호 재검증 — 사전 판정과 잠금(OpenClipboard)
+/// 사이에 끼어든 외부 복사(TOCTOU)를 덮어쓰지 않기 위한 최종 판정.
+/// `expected == 0`은 세대 미지원 또는 무조건 복원 경로 — 검증 없이 진행한다.
+pub fn generation_still_current(expected: isize, current: isize) -> bool {
+    expected == 0 || expected == current
 }
 
 // ── 민감 항목 마커 (수집 제외) ──────────────────────────────────────────────
 
 /// 존재만으로 수집 제외인 마커 (클립보드 관리자 표준 관례).
 pub const MARKER_EXCLUDE: &str = "ExcludeClipboardContentFromMonitorProcessing";
-/// 값이 0(DWORD)이면 수집 제외인 마커들 (Windows 클립보드 히스토리/클라우드 opt-out).
-pub const MARKERS_OPT_OUT_ZERO: [&str; 2] =
-    ["CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"];
+/// 값이 0(DWORD)이면 수집 제외인 마커 (Windows 클립보드 히스토리 opt-out).
+/// `CanUploadToCloudClipboard=0`은 **클라우드 동기화**만 거부하는 신호이지
+/// 로컬 히스토리 민감 표시가 아니므로 여기 넣지 않는다 (과잉 제외 방지 —
+/// 로컬 수집 제외는 ExcludeClipboardContentFromMonitorProcessing과
+/// CanIncludeInClipboardHistory=0이 담당한다).
+pub const MARKERS_OPT_OUT_ZERO: [&str; 1] = ["CanIncludeInClipboardHistory"];
 
 /// opt-out 마커의 값이 "제외"(DWORD 0)인지.
 pub fn opt_out_value_is_exclusion(data: &[u8]) -> bool {
@@ -166,10 +184,30 @@ mod tests {
         let probes = [
             FormatProbe::Unreadable(CF_BITMAP),
             FormatProbe::Unreadable(CF_PALETTE),
-            FormatProbe::Unreadable(CF_ENHMETAFILE),
+            FormatProbe::Unreadable(CF_DSPBITMAP),
             FormatProbe::Readable(CF_DIBV5, 4096),
         ];
         assert_eq!(plan_snapshot(&probes).unwrap(), vec![CF_DIBV5]);
+    }
+
+    #[test]
+    fn 메타파일은_dib가_있어도_면책되지_않는다() {
+        // Office 개체 복사 등의 벡터 원본 — DIB 래스터로 재합성되지 않으므로
+        // 스냅샷 계획이 실패해 붙여넣기 스왑이 중단되어야 한다 (손실 방지).
+        for metafile in [
+            CF_METAFILEPICT,
+            CF_ENHMETAFILE,
+            CF_DSPMETAFILEPICT,
+            CF_DSPENHMETAFILE,
+        ] {
+            let probes = [
+                FormatProbe::Unreadable(metafile),
+                FormatProbe::Readable(CF_DIBV5, 4096),
+                FormatProbe::Readable(CF_UNICODETEXT, 64),
+            ];
+            let err = plan_snapshot(&probes).unwrap_err();
+            assert!(err.contains("복원할 수 없는"), "포맷 {metafile}: {err}");
+        }
     }
 
     #[test]
@@ -190,9 +228,33 @@ mod tests {
 
     #[test]
     fn 포맷당_바이트_상한을_넘으면_실패한다() {
-        let probes = [FormatProbe::Readable(CF_DIB, MAX_SNAPSHOT_FORMAT_BYTES + 1)];
+        let probes = [FormatProbe::Readable(0xC789, MAX_SNAPSHOT_FORMAT_BYTES + 1)];
         let err = plan_snapshot(&probes).unwrap_err();
         assert!(err.contains("포맷당 상한"), "{err}");
+    }
+
+    #[test]
+    fn 대형_dib는_포맷당_상한을_면제받고_전체_예산_안에서_허용된다() {
+        // 4K 스크린샷 DIB는 16MB를 쉽게 넘는다 — 전체 64MiB 예산 안이면 백업한다.
+        let probes = [
+            FormatProbe::Readable(CF_DIB, 40 * 1024 * 1024),
+            FormatProbe::Readable(CF_UNICODETEXT, 128),
+        ];
+        let plan = plan_snapshot(&probes).unwrap();
+        assert_eq!(plan, vec![CF_DIB, CF_UNICODETEXT]);
+        // CF_DIBV5도 동일하게 면제된다.
+        let probes = [FormatProbe::Readable(
+            CF_DIBV5,
+            MAX_SNAPSHOT_FORMAT_BYTES + 1,
+        )];
+        assert!(plan_snapshot(&probes).is_ok());
+    }
+
+    #[test]
+    fn 대형_dib도_전체_상한은_넘지_못한다() {
+        let probes = [FormatProbe::Readable(CF_DIB, MAX_SNAPSHOT_TOTAL_BYTES + 1)];
+        let err = plan_snapshot(&probes).unwrap_err();
+        assert!(err.contains("전체"), "{err}");
     }
 
     #[test]
@@ -223,14 +285,30 @@ mod tests {
             "CanIncludeInClipboardHistory",
             &0u32.to_ne_bytes()
         ));
-        assert!(format_is_sensitive(
-            "CanUploadToCloudClipboard",
-            &0u32.to_ne_bytes()
-        ));
         assert!(!format_is_sensitive(
             "CanIncludeInClipboardHistory",
             &1u32.to_ne_bytes()
         ));
         assert!(!format_is_sensitive("HTML Format", &[]));
+    }
+
+    #[test]
+    fn 클라우드_업로드_거부는_로컬_수집_제외가_아니다() {
+        // CanUploadToCloudClipboard=0은 클라우드 동기화 opt-out일 뿐이다 —
+        // 로컬 히스토리 민감 표시로 취급하면 정상 항목을 과잉 제외한다.
+        assert!(!format_is_sensitive(
+            "CanUploadToCloudClipboard",
+            &0u32.to_ne_bytes()
+        ));
+        assert!(!MARKERS_OPT_OUT_ZERO.contains(&"CanUploadToCloudClipboard"));
+    }
+
+    #[test]
+    fn 세대_재검증은_외부_복사를_감지한다() {
+        // 잠금 후 세대가 그대로면 복원 진행, 바뀌었으면(외부 복사) 중단.
+        assert!(generation_still_current(7, 7));
+        assert!(!generation_still_current(7, 8));
+        // 0 = 세대 미지원/무조건 복원 경로 — 검증 생략.
+        assert!(generation_still_current(0, 999));
     }
 }

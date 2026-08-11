@@ -518,8 +518,9 @@ fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
     }
 }
 
-/// 클립보드 안내 항목 (히스토리 비었거나 데몬 미사용) — Enter해도 아무 일 없음.
-fn clip_notice(title: &str, usage: &str, use_emoji: bool) -> IndexItem {
+/// 클립보드 안내 항목 (히스토리 비었거나 데몬 미사용, 붙여넣기 실패 표시 겸용)
+/// — Enter해도 아무 일 없음. launch.rs의 붙여넣기 실패 표시에서도 쓴다.
+pub(super) fn clip_notice(title: &str, usage: &str, use_emoji: bool) -> IndexItem {
     IndexItem {
         name: title.to_string(),
         path: usage.to_string(),

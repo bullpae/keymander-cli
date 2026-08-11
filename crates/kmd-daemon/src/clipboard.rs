@@ -157,15 +157,27 @@ pub fn spawn_watcher(enabled: bool, history_size: usize) {
             if cc != 0 && cc == last_change {
                 continue;
             }
-            last_change = cc;
             // 비밀번호 관리자 등이 수집 제외로 표시한 항목은 수집하지 않는다.
+            // (확정 판정이므로 세대를 소비한다.)
             if platform::is_concealed() {
+                last_change = cc;
                 continue;
             }
-            if let Ok(cur) = board.get_text() {
-                if cur != last_text && !cur.is_empty() {
-                    record(cur.clone());
-                    last_text = cur;
+            match board.get_text() {
+                Ok(cur) => {
+                    last_change = cc;
+                    if cur != last_text && !cur.is_empty() {
+                        record(cur.clone());
+                        last_text = cur;
+                    }
+                }
+                // 다른 앱이 클립보드를 잠깐 쥐고 있는 일시 오류 — 세대를
+                // 소비하지 않고 다음 폴링에서 재시도한다 (복사 유실 방지).
+                Err(arboard::Error::ClipboardOccupied) => {}
+                // 텍스트가 없는 클립보드(이미지 등) 등 확정 실패 — 세대를
+                // 소비해 같은 내용에 매 폴링 클립보드를 다시 열지 않는다.
+                Err(_) => {
+                    last_change = cc;
                 }
             }
         }
@@ -260,8 +272,8 @@ fn should_restore(
 /// `to_previous`면 먼저 이전 전경 앱으로 포커스를 되돌린다.
 ///
 /// 1) (선택) 이전 앱 활성화 → 2) 현재 클립보드 스냅샷(실패 시 **중단** — 원본을
-/// 파괴하지 않는다) → 3) 항목 텍스트로 교체 → 4) Cmd+V/Ctrl+V 주입 →
-/// 5) 우리 값이 아직 현재일 때만 복원. 스왑 구간엔 수집을 멈춘다.
+///    파괴하지 않는다) → 3) 항목 텍스트로 교체 → 4) Cmd+V/Ctrl+V 주입 →
+///    5) 우리 값이 아직 현재일 때만 복원. 스왑 구간엔 수집을 멈춘다.
 ///
 /// **액션 워커/커넥션 스레드에서 호출** — RESTORE_DELAY 만큼 블로킹한다.
 fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
@@ -296,9 +308,14 @@ fn paste_swap(
     entry: &ClipEntry,
     saved: platform::Snapshot,
 ) -> Result<(), String> {
-    board
-        .set_text(&entry.text)
-        .map_err(|e| format!("클립보드 세팅 실패: {e}"))?;
+    // set 실패 = 백엔드가 empty 후 set 하다 실패해 원본이 이미 부분 파괴됐을 수
+    // 있다 — 스냅샷으로 즉시 되돌리고 결과를 함께 보고한다 (실패 원자성).
+    if let Err(e) = board.set_text(&entry.text) {
+        return Err(swap_failure_message(
+            &e.to_string(),
+            platform::restore(saved, 0),
+        ));
+    }
     // 우리 스왑 직후의 세대 번호 — 복원 시점에 이 값이면 "그 사이 아무도 안 씀".
     let swap_generation = platform::change_count();
     // 세팅이 시스템에 반영될 짧은 시간을 준 뒤 주입한다.
@@ -313,11 +330,30 @@ fn paste_swap(
         platform::change_count(),
         injected_text_matches,
     ) {
-        platform::restore(saved).map_err(|e| format!("기존 클립보드 복원 실패: {e}"))?;
+        // Windows는 클립보드 잠금 후 세대를 다시 검증한다 — 위 판정과 잠금
+        // 사이(TOCTOU)에 끼어든 외부 복사를 덮어쓰지 않는다. false = 생략.
+        match platform::restore(saved, swap_generation) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::info!("복원 직전 클립보드가 바뀜 — 복원 생략 (새 복사 보존)");
+            }
+            Err(e) => return Err(format!("기존 클립보드 복원 실패: {e}")),
+        }
     } else {
         tracing::info!("붙여넣기 후 클립보드가 이미 바뀜 — 복원 생략 (새 복사 보존)");
     }
     Ok(())
+}
+
+/// set 실패 시 원본 복원까지 시도한 결과를 하나의 에러로 합친다 — 호출자/사용자가
+/// "내 클립보드 원본이 살아있는가"를 알 수 있어야 한다 (실패 원자성 보고).
+fn swap_failure_message(set_error: &str, restore_result: Result<bool, String>) -> String {
+    match restore_result {
+        Ok(_) => format!("클립보드 세팅 실패: {set_error} (원본은 복원됨)"),
+        Err(restore_error) => {
+            format!("클립보드 세팅 실패: {set_error}; 원본 복원도 실패: {restore_error}")
+        }
+    }
 }
 
 // ── macOS NSPasteboard ──────────────────────────────────────────────────────
@@ -346,12 +382,14 @@ mod platform {
     }
 
     /// 백업 복원. None 스냅샷은 아무것도 하지 않는다 (기존 동작과 동일).
-    pub fn restore(snapshot: Snapshot) -> Result<(), String> {
+    /// NSPasteboard엔 잠금이 없어 세대 재검증 없이 복원한다 — 호출부의
+    /// should_restore 사전 판정이 전부다. 항상 Ok(true)(복원 수행) 반환.
+    pub fn restore(snapshot: Snapshot, _expected_generation: isize) -> Result<bool, String> {
         if let Some(text) = snapshot.text {
             let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             board.set_text(text).map_err(|e| e.to_string())?;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// `[[NSPasteboard generalPasteboard] changeCount]`. 실패 시 0.
@@ -446,7 +484,14 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use crate::winclip;
-    use clipboard_win::{raw, Clipboard, EnumFormats};
+    use clipboard_win::{raw, Clipboard};
+    use windows_sys::Win32::Foundation::{
+        GetLastError, GlobalFree, SetLastError, ERROR_SUCCESS, HGLOBAL,
+    };
+    use windows_sys::Win32::System::DataExchange::{EnumClipboardFormats, SetClipboardData};
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
 
     /// 전체 포맷 바이트 스냅샷.
     #[derive(Debug)]
@@ -515,12 +560,62 @@ mod platform {
         }
     }
 
+    /// EnumClipboardFormats로 전체 포맷을 나열한다 (클립보드를 연 상태에서 호출).
+    /// 반환값 0은 "정상 끝"과 "오류"가 겹치므로 GetLastError로 구분한다 — 오류를
+    /// 정상 종료로 오인하면 일부 포맷이 빠진 스냅샷을 원본으로 믿고 덮어쓴다.
+    fn enum_formats_checked() -> Result<Vec<u32>, String> {
+        let mut formats = Vec::new();
+        unsafe {
+            SetLastError(ERROR_SUCCESS);
+            let mut format = EnumClipboardFormats(0);
+            while format != 0 {
+                formats.push(format);
+                format = EnumClipboardFormats(format);
+            }
+            let err = GetLastError();
+            if err != ERROR_SUCCESS {
+                return Err(format!("클립보드 포맷 나열 실패 (Win32 오류 {err})"));
+            }
+        }
+        Ok(formats)
+    }
+
+    /// GlobalAlloc(GMEM_MOVEABLE) 핸들 RAII — SetClipboardData로 소유권이
+    /// 시스템에 넘어가기 전까지 drop 시 GlobalFree로 해제한다 (누수 방지).
+    struct HGlobalGuard(HGLOBAL);
+
+    impl HGlobalGuard {
+        /// data 사본을 담은 GMEM_MOVEABLE 핸들을 할당한다.
+        fn alloc_copy(data: &[u8]) -> Result<Self, String> {
+            unsafe {
+                let handle = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1));
+                if handle.is_null() {
+                    return Err(format!("GlobalAlloc({}바이트) 실패", data.len()));
+                }
+                let guard = Self(handle);
+                let ptr = GlobalLock(handle);
+                if ptr.is_null() {
+                    return Err("GlobalLock 실패".to_string());
+                }
+                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
+                GlobalUnlock(handle);
+                Ok(guard)
+            }
+        }
+    }
+
+    impl Drop for HGlobalGuard {
+        fn drop(&mut self) {
+            unsafe { GlobalFree(self.0) };
+        }
+    }
+
     /// 현재 클립보드의 모든 보존 가능 포맷을 상한 안에서 백업한다.
-    /// 상한 초과·복원 불가 포맷·읽기 실패는 Err — 호출부가 붙여넣기를 중단한다.
+    /// 상한 초과·복원 불가 포맷·나열/읽기 실패는 Err — 호출부가 붙여넣기를 중단한다.
     pub fn snapshot() -> Result<Snapshot, String> {
         let _clip = Clipboard::new_attempts(10).map_err(|e| format!("클립보드 열기 실패: {e}"))?;
         let mut probes = Vec::new();
-        for format in EnumFormats::new() {
+        for format in enum_formats_checked()? {
             if winclip::is_gdi_or_owner_format(format) {
                 probes.push(winclip::FormatProbe::Unreadable(format));
                 continue;
@@ -543,15 +638,44 @@ mod platform {
         Ok(Snapshot { formats })
     }
 
-    /// 백업을 그대로 되돌린다. 빈 스냅샷은 빈 클립보드로 복원.
-    pub fn restore(snapshot: Snapshot) -> Result<(), String> {
-        let _clip = Clipboard::new_attempts(10).map_err(|e| format!("클립보드 열기 실패: {e}"))?;
-        raw::empty().map_err(|e| format!("클립보드 비우기 실패: {e}"))?;
-        for (format, data) in snapshot.formats {
-            raw::set_without_clear(format, &data)
-                .map_err(|e| format!("클립보드 포맷 {format} 복원 실패: {e}"))?;
+    /// 백업을 되돌린다. 빈 스냅샷은 빈 클립보드로 복원.
+    ///
+    /// 실패 원자성: EmptyClipboard **전에** 모든 핸들을 먼저 할당해, 할당 실패가
+    /// 비워진 클립보드를 남기지 않는다 (실패 시 원본이 그대로 남는다).
+    /// TOCTOU 제거: 잠금(OpenClipboard) 후 세대 번호를 재검증한다 — 잠금을 쥔
+    /// 동안엔 다른 프로세스가 클립보드를 못 바꾸므로 이 비교가 최종 판정이다.
+    /// 그 사이 외부 복사가 있었으면 Ok(false)(복원 생략)로 새 복사를 보존한다.
+    pub fn restore(snapshot: Snapshot, expected_generation: isize) -> Result<bool, String> {
+        let mut staged = Vec::with_capacity(snapshot.formats.len());
+        for (format, data) in &snapshot.formats {
+            let guard = HGlobalGuard::alloc_copy(data)
+                .map_err(|e| format!("클립보드 포맷 {format} 복원 준비 실패: {e}"))?;
+            staged.push((*format, guard));
         }
-        Ok(())
+
+        let _clip = Clipboard::new_attempts(10).map_err(|e| format!("클립보드 열기 실패: {e}"))?;
+        if !winclip::generation_still_current(expected_generation, change_count()) {
+            return Ok(false);
+        }
+
+        raw::empty().map_err(|e| format!("클립보드 비우기 실패: {e}"))?;
+        let mut failed: Vec<u32> = Vec::new();
+        for (format, guard) in staged {
+            // SetClipboardData 성공 시 핸들 소유권은 시스템으로 넘어간다 —
+            // guard를 잊어 이중 해제를 막는다. 실패한 핸들만 drop으로 해제.
+            let set = unsafe { SetClipboardData(format, guard.0) };
+            if set.is_null() {
+                failed.push(format);
+            } else {
+                std::mem::forget(guard);
+            }
+        }
+        if failed.is_empty() {
+            Ok(true)
+        } else {
+            // 내용 없이 포맷 ID만 보고한다 (프라이버시).
+            Err(format!("클립보드 포맷 복원 실패: {failed:?}"))
+        }
     }
 }
 
@@ -571,12 +695,12 @@ mod platform {
         })
     }
 
-    pub fn restore(snapshot: Snapshot) -> Result<(), String> {
+    pub fn restore(snapshot: Snapshot, _expected_generation: isize) -> Result<bool, String> {
         if let Some(text) = snapshot.text {
             let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             board.set_text(text).map_err(|e| e.to_string())?;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn change_count() -> isize {
@@ -689,6 +813,16 @@ mod tests {
         // 항목 조회가 클립보드 접근보다 먼저 실패하므로 실제 클립보드를 건드리지 않는다.
         assert!(paste_slot_checked(1, false).is_err());
         assert!(paste_item(u64::MAX, false).is_err());
+    }
+
+    #[test]
+    fn set_실패_보고는_원본_생존_여부를_담는다() {
+        // 실패 원자성: set 실패 시 즉시 복원을 시도하고, 사용자가 "원본이
+        // 살아있는가"를 에러 메시지에서 알 수 있어야 한다.
+        let restored = swap_failure_message("잠김", Ok(true));
+        assert!(restored.contains("원본은 복원됨"), "{restored}");
+        let lost = swap_failure_message("잠김", Err("열기 실패".into()));
+        assert!(lost.contains("원본 복원도 실패"), "{lost}");
     }
 
     #[test]

@@ -109,11 +109,32 @@ impl App {
                 }),
                 _ => None,
             };
-            if let Some(request) = request {
-                // 실패해도 런처는 닫는다 — 데몬이 로그로 원인을 남긴다.
-                let _ = kmd_core::ipc::send_request_result(&request);
-            }
-            return iced::exit();
+            let Some(request) = request else {
+                return iced::exit(); // 마커 손상 — 요청할 대상이 없다
+            };
+            // 성공(Ok)에만 창을 닫는다. 실패는 결과 리스트에 표시해 사용자가
+            // 원인(항목 만료·스냅샷 실패·데몬 중지)을 보고 다시 시도할 수 있게.
+            return match kmd_core::ipc::send_request_result(&request) {
+                Ok(kmd_core::ipc::Response::Error { message }) => {
+                    tracing::warn!("클립보드 붙여넣기 실패: {message}");
+                    self.apply_contains_items(vec![super::search_routing::clip_notice(
+                        "클립보드 붙여넣기 실패",
+                        &message,
+                        self.use_emoji,
+                    )]);
+                    Task::none()
+                }
+                Err(e) => {
+                    tracing::warn!("클립보드 붙여넣기 요청 실패: {e}");
+                    self.apply_contains_items(vec![super::search_routing::clip_notice(
+                        "클립보드 붙여넣기 실패",
+                        "데몬에 연결할 수 없습니다 — kmd daemon status로 확인하세요",
+                        self.use_emoji,
+                    )]);
+                    Task::none()
+                }
+                Ok(_) => iced::exit(),
+            };
         }
 
         // Help entries act like quick templates — 선택 시 시작 쿼리로 전환.

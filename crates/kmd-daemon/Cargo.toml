@@ -40,4 +40,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     # 훅 워치독의 GetTickCount (훅 생존 하트비트)
     "Win32_System_SystemInformation",
+    # 클립보드 복원 — EnumClipboardFormats 오류 구분 + SetClipboardData 직접 호출
+    "Win32_System_DataExchange",
+    # 복원 핸들 사전 할당 (GlobalAlloc/GMEM_MOVEABLE RAII)
+    "Win32_System_Memory",
 ] }
