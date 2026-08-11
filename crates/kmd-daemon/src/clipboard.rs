@@ -360,6 +360,12 @@ fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
         .lock()
         .map_err(|_| "클립보드 동작 잠금이 손상되었습니다".to_string())?;
 
+    #[cfg(windows)]
+    let target_still_foreground = platform::is_target_foreground;
+    // macOS의 기존 활성화 계약은 유지하고, Windows에서만 HWND를 재검증한다.
+    #[cfg(not(windows))]
+    let target_still_foreground = |_target| true;
+
     paste_after_target_activation(
         to_previous,
         PREV_APP_TARGET.load(Ordering::Relaxed),
@@ -368,6 +374,7 @@ fn paste_impl(entry: ClipEntry, to_previous: bool) -> Result<(), String> {
             // 앱 전환이 반영될 시간을 준다 (포커스가 도착해야 주입이 대상에 간다).
             std::thread::sleep(Duration::from_millis(120));
         },
+        target_still_foreground,
         || {
             #[cfg(windows)]
             {
@@ -391,6 +398,7 @@ fn paste_after_target_activation(
     target: isize,
     activate: impl FnOnce(isize) -> bool,
     wait_for_focus: impl FnOnce(),
+    target_still_foreground: impl FnOnce(isize) -> bool,
     paste: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     if to_previous {
@@ -407,6 +415,14 @@ fn paste_after_target_activation(
             );
         }
         wait_for_focus();
+        // Windows에서는 대기 중 다른 창이 포커스를 훔칠 수 있다. 실제 Unicode
+        // SendInput 직전에 캡처한 HWND가 여전히 전경인지 확인해 fail-closed한다.
+        if !target_still_foreground(target) {
+            return Err(
+                "대기 중 포커스가 다른 창으로 바뀌어 붙여넣기를 중단했습니다 — 현재 포커스에는 주입하지 않았습니다"
+                    .to_string(),
+            );
+        }
     }
     paste()
 }
@@ -667,6 +683,13 @@ mod platform {
         }
     }
 
+    /// 활성화 대기 직후에도 캡처한 HWND가 전경인지 확인한다.
+    pub fn is_target_foreground(target: isize) -> bool {
+        let hwnd = target as windows_sys::Win32::Foundation::HWND;
+        !hwnd.is_null()
+            && unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd }
+    }
+
     /// 항목 텍스트를 KEYEVENTF_UNICODE 타이핑으로 전경 앱에 직접 주입한다.
     ///
     /// 시스템 클립보드는 읽지도 쓰지도 않는다 — 원본(이미지·파일·커스텀 포맷
@@ -917,6 +940,7 @@ mod tests {
                 true
             },
             || {},
+            |_| true,
             || {
                 pasted = true;
                 Ok(())
@@ -941,6 +965,7 @@ mod tests {
                 false
             },
             || waited = true,
+            |_| true,
             || {
                 pasted = true;
                 Ok(())
@@ -964,13 +989,45 @@ mod tests {
                 true
             },
             || steps.borrow_mut().push("wait"),
+            |_| {
+                steps.borrow_mut().push("verify");
+                true
+            },
             || {
                 steps.borrow_mut().push("paste");
                 Ok(())
             },
         )
         .unwrap();
-        assert_eq!(*steps.borrow(), ["activate", "wait", "paste"]);
+        assert_eq!(*steps.borrow(), ["activate", "wait", "verify", "paste"]);
+    }
+
+    #[test]
+    fn 활성화_대기_중_포커스가_바뀌면_주입하지_않는다() {
+        let mut verified_target = 0;
+        let mut pasted = false;
+        let error = paste_after_target_activation(
+            true,
+            42,
+            |_| true,
+            || {},
+            |target| {
+                verified_target = target;
+                false
+            },
+            || {
+                pasted = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(verified_target, 42);
+        assert!(
+            !pasted,
+            "포커스가 바뀐 현재 창에는 Unicode를 주입하면 안 된다"
+        );
+        assert!(error.contains("포커스가 다른 창으로 바뀌어"));
     }
 
     #[test]

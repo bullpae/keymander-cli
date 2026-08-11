@@ -242,8 +242,10 @@ impl EngineState {
     /// 어댑터의 합성 입력이 실패했을 때 이미 계산 과정에서 전진한 일시 상태를
     /// 되돌린다. 물리 modifier 추적과 이미 소비한 keyup 억제 상태는 보존하고,
     /// 실제로 주입되지 않은 chord/tap-hold 및 레이어 실행 상태만 정리한다.
+    /// 반환값은 어댑터가 마우스 워커에 StopAll을 보내야 하는지 나타낸다.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub fn recover_from_injection_failure(&mut self) {
+    pub fn recover_from_injection_failure(&mut self) -> bool {
+        let stop_mouse = !self.mouse_keys_held.is_empty();
         self.active_layer = None;
         self.layer_key_used = false;
         self.pending_layer_launch = None;
@@ -252,6 +254,8 @@ impl EngineState {
         self.chord_engaged = false;
         self.active_tap_hold = None;
         self.tap_hold_engaged = false;
+        self.mouse_keys_held.clear();
+        stop_mouse
     }
 
     /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백)
@@ -1817,6 +1821,33 @@ mod tests {
         assert!(matches!(
             e.process_key(VKey::RAlt, false, 1700),
             KeyDecision::Suppress
+        ));
+    }
+
+    #[test]
+    fn 주입_실패_복구는_활성_마우스를_정지_대상으로_반환하고_상태를_비운다() {
+        let mut e = EngineState::new(mouse_layer_config());
+        e.process_key(VKey::RAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::W, true, 1050),
+            KeyDecision::MouseEngage(MouseBind::MoveUp)
+        ));
+
+        assert!(
+            e.recover_from_injection_failure(),
+            "활성 모션이 있으면 어댑터가 StopAll을 보내야 한다"
+        );
+        assert!(
+            !e.recover_from_injection_failure(),
+            "복구가 마우스 홀드 상태를 남기면 안 된다"
+        );
+        assert!(matches!(
+            e.process_key(VKey::W, false, 1100),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::RAlt, false, 1150),
+            KeyDecision::PassThrough
         ));
     }
 

@@ -716,12 +716,20 @@ fn send_mouse_button_click(bind: MouseBind) -> Result<(), SendInputFailure> {
     match submit_inputs(&inputs, "마우스 클릭") {
         Ok(()) => Ok(()),
         Err(failure) => {
-            if failure.sent == 1 {
-                let _ = submit_inputs(&[mouse_input(0, 0, 0, up)], "부분 실패 마우스 정리");
+            if let Some(accepted_down) =
+                mouse_release_for_accepted_click_prefix(bind, failure.sent as usize)
+            {
+                // down만 수락됐으면 up을 한 번 즉시 시도한다. 이 정리 호출도
+                // 실패하면 전역 pending 큐에 남겨 fast worker가 계속 재시도한다.
+                let _ = release_mouse_button_or_track(accepted_down);
             }
             Err(failure)
         }
     }
+}
+
+fn mouse_release_for_accepted_click_prefix(bind: MouseBind, accepted: usize) -> Option<MouseBind> {
+    (accepted == 1).then_some(bind)
 }
 
 fn is_mouse_button(bind: MouseBind) -> bool {
@@ -732,11 +740,20 @@ fn is_mouse_button(bind: MouseBind) -> bool {
 }
 
 fn release_mouse_button_or_track(bind: MouseBind) -> bool {
-    if send_mouse_button(bind, false).is_ok() {
-        lock_pending(pending_mouse_releases()).remove(bind);
+    let released = send_mouse_button(bind, false).is_ok();
+    track_mouse_release_result(pending_mouse_releases(), bind, released)
+}
+
+fn track_mouse_release_result(
+    pending: &Mutex<PendingReleases<MouseBind>>,
+    bind: MouseBind,
+    released: bool,
+) -> bool {
+    if released {
+        lock_pending(pending).remove(bind);
         true
     } else {
-        lock_pending(pending_mouse_releases()).record(bind);
+        lock_pending(pending).record(bind);
         false
     }
 }
@@ -794,7 +811,9 @@ fn execute_inline_action(action: &BindAction) -> Result<(), SendInputFailure> {
             send_combo(&mod_vks, vkey_to_vk(*key))
         }
         BindAction::Macro(steps) => {
-            let mut events = Vec::new();
+            // 설정 파서가 이벤트 수를 이 상한 이하로 보장한다. 콜백 안에서
+            // Vec가 반복 재할당되지 않도록 한 번만 고정 크기로 예약한다.
+            let mut events = Vec::with_capacity(super::MAX_MACRO_INPUT_EVENTS);
             for step in steps {
                 match step {
                     MacroStep::KeyPress(k) => {
@@ -863,10 +882,16 @@ fn execute_slow_action(action: BindAction) {
 }
 
 fn recover_engine_after_injection_failure() {
+    let mut stop_mouse = false;
     if let Some(state) = HOOK_STATE.get() {
         if let Ok(mut guard) = state.lock() {
-            guard.recover_from_injection_failure();
+            stop_mouse = guard.recover_from_injection_failure();
         }
+    }
+    if stop_mouse {
+        // 복구가 레이어 상태를 지우면 해당 물리 key-up은 더 이상 MouseRelease로
+        // 변환되지 않는다. 같은 FIFO에 StopAll을 넣어 모션과 버튼을 함께 끊는다.
+        queue_fast(FastJob::StopAll);
     }
 }
 
@@ -1741,6 +1766,37 @@ mod tests {
         assert_eq!(lock_pending(&pending).items(), vec![MouseBind::BtnLeft]);
         retry_pending_releases(&pending, RELEASE_RETRY_BATCH, |_| true);
         assert!(lock_pending(&pending).items().is_empty());
+    }
+
+    #[test]
+    fn 일회성_클릭은_down만_수락되면_up_정리를_요구한다() {
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 0),
+            None
+        );
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 1),
+            Some(MouseBind::BtnLeft)
+        );
+        assert_eq!(
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnLeft, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn 일회성_클릭_정리_batch_실패는_pending_up으로_남는다() {
+        let pending = Mutex::new(PendingReleases::default());
+        let bind =
+            mouse_release_for_accepted_click_prefix(MouseBind::BtnRight, 1).expect("down 수락");
+
+        assert!(!track_mouse_release_result(&pending, bind, false));
+        assert_eq!(lock_pending(&pending).items(), vec![MouseBind::BtnRight]);
+        assert!(track_mouse_release_result(&pending, bind, true));
+        assert!(
+            lock_pending(&pending).items().is_empty(),
+            "정리 up이 성공한 뒤에만 pending에서 제거"
+        );
     }
 
     #[test]

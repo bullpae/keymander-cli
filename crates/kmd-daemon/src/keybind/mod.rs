@@ -408,6 +408,11 @@ pub fn modifier_satisfied(m: &Modifier, held: &HashSet<VKey>) -> bool {
 // ── 바인딩 액션 ─────────────────────────────────────────────────────────────
 
 /// 키 바인딩이 트리거되었을 때 수행할 동작
+///
+/// Windows 저수준 훅 콜백에서 매크로를 단일 `SendInput` 배치로 실행하므로,
+/// 사용자 설정이 콜백 시간을 무제한 늘리지 못하게 입력 이벤트 수를 제한한다.
+const MAX_MACRO_INPUT_EVENTS: usize = 64;
+
 #[derive(Debug, Clone)]
 pub enum BindAction {
     /// 다른 키 하나를 전송
@@ -891,22 +896,36 @@ pub fn parse_combo_trigger(s: &str) -> Option<ComboTrigger> {
 /// 매크로 문자열 파서: "Home;Shift+End;Ctrl+C" → Macro steps
 fn parse_macro(s: &str) -> Option<BindAction> {
     let mut steps = Vec::new();
+    let mut input_event_count = 0usize;
     for part in s.split(';') {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
         if part.contains('+') {
+            // parse_combo_vkeys의 Vec 할당 전에도 거대한 사용자 콤보를 거부한다.
+            let component_count = part.split('+').count();
+            if component_count
+                .checked_mul(2)
+                .is_none_or(|count| count > MAX_MACRO_INPUT_EVENTS)
+            {
+                return None;
+            }
             let (mod_strs, key) = parse_combo_vkeys(part)?;
             let modifiers: Vec<VKey> = mod_strs
                 .iter()
                 .filter_map(|m| parse_modifier_vkey(m.trim()))
                 .collect();
+            input_event_count = input_event_count.checked_add(modifiers.len() * 2 + 2)?;
             steps.push(MacroStep::Combo { modifiers, key });
         } else {
             let key = VKey::from_name(part)?;
+            input_event_count = input_event_count.checked_add(2)?;
             steps.push(MacroStep::KeyPress(key));
             steps.push(MacroStep::KeyRelease(key));
+        }
+        if input_event_count > MAX_MACRO_INPUT_EVENTS {
+            return None;
         }
     }
     if steps.is_empty() {
@@ -1221,6 +1240,29 @@ mod tests {
             }
             _ => panic!("macro 예상"),
         }
+    }
+
+    #[test]
+    fn 매크로는_훅_콜백_입력_이벤트_상한을_지킨다() {
+        let at_limit = std::iter::repeat_n("Home", MAX_MACRO_INPUT_EVENTS / 2)
+            .collect::<Vec<_>>()
+            .join(";");
+        assert!(
+            parse_action(&format!("macro:{at_limit}")).is_some(),
+            "상한과 같은 매크로는 허용"
+        );
+
+        let over_limit = format!("{at_limit};Home");
+        assert!(
+            parse_action(&format!("macro:{over_limit}")).is_none(),
+            "상한을 넘는 매크로는 설정 파싱 단계에서 거부"
+        );
+
+        let oversized_combo = format!("{}C", "Ctrl+".repeat(MAX_MACRO_INPUT_EVENTS / 2));
+        assert!(
+            parse_action(&format!("macro:{oversized_combo}")).is_none(),
+            "단일 거대 콤보도 내부 Vec 할당 전에 거부"
+        );
     }
 
     #[test]
