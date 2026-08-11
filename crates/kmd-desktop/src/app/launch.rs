@@ -86,17 +86,32 @@ impl App {
             return Task::none();
         };
 
-        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 슬롯을 런처 열기 전 앱에
+        // 클립보드 히스토리 (docs/12 흐름 B): 데몬에 "이 항목을 런처 열기 전 앱에
         // 붙여넣어라"고 요청하고 창을 닫는다. 데몬이 이전 앱을 활성화한 뒤 주입한다.
-        if let Some(slot_str) = result.item.keywords.strip_prefix("kmd:clip:") {
-            if slot_str == "notice" {
+        // 마커는 `kmd:clip:<id>:<slot>` (clip_item이 생성) — 안정 ID로 붙여넣어
+        // 검색 뒤 새 복사로 슬롯이 밀려도 선택한 항목을 정확히 집는다.
+        // id=0은 구버전 데몬 응답(안정 ID 없음) → 슬롯 요청으로 폴백한다.
+        if let Some(marker) = result.item.keywords.strip_prefix("kmd:clip:") {
+            if marker == "notice" {
                 return Task::none(); // 안내 항목 — 실행 대상 아님
             }
-            if let Ok(slot) = slot_str.parse::<usize>() {
-                let _ = kmd_core::ipc::send_request_result(&kmd_core::ipc::Request::ClipPaste {
+            let mut parts = marker.split(':');
+            let id = parts.next().and_then(|s| s.parse::<u64>().ok());
+            let slot = parts.next().and_then(|s| s.parse::<usize>().ok());
+            let request = match (id, slot) {
+                (Some(id), _) if id > 0 => Some(kmd_core::ipc::Request::ClipPasteItem {
+                    id,
+                    to_previous: true,
+                }),
+                (_, Some(slot)) if slot > 0 => Some(kmd_core::ipc::Request::ClipPaste {
                     slot,
                     to_previous: true,
-                });
+                }),
+                _ => None,
+            };
+            if let Some(request) = request {
+                // 실패해도 런처는 닫는다 — 데몬이 로그로 원인을 남긴다.
+                let _ = kmd_core::ipc::send_request_result(&request);
             }
             return iced::exit();
         }

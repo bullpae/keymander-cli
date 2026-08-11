@@ -445,16 +445,24 @@ fn process_request(
         Request::ClipPaste { slot, to_previous } => {
             // 워커가 아니라 여기서 직접 실행 — RESTORE_DELAY(300ms)만큼 블로킹하나
             // 이 커넥션 스레드에 한정되며 IPC 응답도 그 뒤에 나간다.
-            if to_previous {
-                crate::clipboard::paste_slot_to_previous(slot);
-            } else {
-                crate::clipboard::paste_slot(slot);
+            // 빈 슬롯/스냅샷·주입 실패는 성공으로 위장하지 않고 Error로 알린다.
+            match crate::clipboard::paste_slot_checked(slot, to_previous) {
+                Ok(()) => Response::Ok {
+                    message: format!(
+                        "클립보드 슬롯 {slot} 붙여넣기 (히스토리 {}건)",
+                        crate::clipboard::len()
+                    ),
+                },
+                Err(message) => Response::Error { message },
             }
-            Response::Ok {
-                message: format!(
-                    "클립보드 슬롯 {slot} 붙여넣기 (히스토리 {}건)",
-                    crate::clipboard::len()
-                ),
+        }
+
+        Request::ClipPasteItem { id, to_previous } => {
+            match crate::clipboard::paste_item(id, to_previous) {
+                Ok(()) => Response::Ok {
+                    message: "클립보드 항목 붙여넣기".into(),
+                },
+                Err(message) => Response::Error { message },
             }
         }
 
@@ -661,6 +669,24 @@ mod tests {
         config.keybindings.toggle_keymap = String::new();
         let kb = resolve_keybind_preset(&config);
         assert_eq!(kb.combos.len(), 1, "none 프로필에서도 글로벌 핫키는 등록");
+    }
+
+    #[test]
+    fn 만료된_클립보드_id는_성공으로_위장하지_않는다() {
+        // u64::MAX는 발급될 수 없는 ID — 항목 조회가 클립보드 접근 전에
+        // 실패하므로 테스트가 실제 클립보드를 건드리지 않는다.
+        let engine = Arc::new(Mutex::new(SearchEngine::new()));
+        let (tx, _rx) = mpsc::channel();
+        let response = process_request(
+            Request::ClipPasteItem {
+                id: u64::MAX,
+                to_previous: false,
+            },
+            &engine,
+            &tx,
+            Instant::now(),
+        );
+        assert!(matches!(response, Response::Error { .. }));
     }
 
     #[test]

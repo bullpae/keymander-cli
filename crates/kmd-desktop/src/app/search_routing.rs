@@ -498,8 +498,10 @@ impl App {
     }
 }
 
-/// 클립보드 히스토리 항목 → 런처 결과. 키워드에 `kmd:clip:<slot>` 마커를 담아
-/// Enter 시 launch_selected가 이전 앱 붙여넣기로 라우팅한다.
+/// 클립보드 히스토리 항목 → 런처 결과. 키워드에 `kmd:clip:<id>:<slot>` 마커를
+/// 담아 Enter 시 launch_selected가 이전 앱 붙여넣기로 라우팅한다. 실행은 안정
+/// ID를 쓴다 — 검색 뒤 새 복사로 슬롯이 밀려도 같은 항목을 붙여넣기 위함.
+/// slot은 구버전 데몬(id=0) 폴백용으로만 함께 싣는다.
 fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
     IndexItem {
         name: if hit.preview.is_empty() {
@@ -511,7 +513,7 @@ fn clip_item(hit: &kmd_core::ipc::ClipHit, use_emoji: bool) -> IndexItem {
         icon: if use_emoji { "\u{1F4CB}" } else { "[CLIP]" }.to_string(),
         kind: ItemKind::SystemCommand,
         source: Source::Plugin,
-        keywords: format!("kmd:clip:{}", hit.slot),
+        keywords: format!("kmd:clip:{}:{}", hit.id, hit.slot),
         icon_path: None,
     }
 }

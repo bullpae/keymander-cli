@@ -30,6 +30,8 @@ arboard = "3.6.1"
 objc2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
+# 클립보드 스냅샷/복원 — sequence number 감시, 전체 포맷 백업 (docs/12)
+clipboard-win = "5.4.1"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
