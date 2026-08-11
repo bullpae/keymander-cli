@@ -4,6 +4,18 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **데몬 프로세스 E2E 테스트 (CI, unix)** — 실제 kmd-daemon 바이너리를 격리
+  환경(HOME/XDG 리다이렉트)에서 spawn해 기동→토큰 인증 거부→상태→중복 기동
+  거부→정상 종료를 검증한다 (`crates/kmd-daemon/tests/e2e_daemon.rs`).
+  테스트 전략 전체(키 주입 E2E 로드맵, 테스트 정리 기준)는 docs/14.
+
+### Fixed
+- **데몬 이중 기동 가드** — kmd-daemon 바이너리를 launchd나 직접 실행으로
+  두 번 띄우면 둘 다 살아남아 이벤트 탭이 이중 설치되고(키 이벤트 이중 처리
+  위험) 포트 파일을 덮어썼다. 기동 시 기존 데몬의 Ping 생존을 확인하고
+  살아 있으면 즉시 종료한다 (위 E2E 테스트가 발견한 버그).
+
 ## [0.13.1] — 2026-08-10
 
 ### Added

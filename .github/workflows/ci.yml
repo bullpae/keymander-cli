@@ -60,7 +60,11 @@ jobs:
             pkg-config libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
             libxcb-xfixes0-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
             libudev-dev libssl-dev
+      # KMD_E2E=1: 데몬 프로세스 E2E(tests/e2e_daemon.rs, unix 전용)까지 실행.
+      # Windows는 테스트가 cfg(unix)로 컴파일 제외라 env가 있어도 무해하다.
       - run: cargo test --workspace
+        env:
+          KMD_E2E: "1"
 
   clippy:
     name: Clippy
