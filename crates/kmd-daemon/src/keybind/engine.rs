@@ -239,6 +239,13 @@ impl EngineState {
         self.reset_runtime_state();
     }
 
+    /// 어댑터의 합성 입력이 실패했을 때 이미 계산 과정에서 전진한 일시 상태를
+    /// 되돌린다. 특히 실제로 주입되지 않은 chord를 활성 상태로 남기지 않는다.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn recover_from_injection_failure(&mut self) {
+        self.reset_transient_state();
+    }
+
     /// 해당 키가 현재 눌린 수정자로 추적 중인지 (flagsChanged is_down 판정 폴백)
     #[allow(dead_code)]
     pub fn is_modifier_held(&self, vkey: VKey) -> bool {
@@ -330,14 +337,6 @@ impl EngineState {
                     self.reset_runtime_state();
                     self.keymap_enabled = enabled;
                     self.combo_consumed_key = Some(vkey);
-                    tracing::info!(
-                        "keymap {}",
-                        if self.keymap_enabled {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        }
-                    );
                     if let Some(trigger) = chord_trigger {
                         return KeyDecision::ReleaseChord {
                             trigger,
@@ -457,7 +456,6 @@ impl EngineState {
                 .position(|l| l.matches_trigger(vkey))
             {
                 if self.active_layer.is_none() {
-                    tracing::debug!("레이어 활성: {}", self.config.layers[idx].name);
                     self.active_layer = Some(idx);
                     self.trigger_down_tick = tick;
                     self.layer_key_used = false;
@@ -1309,6 +1307,48 @@ mod tests {
         // 레이어가 리셋됐으므로 H는 일반 키
         assert!(matches!(
             e.process_key(VKey::H, true, 100),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn 주입_실패_복구는_거짓_chord_상태를_제거한다() {
+        let mut e = EngineState::new(layer_config_unmapped(UnmappedBehavior::Passthrough));
+        e.process_key(VKey::LAlt, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::Tab, true, 1050),
+            KeyDecision::EngageChord { .. }
+        ));
+        assert_eq!(e.engaged_chord_trigger(), Some(VKey::LAlt));
+
+        e.recover_from_injection_failure();
+
+        assert_eq!(e.engaged_chord_trigger(), None);
+        assert!(matches!(
+            e.process_key(VKey::Tab, false, 1080),
+            KeyDecision::PassThrough
+        ));
+        assert!(matches!(
+            e.process_key(VKey::LAlt, false, 1100),
+            KeyDecision::PassThrough
+        ));
+    }
+
+    #[test]
+    fn 주입_실패_복구는_tap_hold_chord도_제거한다() {
+        let mut e = EngineState::new(tap_hold_config());
+        e.process_key(VKey::CapsLock, true, 1000);
+        assert!(matches!(
+            e.process_key(VKey::C, true, 1050),
+            KeyDecision::EngageChord { .. }
+        ));
+        assert_eq!(e.engaged_chord_trigger(), Some(VKey::LCtrl));
+
+        e.recover_from_injection_failure();
+
+        assert_eq!(e.engaged_chord_trigger(), None);
+        assert!(matches!(
+            e.process_key(VKey::CapsLock, false, 1100),
             KeyDecision::PassThrough
         ));
     }
