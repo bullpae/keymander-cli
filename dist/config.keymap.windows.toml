@@ -1,22 +1,27 @@
 # ── 키맵 설정 (Windows + 데몬) ─────────────────────────────────
-# LAlt 홀드 = 네비 레이어. 단어 단위 이동은 Windows 표준대로 Ctrl+화살표 (Alt+화살표 아님).
-# 붙여넣기 P=Ctrl+V, 줄복사 Y=Home→Shift+End→Ctrl+C, 줄삭제 U
+# CapsLock 홀드 = 네비 레이어. 단어 단위 이동은 Windows 표준대로 Ctrl+화살표.
+#
+# 설계 불변식 (2026-08-12): 레이어에는 오발사해도 무해한 액션만 둔다.
+# P(붙여넣기)/Y(줄 복사)/U(줄 삭제)/,(단어 삭제)는 제거 — CapsLock과 LShift가
+# 같은 새끼손가락 인접 키라 한글 Shift 조합(ㅖ=Shift+P 등) 오타가 비싼
+# 오발사로 이어졌다. ','는 최빈 삭제 키 '.' 옆의 완충 빈칸으로 비워 둔다.
 #
 # 더블탭 원칙: 연타 개념이 없는 키에만 건다.
 # Backspace(.)/Delete(/)는 연타 빈도가 가장 높은 키라 더블탭을 걸면
-# "두 글자 지우기"가 줄 삭제로 오발사된다 → 삭제키는 평범한 매핑으로 둔다.
-# I/O 단어 이동은 연타가 곧 "더 멀리"라 더블탭(줄 처음/끝)이 잘 맞는다.
+# "두 글자 지우기"가 오발사된다 → 삭제키는 평범한 매핑으로 둔다.
+# U/I 단어 이동은 연타가 곧 "더 멀리"라 더블탭(줄 처음/끝)이 잘 맞는다.
 
 [launcher.keymap]
 active_profile = "vim-nav"
 
 [launcher.keymap.layers.nav]
-# 0.13.0부터 기본: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환 (docs/13).
+# 0.13.0부터 기본: CapsLock 홀드 = 레이어 (docs/13).
 # Alt는 트리거가 아니므로 앱들의 Alt 단축키가 온전히 동작한다.
+# 짧게 탭 = 무동작 — 한/영 전환은 RAlt 탭(물리 한영키, 마우스 레이어 트리거).
+# 탭 한영으로 되돌리려면: tap_action = "Hangul"
 trigger = "CapsLock"
-tap_action = "Hangul"
 tap_hold_ms = 200
-# 이전 방식(LAlt 홀드)으로 되돌리려면 위 두 줄을 아래로 교체 후 데몬 재시작.
+# 이전 방식(LAlt 홀드)으로 되돌리려면 위를 아래로 교체 후 데몬 재시작.
 # LAlt 트리거로 돌아가면 CapsLock은 HHKB식 모드탭(탭=Caps/홀드=Ctrl)이 된다.
 # trigger = "LAlt"
 # tap_action = "Escape"
@@ -33,29 +38,27 @@ N = "PageUp"
 M = "PageDown"
 "." = "Backspace"
 "/" = "Delete"
-"," = "Ctrl+Backspace"                  # 앞 단어 통째 삭제
 Space = "launch:kmd-desktop"
-P = "Ctrl+V"
-Y = "macro:Home;Shift+End;Ctrl+C"       # 줄 복사 (vim yy)
-U = "macro:Home;Shift+End;Delete"       # 줄 삭제 (vim dd)
 
-[launcher.keymap.layers.nav.double_taps.I]
+# 단어/줄 이동 = U/I (J/K 세로열 위 검지+중지 — 최빈 기능에 최강 손가락)
+[launcher.keymap.layers.nav.double_taps.U]
 single = "Ctrl+Left"
 double = "Home"
 timeout_ms = 300
 
-[launcher.keymap.layers.nav.double_taps.O]
+[launcher.keymap.layers.nav.double_taps.I]
 single = "Ctrl+Right"
 double = "End"
 timeout_ms = 300
 
-# ── 마우스 레이어 (RAlt 홀드) ────────────────────────────────
+# ── 마우스 레이어 (RAlt 홀드, 짧게 탭 = 한/영) ───────────────
 # 기본 배치는 코드 내장이라 아래 블록 없이도 동작한다. 값을 바꾸고 싶을 때만
 # 주석을 풀면 기본 위에 병합된다(미지정 키는 기본 유지).
 #
 #   E/S/D/F = 포인터 ↑←↓→   — 타이핑 홈포지션(검지 F)을 그대로 유지
-#   R/V     = 휠 ↑/↓        — 검지 세로열 R-F-V, 이동(중지)과 손가락 분리
-#   Space   = 좌클릭(홀드=드래그)   C/G = 우/중 클릭
+#   W/R     = 좌/우클릭      — 이동 클러스터 왼쪽·오른쪽 = 마우스 버튼 좌/우
+#   T/G     = 휠 ↑/↓        — 위 키는 위로, 아래 키는 아래로 (검지 세로열)
+#   Space   = 좌클릭(홀드=드래그) — W는 S(←이동)와 같은 약지라 드래그는 엄지 담당
 #   J/K/L   = 좌/우/중 클릭 (오른손 병행용)   LShift = 저속 정밀
 #
 # [launcher.keymap.layers.mouse.mappings]
@@ -63,18 +66,15 @@ timeout_ms = 300
 # S = "mouse:left"
 # D = "mouse:down"
 # F = "mouse:right"
-# R = "mouse:wheel-up"
-# V = "mouse:wheel-down"
+# W = "mouse:click"
+# R = "mouse:rclick"
+# T = "mouse:wheel-up"
+# G = "mouse:wheel-down"
 
 # Shift+Space 한영: 데몬이 기본 등록. 재정의하려면 아래 주석 해제.
 # [[launcher.keymap.combos]]
 # trigger = "Shift+Space"
 # action = "Hangul"
-
-[[launcher.keymap.double_taps]]
-key = "RShift"
-action = "Hangul"
-timeout_ms = 300
 
 # ── 액션 문자열 형식 ──────────────────────────────────────
 # "Home"              → 단일 키 전송

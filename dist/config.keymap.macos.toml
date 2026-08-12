@@ -1,19 +1,25 @@
 # ── 키맵 설정 (macOS + 데몬) ─────────────────────────────────
-# LAlt(Option) 홀드 = 네비 레이어. 단어 단위 이동은 macOS 표준 Alt+Left/Right(= Option+화살표).
-# 줄 처음/끝 더블탭은 Cmd+Left/Right. 붙여넣기 P=Cmd+V, 줄삭제 U.
+# CapsLock 홀드 = 네비 레이어. 단어 단위 이동은 macOS 표준 Alt+Left/Right(= Option+화살표).
+# 줄 처음/끝 더블탭은 Cmd+Left/Right.
+#
+# 설계 불변식 (2026-08-12): 레이어에는 오발사해도 무해한 액션만 둔다.
+# P(붙여넣기)/Y(줄 복사)/U(줄 삭제)/,(단어 삭제)는 제거 — CapsLock과 LShift가
+# 같은 새끼손가락 인접 키라 한글 Shift 조합(ㅖ=Shift+P 등) 오타가 비싼
+# 오발사로 이어졌다. ','는 최빈 삭제 키 '.' 옆의 완충 빈칸으로 비워 둔다.
 #
 # 더블탭은 연타 개념이 없는 키에만 건다 — 삭제키(. /)에 걸면 "두 글자 지우기"
-# 탭-탭이 줄 삭제로 오발사된다. 줄 삭제는 U 전용 키로 분리했다.
+# 탭-탭이 오발사된다.
 
 [launcher.keymap]
 active_profile = "vim-nav"
 
 [launcher.keymap.layers.nav]
-# 0.13.0부터 기본: CapsLock 홀드 = 레이어, 짧게 탭 = 한/영 전환 (docs/13).
+# 0.13.0부터 기본: CapsLock 홀드 = 레이어 (docs/13).
 # macOS는 데몬이 hidutil로 CapsLock→F19를 자동 재맵/원복한다 — 데몬 실행 중엔
 # CapsLock 대문자 잠금이 비활성이다(정상 종료 시 자동 복구).
+# 짧게 탭 = 무동작 — 한/영 전환은 RAlt 탭(물리 한영키 자리, 아래 mouse 레이어).
+# 탭 한영으로 되돌리려면: tap_action = "Hangul"
 trigger = "CapsLock"
-tap_action = "Hangul"
 tap_hold_ms = 200
 # 이전 방식(LAlt 홀드 + 대문자 잠금 유지)으로 되돌리려면 아래로 교체 후 데몬 재시작.
 # trigger = "LAlt"
@@ -31,36 +37,29 @@ N = "PageUp"
 M = "PageDown"
 "." = "Backspace"
 "/" = "Delete"                                  # 전방 삭제 (fn+Delete)
-"," = "Alt+Backspace"                           # 앞 단어 통째 삭제
 Space = "launch:kmd-desktop"
-P = "Cmd+V"
-Y = "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C"      # 줄 복사 (vim yy)
-U = "macro:Cmd+Left;Shift+Cmd+Right;Delete"     # 줄 삭제 (vim dd)
 
-# Alt+I 한 번: 이전 단어 (Option+←), 더블: 줄 시작 (Cmd+←)
-[launcher.keymap.layers.nav.double_taps.I]
+# 단어/줄 이동 = U/I (J/K 세로열 위 검지+중지 — 최빈 기능에 최강 손가락)
+# CapsLock+U 한 번: 이전 단어 (Option+←), 더블: 줄 시작 (Cmd+←)
+[launcher.keymap.layers.nav.double_taps.U]
 single = "Alt+Left"
 double = "Cmd+Left"
 timeout_ms = 300
 
-# Alt+O 한 번: 다음 단어 (Option+→), 더블: 줄 끝 (Cmd+→)
-[launcher.keymap.layers.nav.double_taps.O]
+# CapsLock+I 한 번: 다음 단어 (Option+→), 더블: 줄 끝 (Cmd+→)
+[launcher.keymap.layers.nav.double_taps.I]
 single = "Alt+Right"
 double = "Cmd+Right"
 timeout_ms = 300
 
-# 마우스 레이어(RAlt 홀드) 기본: E/S/D/F 이동, R/V 휠, Space·C·G 클릭.
+# 마우스 레이어(RAlt 홀드) 기본: E/S/D/F 이동, W/R 좌/우클릭, T/G 휠 ↑/↓,
+# Space 좌클릭(드래그용). 짧게 탭 = 한/영 전환 (물리 한영키 자리).
 # 자세한 설명은 config.keymap.windows.toml 참고.
 
-# Shift+Space는 시스템 입력소스 전환에 맡기는 경우가 많음 (데몬 콤보 생략 가능)
+# Shift+Space 한영 콤보는 데몬이 기본 등록. 재정의하려면 아래 주석 해제.
 # [[launcher.keymap.combos]]
 # trigger = "Shift+Space"
 # action = "Hangul"
-
-[[launcher.keymap.double_taps]]
-key = "RShift"
-action = "Hangul"
-timeout_ms = 300
 
 # ── 액션 문자열 형식 ──────────────────────────────────────
 # "Cmd+C" → macOS Command+키

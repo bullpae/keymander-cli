@@ -1,8 +1,14 @@
 # CapsLock 레이어 트리거
 
 > 상태: **0.13.0부터 기본값** (2026-08-10 실험 → 같은 날 macOS/Windows 실기기
-> 검증 후 승격). vim-nav 프리셋 기본 트리거 = CapsLock, 탭 = 한/영.
+> 검증 후 승격). vim-nav 프리셋 기본 트리거 = CapsLock.
 > LAlt로 되돌리기는 config 두 줄 (아래 참고).
+>
+> **2026-08-12 개정**: 탭 한/영은 폐지 (탭 = 무동작). CapsLock과 LShift가
+> 같은 새끼손가락 인접 키라 실수 탭이 조용히 입력 소스를 바꿔 혼란을 줬다.
+> 한/영 주 경로는 RAlt 짧은 탭(물리 한영키 자리, 마우스 레이어 tap_action)으로
+> 이동·통일. RShift 더블탭 기본도 같은 이유(경로 단일화)로 제거.
+> 이 문서 아래의 "탭 = 한/영" 서술은 개정 전 이력이다.
 
 ## 배경
 
@@ -40,14 +46,14 @@ vim-nav 프리셋 기본이 이 구성이다 — config 없이도 동작한다:
 
 ```toml
 [launcher.keymap.layers.nav]
-trigger = "CapsLock"      # 홀드 = nav 레이어
-tap_action = "Hangul"     # 짧게 탭 = 한/영 전환 (macOS 순정 caps 한영과 동일 UX)
+trigger = "CapsLock"      # 홀드 = nav 레이어. 짧게 탭 = 무동작 (2026-08-12~)
 tap_hold_ms = 200
+# tap_action = "Hangul"   # 탭 한영으로 되돌리려면 주석 해제
 ```
 
-탭 액션은 처음엔 `Escape`였으나 물리 Esc와 중복이고 오탭 시 조합 취소·다이얼로그
-닫힘 부작용이 있어 `Hangul`로 교체 — 한영도 레이어도 CapsLock 하나로 통합된다.
-(Shift/CapsLock 인접 오타 문제도 해소. Shift+Space·RShift 더블탭 한영은 그대로 유지.)
+탭 액션의 변천: 처음엔 `Escape`(물리 Esc 중복 + 오탭 시 조합 취소·다이얼로그
+닫힘 부작용) → `Hangul`(한영·레이어를 CapsLock 하나로 통합) → **무동작**
+(2026-08-12, 실수 탭이 조용히 입력 소스를 바꾸는 문제로 한영을 RAlt 탭으로 이동).
 
 ### 한영 토글 직렬화·디바운스 (macOS, 사고 재발 방지)
 

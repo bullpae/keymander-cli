@@ -1047,13 +1047,18 @@ mod tests {
         let config = preset_config("vim-nav").expect("vim-nav 프리셋은 항상 레이어를 가진다");
         assert_eq!(config.layers.len(), 2, "nav + mouse 레이어");
 
-        // ── 마우스 레이어 (RAlt 홀드, 왼손 ESDF + Space/C/G 클릭 + R/V 휠) ──
+        // ── 마우스 레이어 (RAlt 홀드, 왼손 ESDF + W/R 클릭 + T/G 휠) ──
         let mouse = config
             .layers
             .iter()
             .find(|l| l.trigger == VKey::RAlt)
             .expect("RAlt 마우스 레이어");
         assert!(mouse.trigger_aliases.contains(&VKey::Hangul), "한/영 별칭");
+        assert_eq!(
+            mouse.tap_action,
+            Some(VKey::Hangul),
+            "RAlt 탭 = 한/영 (전 플랫폼 주 경로)"
+        );
         assert_eq!(mouse.unmapped, UnmappedBehavior::Block);
         assert!(matches!(
             mouse.mappings.get(&VKey::E),
@@ -1064,16 +1069,24 @@ mod tests {
             Some(BindAction::Mouse(MouseBind::MoveRight))
         ));
         assert!(matches!(
+            mouse.mappings.get(&VKey::W),
+            Some(BindAction::Mouse(MouseBind::BtnLeft))
+        ));
+        assert!(matches!(
             mouse.mappings.get(&VKey::R),
+            Some(BindAction::Mouse(MouseBind::BtnRight))
+        ));
+        assert!(matches!(
+            mouse.mappings.get(&VKey::T),
             Some(BindAction::Mouse(MouseBind::WheelUp))
         ));
         assert!(matches!(
-            mouse.mappings.get(&VKey::V),
+            mouse.mappings.get(&VKey::G),
             Some(BindAction::Mouse(MouseBind::WheelDown))
         ));
         assert!(
-            !mouse.mappings.contains_key(&VKey::W),
-            "WASD 배치 폐기 — ESDF와 S/D 의미가 충돌해 병행 불가"
+            !mouse.mappings.contains_key(&VKey::V) && !mouse.mappings.contains_key(&VKey::C),
+            "구 배치(R/V 휠, C 우클릭) 폐기 — 클릭·휠은 공간 대응 배치로"
         );
         assert!(matches!(
             mouse.mappings.get(&VKey::Space),
@@ -1088,13 +1101,16 @@ mod tests {
             Some(BindAction::Mouse(MouseBind::Slow))
         ));
 
-        // ── 네비게이션 레이어 (0.13.0부터 기본 트리거 = CapsLock, 탭 = 한/영) ──
+        // ── 네비게이션 레이어 (0.13.0부터 기본 트리거 = CapsLock) ──
         let layer = config
             .layers
             .iter()
             .find(|l| l.trigger == VKey::CapsLock)
             .expect("CapsLock nav 레이어");
-        assert_eq!(layer.tap_action, Some(VKey::Hangul));
+        assert_eq!(
+            layer.tap_action, None,
+            "CapsLock 탭 = 무동작 — 한영은 RAlt 탭으로 (2026-08-12)"
+        );
         assert!(layer.mappings.contains_key(&VKey::H));
         assert!(layer.mappings.contains_key(&VKey::J));
         assert!(layer.mappings.contains_key(&VKey::N), "Alt+N은 PageUp 매핑");
@@ -1102,44 +1118,41 @@ mod tests {
             layer.mappings.contains_key(&VKey::Slash),
             "/는 더블탭 없는 평범한 Delete — 탭 연타 보존"
         );
-        assert!(layer.mappings.contains_key(&VKey::U), "줄 삭제는 U 전용 키");
+        for k in [VKey::P, VKey::Y, VKey::U, VKey::Comma] {
+            assert!(
+                !layer.mappings.contains_key(&k),
+                "P/Y/U/,는 제거 — 오발사 비용이 비싼 액션은 레이어에 두지 않는다"
+            );
+        }
         assert!(
-            !layer.mappings.contains_key(&VKey::I),
-            "I는 double_tap_mappings로 이동"
+            !layer.mappings.contains_key(&VKey::I) && !layer.mappings.contains_key(&VKey::O),
+            "I는 double_tap_mappings, O는 빈 키"
         );
         assert!(
-            !layer.mappings.contains_key(&VKey::O),
-            "O는 double_tap_mappings로 이동"
+            layer.double_tap_mappings.contains_key(&VKey::U),
+            "U 더블탭 = 단어/줄 이동 (뒤)"
         );
         assert!(
             layer.double_tap_mappings.contains_key(&VKey::I),
-            "Alt+I 더블탭"
+            "I 더블탭 = 단어/줄 이동 (앞)"
         );
         assert!(
-            layer.double_tap_mappings.contains_key(&VKey::O),
-            "Alt+O 더블탭"
+            !layer.double_tap_mappings.contains_key(&VKey::O),
+            "구 I/O 배치 폐기 — 단어 이동은 U/I 검지+중지"
         );
         assert!(
             !layer.double_tap_mappings.contains_key(&VKey::Slash),
-            "삭제키 더블탭 제거 — 연타로 지우다 줄 삭제가 오발사되던 문제"
+            "삭제키 더블탭 제거 — 연타로 지우다 오발사되던 문제"
         );
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(config.combos.len(), 1, "Shift+Space 콤보");
-            assert_eq!(config.double_taps.len(), 1, "RShift 더블탭");
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert_eq!(
-                config.combos.len(),
-                1,
-                "Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
-            );
-            assert!(
-                config.double_taps.is_empty(),
-                "RShift 더블탭은 Windows 전용"
-            );
-        }
+        assert_eq!(
+            config.combos.len(),
+            1,
+            "Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
+        );
+        assert!(
+            config.double_taps.is_empty(),
+            "RShift 더블탭 기본 제거 — 한영 경로는 RAlt 탭으로 단일화"
+        );
     }
 
     #[test]

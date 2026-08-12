@@ -579,32 +579,23 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     mappings.insert("M".into(), "PageDown".into());
     mappings.insert(".".into(), "Backspace".into());
     // 삭제키는 더블탭 게이팅을 걸지 않는다 — Backspace/Delete는 탭 연타 빈도가
-    // 가장 높은 키라, 두 글자 지우려는 탭-탭이 줄 삭제로 오발사된다.
-    // 줄 삭제는 연타 개념이 없는 U(= vim dd, Y와 짝)로 분리했다.
+    // 가장 높은 키라, 두 글자 지우려는 탭-탭이 다른 액션으로 오발사된다.
     mappings.insert("/".into(), "Delete".into());
     mappings.insert("Space".into(), "launch:kmd-desktop".into());
+    // P(붙여넣기)/Y(줄 복사)/U(줄 삭제)/,(단어 삭제)는 제거됨 (2026-08-12).
+    // CapsLock과 LShift는 같은 새끼손가락 인접 키라 한글 Shift 조합(ㅖ=Shift+P 등)
+    // 오타가 클립보드 붙여넣기·줄 삭제 같은 비싼 오발사로 이어졌다.
+    // 레이어 불변식: 오발사해도 무해한 액션(이동·글자 삭제·런처)만 남긴다.
+    // ','는 최빈 삭제 키 '.' 옆의 완충 빈칸으로 의도적으로 비워 둔다.
 
-    #[cfg(target_os = "macos")]
-    {
-        mappings.insert("P".into(), "Cmd+V".into());
-        mappings.insert("Y".into(), "macro:Cmd+Left;Shift+Cmd+Right;Cmd+C".into());
-        mappings.insert("U".into(), "macro:Cmd+Left;Shift+Cmd+Right;Delete".into());
-        mappings.insert(",".into(), "Alt+Backspace".into());
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        mappings.insert("P".into(), "Ctrl+V".into());
-        mappings.insert("Y".into(), "macro:Home;Shift+End;Ctrl+C".into());
-        mappings.insert("U".into(), "macro:Home;Shift+End;Delete".into());
-        mappings.insert(",".into(), "Ctrl+Backspace".into());
-    }
-
+    // 단어/줄 이동은 U/I — J/K 세로열 위의 검지+중지(최빈 기능에 최강 손가락).
+    // 이전 I/O 배치는 중지+약지였고, O/P를 비워 오른손 위 행의 오타 안전지대를 넓혔다.
     let mut double_taps = std::collections::HashMap::new();
 
     #[cfg(target_os = "macos")]
     {
         double_taps.insert(
-            "I".into(),
+            "U".into(),
             LayerDoubleTapToml {
                 single: "Alt+Left".into(),
                 double: "Cmd+Left".into(),
@@ -612,7 +603,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
             },
         );
         double_taps.insert(
-            "O".into(),
+            "I".into(),
             LayerDoubleTapToml {
                 single: "Alt+Right".into(),
                 double: "Cmd+Right".into(),
@@ -623,7 +614,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     #[cfg(not(target_os = "macos"))]
     {
         double_taps.insert(
-            "I".into(),
+            "U".into(),
             LayerDoubleTapToml {
                 single: "Ctrl+Left".into(),
                 double: "Home".into(),
@@ -631,7 +622,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
             },
         );
         double_taps.insert(
-            "O".into(),
+            "I".into(),
             LayerDoubleTapToml {
                 single: "Ctrl+Right".into(),
                 double: "End".into(),
@@ -644,10 +635,12 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
         // 0.13.0부터 기본 트리거 = CapsLock (docs/13). modifier 트리거(LAlt)는
         // 해당 modifier의 앱 단축키(HWP Alt+Shift+N 등)를 가리는 구조적 충돌이
         // 있어, non-modifier인 CapsLock으로 승격했다. macOS는 데몬이 hidutil로
-        // CapsLock→F19를 자동 재맵/원복한다. 짧게 탭 = 한/영 전환.
-        // LAlt로 되돌리려면 config에서 trigger/tap_action만 덮어쓰면 된다.
+        // CapsLock→F19를 자동 재맵/원복한다.
+        // 짧게 탭 = 무동작 (2026-08-12): 탭 한/영은 실수 탭이 조용히 입력 소스를
+        // 바꿔 혼란을 줬다. 한/영은 RAlt 탭(물리 한영키 자리)으로 이동 —
+        // 마우스 레이어 tap_action 참조. 되돌리려면 config에 tap_action="Hangul".
         trigger: "CapsLock".into(),
-        tap_action: Some("Hangul".into()),
+        tap_action: None,
         tap_hold_ms: Some(200),
         unmapped: None,
         mappings,
@@ -657,14 +650,15 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
 
 /// vim-nav 프리셋의 마우스 레이어 기본값 — RAlt 홀드 + 왼손 조작.
 ///
-/// 설계 원칙: 홀드 손(오른엄지)과 조작 손(왼손)을 분리한다.
+/// 설계 원칙: 홀드 손(오른엄지)과 조작 손(왼손)을 분리하고,
+/// 클릭·휠은 이동 클러스터 기준의 공간 대응으로 배치한다 (2026-08-12).
 /// - ESDF = 포인터 이동 — WASD는 검지를 D로 한 칸 왼쪽에 묶어 타이핑
 ///   홈포지션(검지 F)을 깨뜨린다. ESDF는 손을 홈에 둔 채로 조작되고,
 ///   덤으로 Q/W/R/T/A/G/Z/X/C/V/B가 확장 자리로 열린다.
-/// - R/V = 휠 ↑/↓ — 검지 세로열(R-F-V). 이동축(중지)과 손가락이 갈려
-///   포인터를 움직이면서 스크롤할 수 있다.
-/// - Space(왼엄지) = 좌클릭 — 이동하던 손이 자세를 안 바꾸고 확정
-/// - C = 우클릭 (중지열 E-D-C 끝), G = 중클릭 (검지 한 칸 오른쪽)
+/// - W/R = 좌/우클릭 — 이동 클러스터(E) 왼쪽·오른쪽 = 마우스 버튼 좌/우.
+/// - T/G = 휠 ↑/↓ — 위 키 = 위로, 아래 키 = 아래로 (검지 세로열).
+/// - Space(왼엄지) = 좌클릭(드래그용) — W는 S(←이동)와 같은 약지라
+///   클릭 홀드 중 왼쪽 이동이 불가능하다. 드래그는 엄지가 담당.
 /// - J/K/L = 좌/우/중 클릭 (오른손 병행용 별칭)
 /// - LShift = 저속 정밀 모드
 fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
@@ -674,27 +668,22 @@ fn vim_nav_default_mouse_layer() -> crate::config::LayerToml {
     mappings.insert("S".into(), "mouse:left".into());
     mappings.insert("D".into(), "mouse:down".into());
     mappings.insert("F".into(), "mouse:right".into());
-    mappings.insert("R".into(), "mouse:wheel-up".into());
-    mappings.insert("V".into(), "mouse:wheel-down".into());
+    mappings.insert("W".into(), "mouse:click".into());
+    mappings.insert("R".into(), "mouse:rclick".into());
+    mappings.insert("T".into(), "mouse:wheel-up".into());
+    mappings.insert("G".into(), "mouse:wheel-down".into());
     mappings.insert("Space".into(), "mouse:click".into());
-    mappings.insert("C".into(), "mouse:rclick".into());
-    mappings.insert("G".into(), "mouse:mclick".into());
     mappings.insert("J".into(), "mouse:click".into());
     mappings.insert("K".into(), "mouse:rclick".into());
     mappings.insert("L".into(), "mouse:mclick".into());
     mappings.insert("LShift".into(), "mouse:slow".into());
 
-    // Windows 한국어 배열에서 물리 오른쪽 Alt는 한/영 키 — 짧게 탭하면
-    // 한/영 전환을 그대로 살린다 (홀드만 마우스 레이어).
-    // macOS는 Hangul 키코드가 없어 탭 무동작.
-    #[cfg(target_os = "windows")]
-    let tap_action = Some("Hangul".into());
-    #[cfg(not(target_os = "windows"))]
-    let tap_action = None;
-
+    // 짧게 탭 = 한/영 전환. Windows 한국어 배열에서 물리 오른쪽 Alt가 곧
+    // 한/영 키라 수십 년 근육기억과 일치하고, macOS도 같은 자리(오른쪽 Option)로
+    // 통일한다 (2026-08-12 — CapsLock 탭 한영을 이곳으로 이동, 단일 경로).
     LayerToml {
         trigger: "RAlt".into(),
-        tap_action,
+        tap_action: Some("Hangul".into()),
         tap_hold_ms: Some(200),
         // 마우스 조작 중 미매핑 키 오타가 텍스트로 입력되는 사고 방지
         unmapped: Some("block".into()),
@@ -837,8 +826,9 @@ pub fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::Keym
         }
     }
 
-    // 한/영 전환 기본 제스처 (minimal/vim-nav 공통):
-    // Shift+Space는 전 플랫폼, RShift 더블탭은 Windows 전용
+    // 한/영 전환 기본 제스처 (minimal/vim-nav 공통): Shift+Space 콤보.
+    // RShift 더블탭 기본은 제거됨 (2026-08-12) — 주 경로를 RAlt 탭(물리 한영키
+    // 자리, 마우스 레이어 tap_action)으로 통일. 원하면 config double_taps로 복원.
     let has_shift_space = merged
         .combos
         .iter()
@@ -848,21 +838,6 @@ pub fn effective_keymap(km: &crate::config::KeymapConfig) -> crate::config::Keym
             trigger: "Shift+Space".into(),
             action: "Hangul".into(),
         });
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let has_rshift_dt = merged
-            .double_taps
-            .iter()
-            .any(|dt| dt.key.eq_ignore_ascii_case("rshift"));
-        if !has_rshift_dt {
-            merged.double_taps.push(crate::config::DoubleTapToml {
-                key: "RShift".into(),
-                action: "Hangul".into(),
-                timeout_ms: Some(300),
-            });
-        }
     }
 
     merged
@@ -1231,18 +1206,23 @@ mod tests {
         let e = effective_keymap(&keymap_with_profile("vim-nav"));
         let nav = e.layers.get("nav").expect("nav 레이어");
         assert_eq!(nav.trigger, "CapsLock", "0.13.0부터 기본 트리거");
-        assert_eq!(nav.tap_action.as_deref(), Some("Hangul"), "탭 = 한/영");
+        assert_eq!(nav.tap_action, None, "CapsLock 탭 = 무동작 (한영은 RAlt 탭으로)");
         assert!(nav.mappings.contains_key("H"));
+        assert!(nav.double_taps.contains_key("U"));
         assert!(nav.double_taps.contains_key("I"));
+        // 한/영 주 경로 = RAlt 탭 (물리 한영키 자리), 보조 = Shift+Space 콤보
+        let mouse = e.layers.get("mouse").expect("mouse 레이어");
+        assert_eq!(mouse.tap_action.as_deref(), Some("Hangul"));
         assert!(e
             .combos
             .iter()
             .any(|c| c.trigger.eq_ignore_ascii_case("shift+space")));
-        #[cfg(target_os = "windows")]
-        assert!(e
-            .double_taps
-            .iter()
-            .any(|dt| dt.key.eq_ignore_ascii_case("rshift")));
+        assert!(
+            !e.double_taps
+                .iter()
+                .any(|dt| dt.key.eq_ignore_ascii_case("rshift")),
+            "RShift 더블탭 기본은 제거 — 한영 경로 단일화"
+        );
     }
 
     #[test]
@@ -1278,7 +1258,7 @@ mod tests {
 
         let e = effective_keymap(&km);
         let nav = &e.layers["nav"];
-        assert_eq!(nav.tap_action.as_deref(), Some("Hangul"), "기본 유지");
+        assert_eq!(nav.tap_action, None, "기본(탭 무동작) 유지");
         assert_eq!(nav.tap_hold_ms, Some(200), "기본 유지");
 
         // 명시하면 반영
@@ -1351,15 +1331,20 @@ mod tests {
         assert_eq!(mouse.mappings["S"], "mouse:left");
         assert_eq!(mouse.mappings["D"], "mouse:down");
         assert_eq!(mouse.mappings["F"], "mouse:right");
-        // 검지 세로열 R-F-V = 휠
-        assert_eq!(mouse.mappings["R"], "mouse:wheel-up");
-        assert_eq!(mouse.mappings["V"], "mouse:wheel-down");
+        // 이동 클러스터 좌/우 = 좌/우클릭, T/G 세로열 = 휠 (공간 대응 배치)
+        assert_eq!(mouse.mappings["W"], "mouse:click");
+        assert_eq!(mouse.mappings["R"], "mouse:rclick");
+        assert_eq!(mouse.mappings["T"], "mouse:wheel-up");
+        assert_eq!(mouse.mappings["G"], "mouse:wheel-down");
+        // Space 좌클릭은 드래그용 유지 — W(약지)는 S(←이동)와 손가락이 겹친다
         assert_eq!(mouse.mappings["Space"], "mouse:click");
-        assert_eq!(mouse.mappings["C"], "mouse:rclick");
-        assert_eq!(mouse.mappings["G"], "mouse:mclick");
         assert_eq!(mouse.mappings["LShift"], "mouse:slow");
         assert!(
-            !mouse.mappings.contains_key("W") && !mouse.mappings.contains_key("A"),
+            !mouse.mappings.contains_key("C") && !mouse.mappings.contains_key("V"),
+            "구 배치(C 우클릭, R/V 휠)는 폐기 — 클릭·휠은 W/R·T/G 공간 대응으로"
+        );
+        assert!(
+            !mouse.mappings.contains_key("A"),
             "WASD 배치는 폐기 — S/D 의미가 뒤집혀 ESDF와 병행 불가"
         );
 
@@ -1385,19 +1370,22 @@ mod tests {
         assert_eq!(nav.mappings["/"], "Delete");
         assert!(
             !nav.double_taps.contains_key("Slash"),
-            "삭제키 더블탭은 연타와 충돌 — 줄 삭제는 U로 분리"
+            "삭제키 더블탭은 연타와 충돌"
         );
 
-        // 줄 삭제/단어 삭제는 연타 개념이 없는 전용 키
-        assert!(
-            nav.mappings["U"].starts_with("macro:"),
-            "U = 줄 삭제 매크로"
-        );
-        assert!(nav.mappings.contains_key(","), ", = 앞 단어 삭제");
+        // 비싼 액션(P 붙여넣기/Y 줄 복사/U 줄 삭제/, 단어 삭제)은 제거 —
+        // 레이어에는 오발사해도 무해한 액션만 남긴다 (2026-08-12)
+        for k in ["P", "Y", "U", ","] {
+            assert!(!nav.mappings.contains_key(k), "{k}는 제거된 매핑");
+        }
 
-        // 단어 이동 더블탭은 유지 (연타로 더 멀리 가는 용도로 실사용 검증됨)
+        // 단어 이동 더블탭은 U/I (검지+중지) — 구 I/O 배치는 폐기
+        assert!(nav.double_taps.contains_key("U"));
         assert!(nav.double_taps.contains_key("I"));
-        assert!(nav.double_taps.contains_key("O"));
+        assert!(
+            !nav.double_taps.contains_key("O"),
+            "O는 빈 키 — 오른손 위 행 오타 안전지대"
+        );
     }
 
     #[cfg(target_os = "windows")]

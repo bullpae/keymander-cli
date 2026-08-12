@@ -376,17 +376,22 @@ kmd keymap list-presets    # all built-in presets
 ```
 
 The `vim-nav` preset provides:
-- `CapsLock` hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump / Home/End
-- `CapsLock` + `.` / `/` = Backspace / Delete (plain taps — mash them freely),
-  `,` = delete word back, `Y` / `U` = copy / delete line (vim `yy` / `dd`)
-- `CapsLock` + Space = launch kmd-desktop; `CapsLock` tap alone = input-source
-  toggle (한/영); `Alt+Space` global hotkey also opens the launcher
+- `CapsLock` hold + HJKL = arrow keys, N/M = PageUp/Down, U/I = word jump
+  (double-tap = line start/end)
+- `CapsLock` + `.` / `/` = Backspace / Delete (plain taps — mash them freely).
+  Every action on the layer is deliberately harmless-on-misfire: paste, copy
+  line, and delete line/word were removed because CapsLock sits next to LShift
+  and slips are inevitable
+- `CapsLock` + Space = launch kmd-desktop; a stray `CapsLock` tap does nothing;
+  `Alt+Space` global hotkey also opens the launcher
+- Input-source toggle (한/영) = short `RAlt` tap — the physical 한/영 position
+  on Korean keyboards, unified across Windows and macOS
 - Prefer HHKB-style CapsLock mod-tap (tap = CapsLock, hold = Ctrl)? Set the nav
   trigger back to `LAlt` in config (docs/13)
 - `RAlt` hold = mouse layer: ESDF pointer move (accelerated, keeps the typing
-  home position), R/V wheel, Space left-click/drag, C/G right/middle click,
-  J/K/L click aliases, LShift precision — on Korean Windows keyboards a short
-  RAlt tap still toggles 한/영
+  home position), W/R left/right click (spatially left/right of the movement
+  cluster), T/G wheel up/down, Space left-click/drag, J/K/L click aliases,
+  LShift precision
 - Every key is customizable in `config.toml`
   ([config reference](docs/06_config_reference.md))
 
