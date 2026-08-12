@@ -1,6 +1,6 @@
 [package]
 name = "kmd-daemon"
-version = "0.13.3"
+version = "0.14.0"
 edition = "2021"
 description = "keymander Daemon — background service with IPC, global hotkey, key bindings"
 
