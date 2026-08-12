@@ -1206,7 +1206,10 @@ mod tests {
         let e = effective_keymap(&keymap_with_profile("vim-nav"));
         let nav = e.layers.get("nav").expect("nav 레이어");
         assert_eq!(nav.trigger, "CapsLock", "0.13.0부터 기본 트리거");
-        assert_eq!(nav.tap_action, None, "CapsLock 탭 = 무동작 (한영은 RAlt 탭으로)");
+        assert_eq!(
+            nav.tap_action, None,
+            "CapsLock 탭 = 무동작 (한영은 RAlt 탭으로)"
+        );
         assert!(nav.mappings.contains_key("H"));
         assert!(nav.double_taps.contains_key("U"));
         assert!(nav.double_taps.contains_key("I"));

@@ -1173,23 +1173,15 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         assert!(config.remaps.contains_key(&VKey::CapsLock));
         assert!(config.layers.is_empty());
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(config.combos.len(), 1, "Shift+Space 콤보 (Windows)");
-            assert_eq!(config.double_taps.len(), 1, "RShift 더블탭 (Windows)");
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert_eq!(
-                config.combos.len(),
-                1,
-                "macOS/Linux: Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
-            );
-            assert!(
-                config.double_taps.is_empty(),
-                "RShift 더블탭은 Windows 전용"
-            );
-        }
+        assert_eq!(
+            config.combos.len(),
+            1,
+            "Shift+Space 한/영 콤보 (크로스플랫폼 통일)"
+        );
+        assert!(
+            config.double_taps.is_empty(),
+            "RShift 더블탭 기본 제거 (2026-08-12) — minimal은 물리 한/영 키가 그대로 동작"
+        );
     }
 
     #[test]
