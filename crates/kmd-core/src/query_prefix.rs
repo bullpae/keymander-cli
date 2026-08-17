@@ -37,6 +37,8 @@ pub enum QueryPrefix {
     Keys,
     /// `:f` — 특정 폴더 내 즉석 파일 검색
     FolderSearch,
+    /// `?` / `:grep` — 문서 본문 검색 (FTS5, docs/15)
+    ContentSearch,
     /// `;` / `:clip` — 클립보드 히스토리 검색 (docs/12 흐름 B)
     Clipboard,
     /// 일반 검색 (fuzzy / glob / regex / contains / url)
@@ -113,6 +115,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         seed: ":f ",
         icon_emoji: "\u{1F4C2}",
         icon_ascii: "[DIR]",
+    },
+    CommandSpec {
+        prefix: QueryPrefix::ContentSearch,
+        aliases: &[":grep"],
+        title: "?  Content Search",
+        usage: "Type ? keyword  (search inside documents — file contents, not names)",
+        seed: "?",
+        icon_emoji: "\u{1F50E}",
+        icon_ascii: "[GRP]",
     },
     CommandSpec {
         prefix: QueryPrefix::Keys,
@@ -297,6 +308,10 @@ pub fn prefix_of(query: &str) -> QueryPrefix {
     // `;` — 클립보드 히스토리 (고빈도 기능은 한 글자 시길, docs/12)
     if query.starts_with(';') {
         return QueryPrefix::Clipboard;
+    }
+    // `?` — 문서 본문 검색 (docs/15). 한 글자 시길이라 타이핑 흐름을 안 끊는다
+    if query.starts_with('?') {
+        return QueryPrefix::ContentSearch;
     }
     if query.starts_with(':') {
         for spec in COMMANDS {

@@ -5,8 +5,10 @@ All notable changes to keymander are documented here.
 ## [Unreleased]
 
 ### Added
-- **문서 본문 검색 (docs/15 P1)** — 파일 이름이 아니라 내용으로 찾는다.
-  `kmd grep <질의>`로 검색하고, 데몬이 인덱스 리프레시 주기마다 자동으로 증분
+- **문서 본문 검색 (docs/15 P1+P3)** — 파일 이름이 아니라 내용으로 찾는다.
+  런처(데스크톱·TUI)에서 **`?질의`**(또는 `:grep`)로 검색 — 결과는
+  "파일명 — «매치» 스니펫"이고 Enter로 파일이 열린다. CLI는
+  `kmd grep <질의>`. 데몬이 인덱스 리프레시 주기마다 자동으로 증분
   갱신한다 (`kmd index --rebuild`도 함께 갱신). SQLite FTS5(bundled, 의존성
   추가 없음) + bm25 랭킹 + 매치 하이라이트 스니펫. 대상은 플레인 텍스트·
   소스코드 확장자(설정으로 대체 가능), 파일당 1MB 상한, UTF-8→EUC-KR 폴백,

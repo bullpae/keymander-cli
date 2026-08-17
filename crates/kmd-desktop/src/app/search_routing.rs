@@ -39,6 +39,7 @@ impl App {
             Prefix::Keymap => self.handle_keymap_query(trimmed),
             Prefix::Keys => self.handle_keys_query(),
             Prefix::FolderSearch => self.handle_folder_search(trimmed),
+            Prefix::ContentSearch => self.handle_content_search(trimmed),
             Prefix::Clipboard => {
                 post_task = self.handle_clip_query(trimmed, generation);
             }
@@ -445,6 +446,24 @@ impl App {
     /// `:f /경로 쿼리` — 지정 폴더 안에서 파일/폴더를 즉석 검색 (kmd-core 공용 구현).
     pub(super) fn handle_folder_search(&mut self, raw: &str) {
         let results = kmd_core::folder_search::folder_search_results(raw, self.use_emoji);
+        self.commit_results(results, kmd_core::SearchMode::Contains, true);
+    }
+
+    /// `?질의` — 문서 본문 검색 (FTS5, docs/15). 공유 kmd.db를 지연 오픈해 읽는다.
+    pub(super) fn handle_content_search(&mut self, raw: &str) {
+        if self.content_db.is_none() {
+            let path = kmd_core::Config::default_data_dir().join(kmd_core::DB_FILENAME);
+            match kmd_core::db::Database::open(&path) {
+                Ok(db) => self.content_db = Some(db),
+                Err(e) => tracing::warn!("본문 검색 DB 열기 실패: {e}"),
+            }
+        }
+        let results = kmd_core::content_index::launcher_results(
+            self.content_db.as_ref(),
+            raw,
+            self.use_emoji,
+            SEARCH_LIMIT,
+        );
         self.commit_results(results, kmd_core::SearchMode::Contains, true);
     }
 

@@ -282,6 +282,9 @@ pub struct App {
     /// 실행 이력 frecency 맵 — 부팅 시 1회 로드해 키 입력마다의 DB 조회를 제거
     frecency: kmd_core::history::FrecencyMap,
     db: kmd_core::db::Database,
+    /// 본문 검색용 공유 DB (`<data_dir>/kmd.db` — 데몬이 인덱싱, 여기선 읽기만).
+    /// 위의 `db`(desktop 전용 히스토리 DB)와 다른 파일이다. `?` 첫 사용 시 지연 오픈.
+    content_db: Option<kmd_core::db::Database>,
     _guard: Guard,
 
     // ── Window geometry ───────────────────────────────────────────────
@@ -722,6 +725,7 @@ impl App {
             full_engine_loaded: false,
             frecency,
             db,
+            content_db: None,
             _guard: guard,
             window_width,
             window_height: if FIXED_WINDOW_HEIGHT || crate::window_transparent() {

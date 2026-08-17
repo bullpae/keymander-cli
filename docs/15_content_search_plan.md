@@ -75,9 +75,13 @@ macOS 데몬 파일 인덱싱 "0건" 기록(2026-07-29, 포터블 시절)은 **�
 
 ## 5. P3 — 런처 통합
 
-- `?` prefix (query_prefix.rs COMMANDS 등록, folder_search.rs 패턴) → 본문 검색.
-  결과 = 파일명 + 경로 + 스니펫, Enter = 파일 열기.
-- 검색 연산자 서브셋: `"구문"`, `-제외`, `ext:`, `path:` (순수 함수 파서 + 테스트).
+- **`?` prefix 완료 (2026-08-17)**: `?질의`/`:grep 질의` → 데스크톱·TUI 공통
+  본문 검색 (`content_index::launcher_results`, folder_search.rs 패턴).
+  결과 = "파일명 — «매치» 스니펫" + 실경로, Enter = 파일 열기.
+  데스크톱은 공유 kmd.db를 지연 오픈(자체 desktop/kmd.db와 별개), TUI는 기존
+  db 핸들 재사용. `:help` 목록에는 COMMANDS 레지스트리로 자동 노출.
+- 잔여: 검색 연산자 서브셋 `"구문"`, `-제외`, `ext:`, `path:` (순수 함수
+  파서 + 테스트).
 
 ## 6. P4 — 조건부 확장 (실측 후 결정)
 

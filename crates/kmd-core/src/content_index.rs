@@ -377,6 +377,116 @@ pub fn stats(db: &Database) -> Result<(usize, u64), DbError> {
     Ok((count as usize, bytes as u64))
 }
 
+// ── 런처(`?` prefix) 통합 — TUI/데스크톱 공용 (folder_search.rs 패턴) ────────
+
+/// `?질의` / `:grep 질의` 입력을 파싱해 런처 결과 목록을 만든다.
+///
+/// - `db`가 None이면 DB 열기 실패 안내 항목
+/// - 질의가 비었거나 2자 미만이면 사용법 안내 항목
+/// - 결과의 name은 "파일명 — 스니펫" (매치 구간 «») , path는 실제 경로라
+///   Enter로 그대로 파일이 열린다
+pub fn launcher_results(
+    db: Option<&Database>,
+    raw: &str,
+    use_emoji: bool,
+    limit: usize,
+) -> Vec<crate::search::SearchResult> {
+    use crate::index::{IndexItem, ItemKind, Source};
+    use crate::search::SearchResult;
+
+    let query = raw
+        .strip_prefix('?')
+        .or_else(|| raw.strip_prefix(":grep"))
+        .unwrap_or(raw)
+        .trim();
+
+    let info = |name: String, path: String, icon: &str| SearchResult {
+        item: IndexItem {
+            name,
+            path,
+            kind: ItemKind::SystemCommand,
+            source: Source::Plugin,
+            icon: icon.to_string(),
+            keywords: "kmd:content:hint".to_string(),
+            icon_path: None,
+        },
+        score: 0,
+    };
+
+    let Some(db) = db else {
+        return vec![info(
+            "본문 인덱스 DB를 열 수 없습니다".to_string(),
+            "kmd index --rebuild 실행 또는 데몬 상태를 확인하세요".to_string(),
+            "\u{26A0}\u{FE0F}",
+        )];
+    };
+
+    if query.chars().filter(|c| !c.is_whitespace()).count() < MIN_QUERY_CHARS {
+        return vec![info(
+            "?검색어  — 문서 본문 검색 (2자 이상)".to_string(),
+            "파일 이름이 아니라 내용으로 찾습니다  ·  예: ?예산 삭감".to_string(),
+            "\u{1F50E}",
+        )];
+    }
+
+    let hits = match search(db, query, limit) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("본문 검색 실패: {e}");
+            return vec![info(
+                "본문 검색 중 오류가 발생했습니다".to_string(),
+                e.to_string(),
+                "\u{26A0}\u{FE0F}",
+            )];
+        }
+    };
+
+    if hits.is_empty() {
+        let (count, _) = stats(db).unwrap_or((0, 0));
+        if count == 0 {
+            return vec![info(
+                "본문 인덱스가 아직 비어 있습니다".to_string(),
+                "kmd index --rebuild 로 생성하거나 데몬 리프레시를 기다리세요".to_string(),
+                "\u{1F4ED}",
+            )];
+        }
+        return vec![info(
+            format!("'{query}' 본문 매치 없음"),
+            format!("인덱싱된 파일 {count}개에서 찾지 못했습니다"),
+            "\u{1F50D}",
+        )];
+    }
+
+    let total = hits.len();
+    hits.into_iter()
+        .enumerate()
+        .map(|(i, hit)| {
+            let fname = std::path::Path::new(&hit.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&hit.path)
+                .to_string();
+            let mut snippet = hit.snippet;
+            if snippet.chars().count() > 90 {
+                snippet = snippet.chars().take(90).collect::<String>() + "…";
+            }
+            SearchResult {
+                item: IndexItem {
+                    name: format!("{fname}  —  {snippet}"),
+                    path: hit.path,
+                    kind: ItemKind::File,
+                    source: Source::FileProvider,
+                    icon: if use_emoji { "\u{1F4C4}" } else { "F " }.to_string(),
+                    keywords: "kmd:content:hit".to_string(),
+                    icon_path: None,
+                },
+                // bm25 정렬 순서를 그대로 보존하는 순위 역산 점수
+                score: ((total - i) * 10) as u32,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,6 +624,41 @@ mod tests {
         for q in ["AND OR", "NEAR(", "\"열린따옴표", "col:val", "a*b(c)"] {
             search(&db, q, 10).unwrap_or_else(|e| panic!("질의 {q:?} 에서 오류: {e}"));
         }
+    }
+
+    #[test]
+    fn 런처_결과_변환과_안내_항목() {
+        use crate::index::ItemKind;
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "메모.md", "예산 회의 정리".as_bytes());
+        let db = Database::open_in_memory().unwrap();
+        sync(&db, &test_launcher(dir.path())).unwrap();
+
+        let rs = launcher_results(Some(&db), "?예산", true, 10);
+        assert_eq!(rs.len(), 1);
+        assert!(
+            rs[0].item.name.starts_with("메모.md"),
+            "{}",
+            rs[0].item.name
+        );
+        assert!(rs[0].item.name.contains("«예산»"));
+        assert!(rs[0].item.path.ends_with("메모.md"), "Enter 실행용 실경로");
+        assert_eq!(rs[0].item.kind, ItemKind::File);
+
+        // :grep 별칭도 같은 결과
+        assert_eq!(launcher_results(Some(&db), ":grep 예산", true, 10).len(), 1);
+
+        // 안내 항목들: 짧은 질의 / DB 없음 / 매치 없음
+        let hint = launcher_results(Some(&db), "?", true, 10);
+        assert_eq!(hint[0].item.kind, ItemKind::SystemCommand);
+        assert!(launcher_results(None, "?예산", true, 10)[0]
+            .item
+            .name
+            .contains("열 수 없습니다"));
+        assert!(launcher_results(Some(&db), "?존재안하는단어", true, 10)[0]
+            .item
+            .name
+            .contains("매치 없음"));
     }
 
     #[test]

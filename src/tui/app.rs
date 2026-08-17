@@ -990,6 +990,7 @@ fn update_search(state: &mut AppState, engine: &mut SearchEngine, db: Option<&km
         QueryPrefix::Keymap => handle_keymap_query(&query, state),
         QueryPrefix::Keys => handle_keys_query(state),
         QueryPrefix::FolderSearch => handle_folder_search(&query, state),
+        QueryPrefix::ContentSearch => handle_content_search(&query, state, db),
         // 클립보드 히스토리는 데몬+데스크톱 기능이다 (TUI는 상주 감시가 없음).
         // TUI에서는 일반 검색으로 흘려보낸다.
         QueryPrefix::Clipboard => handle_main_search(&query, state, engine, db),
@@ -1325,6 +1326,14 @@ fn handle_keys_query(state: &mut AppState) {
 /// Handle :f prefix — 폴더 지정 즉석 검색 (kmd-core 공용 구현)
 fn handle_folder_search(query: &str, state: &mut AppState) {
     state.results = kmd_core::folder_search::folder_search_results(query, state.use_emoji);
+    state.search_mode = SearchMode::Contains;
+    state.selected_index = 0;
+}
+
+/// Handle `?` prefix — 문서 본문 검색 (FTS5, docs/15, kmd-core 공용 구현)
+fn handle_content_search(query: &str, state: &mut AppState, db: Option<&kmd_core::Database>) {
+    state.results =
+        kmd_core::content_index::launcher_results(db, query, state.use_emoji, SEARCH_RESULT_LIMIT);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }
