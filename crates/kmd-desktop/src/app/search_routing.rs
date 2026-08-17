@@ -458,12 +458,20 @@ impl App {
                 Err(e) => tracing::warn!("본문 검색 DB 열기 실패: {e}"),
             }
         }
-        let results = kmd_core::content_index::launcher_results(
+        let mut results = kmd_core::content_index::launcher_results(
             self.content_db.as_ref(),
             raw,
             self.use_emoji,
             SEARCH_LIMIT,
         );
+        // 빈 질의(`?`만 입력) → 사용법 안내 아래에 "자주 변하는 폴더" 제안 (docs/15 P2)
+        if kmd_core::content_index::strip_query(raw).is_empty() {
+            results.extend(kmd_core::folder_suggest::suggestion_results(
+                &self.runtime_config.launcher,
+                self.use_emoji,
+                3,
+            ));
+        }
         self.commit_results(results, kmd_core::SearchMode::Contains, true);
     }
 

@@ -77,6 +77,16 @@ const DEFAULT_EXTENSIONS: &[&str] = &[
 /// 런처는 모든 쿼리가 1자를 통과하므로 명시적 하한이 필요하다 (docs/15).
 pub const MIN_QUERY_CHARS: usize = 2;
 
+/// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록.
+/// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
+pub(crate) fn allowed_extensions(cs: &crate::config::ContentSearchConfig) -> HashSet<String> {
+    if cs.extensions.is_empty() {
+        DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
+    } else {
+        cs.extensions.iter().map(|s| s.to_lowercase()).collect()
+    }
+}
+
 /// 배치 트랜잭션 크기 — fsync 횟수를 줄인다.
 const TXN_BATCH: usize = 200;
 
@@ -116,11 +126,7 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
         return Ok(stats);
     }
 
-    let allowed: HashSet<String> = if cs.extensions.is_empty() {
-        DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
-    } else {
-        cs.extensions.iter().map(|s| s.to_lowercase()).collect()
-    };
+    let allowed = allowed_extensions(cs);
     let max_bytes = cs.max_file_kb.saturating_mul(1024);
     let ignore_set: HashSet<&str> = launcher
         .ignore_patterns
@@ -379,6 +385,15 @@ pub fn stats(db: &Database) -> Result<(usize, u64), DbError> {
 
 // ── 런처(`?` prefix) 통합 — TUI/데스크톱 공용 (folder_search.rs 패턴) ────────
 
+/// `?질의`/`:grep 질의`에서 프리픽스를 벗긴 실제 질의.
+/// UI가 "빈 질의(폴더 제안 노출 시점)" 판단에도 같은 규칙을 쓴다.
+pub fn strip_query(raw: &str) -> &str {
+    raw.strip_prefix('?')
+        .or_else(|| raw.strip_prefix(":grep"))
+        .unwrap_or(raw)
+        .trim()
+}
+
 /// `?질의` / `:grep 질의` 입력을 파싱해 런처 결과 목록을 만든다.
 ///
 /// - `db`가 None이면 DB 열기 실패 안내 항목
@@ -394,11 +409,7 @@ pub fn launcher_results(
     use crate::index::{IndexItem, ItemKind, Source};
     use crate::search::SearchResult;
 
-    let query = raw
-        .strip_prefix('?')
-        .or_else(|| raw.strip_prefix(":grep"))
-        .unwrap_or(raw)
-        .trim();
+    let query = strip_query(raw);
 
     let info = |name: String, path: String, icon: &str| SearchResult {
         item: IndexItem {

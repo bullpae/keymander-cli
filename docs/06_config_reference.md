@@ -125,8 +125,11 @@ toggle_preview = "ctrl+p"
 파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +
 `ignore_patterns` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
 주기(`index_refresh_minutes`)마다 증분 갱신하고(mtime+size 불일치만 재인덱싱),
+**파일 변경도 실시간 감시**(notify, 500ms 디바운스)해 곧바로 반영한다.
 데몬이 없으면 `kmd index --rebuild`가 함께 갱신한다.
 검색: 런처(데스크톱/TUI)에서 **`?질의`** 또는 `:grep 질의`, CLI는 `kmd grep <질의>`.
+`?`만 입력하면 검색 범위 밖에서 최근 활동이 활발한 폴더를 제안하며
+(Enter = search_paths에 추가), CLI로는 `kmd index --suggest`.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|

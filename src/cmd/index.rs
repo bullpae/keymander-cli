@@ -2,10 +2,31 @@
 
 use color_eyre::Result;
 
-pub fn run(rebuild: bool, stats: bool) -> Result<()> {
+pub fn run(rebuild: bool, stats: bool, suggest: bool) -> Result<()> {
     let config = super::load_config()?;
     let (bin_path, json_path) = super::index_cache_paths();
     let expected_version = kmd_core::Index::current_version();
+
+    if suggest {
+        let suggestions = kmd_core::folder_suggest::suggest_folders(&config.launcher, 5);
+        if suggestions.is_empty() {
+            println!(
+                "제안할 폴더가 없습니다 — 검색 범위 밖에서 최근 활동이 활발한 폴더가 없습니다."
+            );
+        } else {
+            println!("검색 범위에 추가할 만한 폴더 (최근 2주 활동 기준):\n");
+            for s in &suggestions {
+                println!("  {}  — 최근 문서 {}개", s.path.display(), s.recent_files);
+            }
+            println!(
+                "\n추가: 런처에서 `?` 입력 후 제안 항목에 Enter, 또는 config.toml의\n\
+                 launcher.search_paths에 경로를 직접 추가하세요."
+            );
+        }
+        if !rebuild && !stats {
+            return Ok(());
+        }
+    }
 
     if stats && !rebuild {
         if let Some(index) =

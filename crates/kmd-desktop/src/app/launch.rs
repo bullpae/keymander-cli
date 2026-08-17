@@ -252,6 +252,22 @@ impl App {
             return iced::exit();
         }
 
+        // 폴더 제안 항목 — Enter로 search_paths에 추가 + config 저장 (docs/15 P2)
+        if result
+            .item
+            .keywords
+            .starts_with(kmd_core::folder_suggest::SUGGEST_MARKER)
+        {
+            if let Some(msg) = kmd_core::folder_suggest::execute_suggest_action(
+                &mut self.runtime_config,
+                &result.item.keywords,
+            ) {
+                tracing::info!("folder suggest: {msg}");
+            }
+            self.selected = 0;
+            return self.perform_search();
+        }
+
         // 폴더 검색 제안 항목 — path가 ":f  <query>" 형태이면 해당 쿼리로 전환
         if result.item.keywords.starts_with("kmd:folder_search:") {
             let seed = result.item.path.trim().to_string();

@@ -14,7 +14,15 @@ All notable changes to keymander are documented here.
   소스코드 확장자(설정으로 대체 가능), 파일당 1MB 상한, UTF-8→EUC-KR 폴백,
   바이너리 NUL 스니핑 배제. 증분 판정은 mtime+size — 무변경 재실행은 수 ms.
   설정: `[launcher.content_search]` (enabled/max_file_kb/extensions/max_files).
-  런처 prefix 통합(P3)·변경 감시(P2)·형태소 색인(P4)은 docs/15 로드맵 참조.
+  형태소 색인(P4)·검색 연산자는 docs/15 로드맵 참조.
+- **본문 인덱스 실시간 갱신 (docs/15 P2)** — 데몬이 search_paths의 파일
+  변경을 감시(notify)해 500ms 디바운스 후 증분 sync. 이벤트 폭풍(최소 간격
+  10초)·연속 이벤트 기아(최대 지연 60초)·이벤트 유실(6시간 주기 리프레셔
+  보정)까지 방어. 저장 직후의 문서가 곧바로 `?` 검색에 잡힌다.
+- **"자주 변하는 폴더" 제안 (docs/15 P2)** — 검색 범위 밖에서 최근 2주
+  활동이 활발한 폴더를 찾아 제안한다. 런처에서 `?`만 입력하면 하단에 제안
+  행이 뜨고 **Enter로 즉시 search_paths에 추가**(config 저장), CLI는
+  `kmd index --suggest`. 자동 추가는 하지 않는다 — 인덱스 범위는 사용자 결정.
   설계는 [Docufinder](https://github.com/chrisryugj/Docufinder) 분석에서
   채택(BSL 라이선스라 코드 재사용 없이 전부 자체 구현).
 

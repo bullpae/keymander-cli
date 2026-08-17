@@ -748,6 +748,18 @@ fn execute_selected(
             update_search(state, engine, db);
             return;
         }
+        // 폴더 제안 → search_paths에 추가 + config 저장 (docs/15 P2)
+        if keywords.starts_with(kmd_core::folder_suggest::SUGGEST_MARKER) {
+            let mut config = crate::cmd::load_config().unwrap_or_default();
+            if let Some(msg) =
+                kmd_core::folder_suggest::execute_suggest_action(&mut config, &keywords)
+            {
+                state.status_message = Some(msg);
+            }
+            state.selected_index = 0;
+            update_search(state, engine, db);
+            return;
+        }
         // 설정 모달 열기 (:set)
         if keywords == "kmd:tui:open_settings" {
             let config = crate::cmd::load_config().unwrap_or_default();
@@ -1334,6 +1346,19 @@ fn handle_folder_search(query: &str, state: &mut AppState) {
 fn handle_content_search(query: &str, state: &mut AppState, db: Option<&kmd_core::Database>) {
     state.results =
         kmd_core::content_index::launcher_results(db, query, state.use_emoji, SEARCH_RESULT_LIMIT);
+    // 빈 질의(`?`만 입력) → 사용법 안내 아래에 "자주 변하는 폴더" 제안 (docs/15 P2)
+    if kmd_core::content_index::strip_query(query).is_empty() {
+        let launcher = crate::cmd::load_config()
+            .map(|c| c.launcher)
+            .unwrap_or_default();
+        state
+            .results
+            .extend(kmd_core::folder_suggest::suggestion_results(
+                &launcher,
+                state.use_emoji,
+                3,
+            ));
+    }
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }

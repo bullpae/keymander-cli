@@ -178,12 +178,32 @@ fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
     sync_content_index(config);
 }
 
-/// 문서 본문 인덱스 증분 갱신 (docs/15 P1) — 파일명 인덱스 리프레시 직후 수행.
+/// 문서 본문 인덱스 증분 갱신 (docs/15 P1) — 파일명 인덱스 리프레시 직후,
+/// 그리고 파일 변경 감시(spawn_content_watcher)에서도 호출된다.
 /// 실패해도 파일명 검색에는 영향 없다 (경고만 남기고 계속).
+///
+/// 여러 경로(리프레셔/IPC/워처)가 동시에 부를 수 있어 겹침은 스킵한다 —
+/// sync는 증분·멱등이라 다음 호출이 어차피 따라잡는다.
 fn sync_content_index(config: &Config) {
+    use std::sync::atomic::AtomicBool;
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+
     if !config.launcher.content_search.enabled {
         return;
     }
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        tracing::debug!("본문 인덱스 sync 겹침 — 스킵");
+        return;
+    }
+    // RAII 해제 — 아래 어느 경로로 반환돼도 플래그가 풀린다
+    struct Reset<'a>(&'a AtomicBool);
+    impl Drop for Reset<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _reset = Reset(&RUNNING);
+
     let started = Instant::now();
     let db_path = Config::default_data_dir().join(kmd_core::DB_FILENAME);
     match kmd_core::Database::open(&db_path) {
@@ -201,6 +221,106 @@ fn sync_content_index(config: &Config) {
         },
         Err(e) => tracing::warn!("본문 인덱스 DB 열기 실패: {e}"),
     }
+}
+
+/// 파일 변경 감시 스레드 — 본문 인덱스 실시간 증분 sync (docs/15 P2).
+///
+/// search_paths를 재귀 감시하고, 이벤트가 500ms 잠잠해지면 증분 sync를
+/// 돌린다 (무변경 sync는 수 ms — mtime+size 스킵 덕). 안전장치:
+/// - 최소 간격 10초 — 이벤트 폭풍에도 sync 스래시 방지
+/// - 최대 지연 60초 — 연속 이벤트(로그 파일 등)로 인한 기아 방지
+/// - 60초마다 config 재로드 — search_paths 변경 시 재감시, 비활성화 반영
+/// - 이벤트 유실은 기존 6시간 주기 리프레셔가 보정 (docs/15의 이중 안전망)
+fn spawn_content_watcher(shutdown: Arc<AtomicBool>) {
+    use notify::{RecursiveMode, Watcher};
+
+    const DEBOUNCE: Duration = Duration::from_millis(500);
+    const MIN_INTERVAL: Duration = Duration::from_secs(10);
+    const MAX_DELAY: Duration = Duration::from_secs(60);
+    const CONFIG_RELOAD: Duration = Duration::from_secs(60);
+
+    std::thread::spawn(move || {
+        lower_indexer_thread_priority();
+
+        let mut config = load_config();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<_>| {
+            if res.is_ok() {
+                let _ = tx.send(());
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("본문 감시자 생성 실패 (주기 리프레시로만 동작): {e}");
+                return;
+            }
+        };
+
+        let mut watched: Vec<std::path::PathBuf> = Vec::new();
+        let rewatch = |watcher: &mut notify::RecommendedWatcher,
+                       watched: &mut Vec<std::path::PathBuf>,
+                       cfg: &Config| {
+            for p in watched.iter() {
+                let _ = watcher.unwatch(p);
+            }
+            watched.clear();
+            if !cfg.launcher.content_search.enabled {
+                return;
+            }
+            for p in &cfg.launcher.search_paths {
+                if !p.is_dir() {
+                    continue;
+                }
+                match watcher.watch(p, RecursiveMode::Recursive) {
+                    Ok(()) => watched.push(p.clone()),
+                    Err(e) => tracing::warn!("경로 감시 실패 {}: {e}", p.display()),
+                }
+            }
+            tracing::info!("본문 인덱스 파일 감시 시작 ({}개 경로)", watched.len());
+        };
+        rewatch(&mut watcher, &mut watched, &config);
+
+        let mut dirty = false;
+        let mut last_event = Instant::now();
+        let mut last_sync = Instant::now();
+        let mut last_config_load = Instant::now();
+
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(()) => {
+                    dirty = true;
+                    last_event = Instant::now();
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+
+            if last_config_load.elapsed() >= CONFIG_RELOAD {
+                last_config_load = Instant::now();
+                let fresh = load_config();
+                if fresh.launcher.search_paths != config.launcher.search_paths
+                    || fresh.launcher.content_search.enabled
+                        != config.launcher.content_search.enabled
+                {
+                    config = fresh;
+                    rewatch(&mut watcher, &mut watched, &config);
+                } else {
+                    config = fresh;
+                }
+            }
+
+            let quiet = last_event.elapsed() >= DEBOUNCE;
+            let starved = last_sync.elapsed() >= MAX_DELAY;
+            if dirty && (quiet || starved) && last_sync.elapsed() >= MIN_INTERVAL {
+                dirty = false;
+                last_sync = Instant::now();
+                sync_content_index(&config);
+            }
+        }
+    });
 }
 
 /// 백그라운드 인덱스 리프레셔 스레드.
@@ -337,6 +457,7 @@ pub fn run() -> color_eyre::Result<()> {
     // IPC 준비를 외부에 알린 다음에만 전체 인덱싱을 시작한다. 캐시가 신선하면
     // 주기 리프레시 전까지 아무 스캔도 하지 않는다.
     spawn_index_refresher(engine.clone(), shutdown.clone(), rebuild_immediately);
+    spawn_content_watcher(shutdown.clone());
 
     // accept 루프를 별도 스레드에서 blocking 모드로 실행 — 50ms 바쁜 대기 제거.
     // 종료 시 `listener`를 닫으면 accept()가 에러를 반환하며 루프가 자연스럽게 종료된다.

@@ -26,6 +26,9 @@ color-eyre = "0.6"
 arboard = "3.6.1"
 fs2 = "0.4.3"
 
+# 파일 변경 감시 — 본문 인덱스 실시간 증분 sync (docs/15 P2, 크로스플랫폼)
+notify = "8"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # NSPasteboard 직접 접근 — changeCount 기반 감시 + Concealed 마크(비밀번호) 제외
 objc2 = "0.6"

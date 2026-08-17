@@ -53,6 +53,9 @@ enum Commands {
         /// Show index statistics
         #[arg(long)]
         stats: bool,
+        /// Suggest active folders outside the current search scope
+        #[arg(long)]
+        suggest: bool,
     },
     /// Search inside document contents (FTS5 full-text index)
     Grep {
@@ -311,8 +314,12 @@ fn main() -> color_eyre::Result<()> {
         Some(Commands::Grep { query, sync, limit }) => {
             cmd::grep::run(&query.join(" "), limit, sync)?;
         }
-        Some(Commands::Index { rebuild, stats }) => {
-            cmd::index::run(rebuild, stats)?;
+        Some(Commands::Index {
+            rebuild,
+            stats,
+            suggest,
+        }) => {
+            cmd::index::run(rebuild, stats, suggest)?;
         }
         Some(Commands::Config { action }) => {
             cmd::config::run(action.map(|a| match a {
