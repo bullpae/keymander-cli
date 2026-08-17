@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-17
+
 ### Added
 - **문서 본문 검색 (docs/15 P1+P3)** — 파일 이름이 아니라 내용으로 찾는다.
   런처(데스크톱·TUI)에서 **`?질의`**(또는 `:grep`)로 검색 — 결과는
