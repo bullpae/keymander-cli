@@ -128,7 +128,7 @@ fn suggest_folders_in(
         }
     }
 
-    suggestions.sort_by(|a, b| b.recent_files.cmp(&a.recent_files));
+    suggestions.sort_by_key(|s| std::cmp::Reverse(s.recent_files));
     suggestions.truncate(max);
     suggestions
 }
