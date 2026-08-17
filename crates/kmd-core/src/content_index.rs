@@ -22,14 +22,55 @@ use crate::db::{Database, DbError};
 /// config `content_search.extensions`가 비어 있지 않으면 통째로 대체된다.
 const DEFAULT_EXTENSIONS: &[&str] = &[
     // plain text / docs
-    "txt", "md", "markdown", "rst", "org", "log", "csv",
+    "txt",
+    "md",
+    "markdown",
+    "rst",
+    "org",
+    "log",
+    "csv",
     // config / data
-    "json", "yaml", "yml", "toml", "ini", "conf", "env", "properties",
+    "json",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "conf",
+    "env",
+    "properties",
     // scripts / source
-    "sh", "zsh", "bash", "ps1", "bat", "cmd", "py", "rs", "js", "ts", "jsx", "tsx", "go", "java",
-    "kt", "c", "h", "cpp", "hpp", "cc", "cs", "rb", "php", "swift", "sql", "lua",
+    "sh",
+    "zsh",
+    "bash",
+    "ps1",
+    "bat",
+    "cmd",
+    "py",
+    "rs",
+    "js",
+    "ts",
+    "jsx",
+    "tsx",
+    "go",
+    "java",
+    "kt",
+    "c",
+    "h",
+    "cpp",
+    "hpp",
+    "cc",
+    "cs",
+    "rb",
+    "php",
+    "swift",
+    "sql",
+    "lua",
     // web
-    "html", "htm", "css", "xml", "svg",
+    "html",
+    "htm",
+    "css",
+    "xml",
+    "svg",
 ];
 
 /// 검색 최소 질의 길이(문자). 1자는 FTS 재현율도 낮고 결과가 폭주한다 —
@@ -81,7 +122,11 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
         cs.extensions.iter().map(|s| s.to_lowercase()).collect()
     };
     let max_bytes = cs.max_file_kb.saturating_mul(1024);
-    let ignore_set: HashSet<&str> = launcher.ignore_patterns.iter().map(|s| s.as_str()).collect();
+    let ignore_set: HashSet<&str> = launcher
+        .ignore_patterns
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     // 1. 기존 인덱스 상태 로드 (path → (id, size, mtime))
     let mut existing: HashMap<String, (i64, u64, i64)> = HashMap::new();
@@ -117,7 +162,9 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
             .max_depth(launcher.search_depth)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| e.depth() == 0 || !crate::index::files::is_ignored_dir(e, &ignore_set));
+            .filter_entry(|e| {
+                e.depth() == 0 || !crate::index::files::is_ignored_dir(e, &ignore_set)
+            });
         for entry in walker.flatten() {
             if !entry.file_type().is_file() {
                 continue;
@@ -202,7 +249,10 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
 }
 
 /// pending 배치를 한 트랜잭션으로 커밋. 성공적으로 반영한 건수를 반환.
-fn flush_batch(db: &Database, pending: &mut Vec<(String, u64, i64, String)>) -> Result<usize, DbError> {
+fn flush_batch(
+    db: &Database,
+    pending: &mut Vec<(String, u64, i64, String)>,
+) -> Result<usize, DbError> {
     if pending.is_empty() {
         return Ok(0);
     }
@@ -319,9 +369,11 @@ pub fn stats(db: &Database) -> Result<(usize, u64), DbError> {
     let count: i64 = db
         .conn()
         .query_row("SELECT COUNT(*) FROM content_files", [], |r| r.get(0))?;
-    let bytes: i64 = db
-        .conn()
-        .query_row("SELECT COALESCE(SUM(size), 0) FROM content_files", [], |r| r.get(0))?;
+    let bytes: i64 = db.conn().query_row(
+        "SELECT COALESCE(SUM(size), 0) FROM content_files",
+        [],
+        |r| r.get(0),
+    )?;
     Ok((count as usize, bytes as u64))
 }
 
@@ -347,8 +399,16 @@ mod tests {
     #[test]
     fn 인덱싱_후_한국어_영어_검색() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "예산.md", "2026년 예산 삭감 계획과 집행 일정".as_bytes());
-        write_file(dir.path(), "notes.txt", b"quarterly budget review for the launcher");
+        write_file(
+            dir.path(),
+            "예산.md",
+            "2026년 예산 삭감 계획과 집행 일정".as_bytes(),
+        );
+        write_file(
+            dir.path(),
+            "notes.txt",
+            b"quarterly budget review for the launcher",
+        );
         let db = Database::open_in_memory().unwrap();
 
         let stats = sync(&db, &test_launcher(dir.path())).unwrap();
@@ -357,7 +417,11 @@ mod tests {
         let hits = search(&db, "예산", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].path.ends_with("예산.md"));
-        assert!(hits[0].snippet.contains("«예산»"), "스니펫 하이라이트: {}", hits[0].snippet);
+        assert!(
+            hits[0].snippet.contains("«예산»"),
+            "스니펫 하이라이트: {}",
+            hits[0].snippet
+        );
 
         // prefix: "budg" → budget
         let hits = search(&db, "budg", 10).unwrap();
@@ -384,7 +448,10 @@ mod tests {
         assert_eq!(s3.indexed, 1, "변경 파일은 재인덱싱");
         let hits = search(&db, "rewritten", 10).unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(search(&db, "original", 10).unwrap().is_empty(), "구 본문은 교체됨");
+        assert!(
+            search(&db, "original", 10).unwrap().is_empty(),
+            "구 본문은 교체됨"
+        );
     }
 
     #[test]
@@ -424,7 +491,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "keep.md", b"indexed body");
         write_file(dir.path(), "skip.bin", b"not a text extension");
-        write_file(dir.path(), "big.txt", "x".repeat(2 * 1024 * 1024).as_bytes());
+        write_file(
+            dir.path(),
+            "big.txt",
+            "x".repeat(2 * 1024 * 1024).as_bytes(),
+        );
         let db = Database::open_in_memory().unwrap();
 
         let s = sync(&db, &test_launcher(dir.path())).unwrap();
@@ -434,7 +505,10 @@ mod tests {
     #[test]
     fn 짧은_질의와_fts5_연산자_무력화() {
         let db = Database::open_in_memory().unwrap();
-        assert!(search(&db, "a", 10).unwrap().is_empty(), "1자 질의는 빈 결과");
+        assert!(
+            search(&db, "a", 10).unwrap().is_empty(),
+            "1자 질의는 빈 결과"
+        );
         assert!(search(&db, " ", 10).unwrap().is_empty());
         // FTS5 문법 문자가 그대로 오면 오류 없이 리터럴 처리되어야 한다
         for q in ["AND OR", "NEAR(", "\"열린따옴표", "col:val", "a*b(c)"] {

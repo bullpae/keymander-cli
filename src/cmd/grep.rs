@@ -31,7 +31,10 @@ pub fn run(query: &str, limit: usize, sync_first: bool) -> Result<()> {
     }
 
     if query.chars().filter(|c| !c.is_whitespace()).count() < content_index::MIN_QUERY_CHARS {
-        println!("질의가 너무 짧습니다 (최소 {}자).", content_index::MIN_QUERY_CHARS);
+        println!(
+            "질의가 너무 짧습니다 (최소 {}자).",
+            content_index::MIN_QUERY_CHARS
+        );
         return Ok(());
     }
 
