@@ -4,6 +4,18 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Added
+- **문서 본문 검색 (docs/15 P1)** — 파일 이름이 아니라 내용으로 찾는다.
+  `kmd grep <질의>`로 검색하고, 데몬이 인덱스 리프레시 주기마다 자동으로 증분
+  갱신한다 (`kmd index --rebuild`도 함께 갱신). SQLite FTS5(bundled, 의존성
+  추가 없음) + bm25 랭킹 + 매치 하이라이트 스니펫. 대상은 플레인 텍스트·
+  소스코드 확장자(설정으로 대체 가능), 파일당 1MB 상한, UTF-8→EUC-KR 폴백,
+  바이너리 NUL 스니핑 배제. 증분 판정은 mtime+size — 무변경 재실행은 수 ms.
+  설정: `[launcher.content_search]` (enabled/max_file_kb/extensions/max_files).
+  런처 prefix 통합(P3)·변경 감시(P2)·형태소 색인(P4)은 docs/15 로드맵 참조.
+  설계는 [Docufinder](https://github.com/chrisryugj/Docufinder) 분석에서
+  채택(BSL 라이선스라 코드 재사용 없이 전부 자체 구현).
+
 ## [0.14.0] — 2026-08-12
 
 ### Changed

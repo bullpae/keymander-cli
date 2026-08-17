@@ -46,6 +46,25 @@ pub fn run(rebuild: bool, stats: bool) -> Result<()> {
         kmd_core::index::store::save_both(&index, &bin_path, &json_path);
 
         println!("Index built in {:.1}ms", elapsed.as_secs_f64() * 1000.0);
+
+        // 본문 인덱스(FTS5)도 함께 갱신 (docs/15) — 데몬 없는 환경의 유일한 갱신 경로
+        if config.launcher.content_search.enabled {
+            match super::open_db() {
+                Ok(db) => {
+                    let start = std::time::Instant::now();
+                    match kmd_core::content_index::sync(&db, &config.launcher) {
+                        Ok(s) => println!(
+                            "Content index synced in {:.1}ms (scanned {} / indexed {} / skipped {} / removed {} / failed {})",
+                            start.elapsed().as_secs_f64() * 1000.0,
+                            s.scanned, s.indexed, s.skipped, s.removed, s.failed
+                        ),
+                        Err(e) => println!("Content index sync failed: {e}"),
+                    }
+                }
+                Err(e) => println!("Content index DB open failed: {e}"),
+            }
+        }
+
         print_stats(&index);
     } else {
         let index = super::load_or_build_index(&config.launcher, config.general.emoji_icons);
@@ -115,5 +134,18 @@ fn print_stats(index: &kmd_core::Index) {
 
     if let Some(ref ts) = index.last_updated {
         println!("\n  Last updated:     {}", ts);
+    }
+
+    // 본문 인덱스(FTS5) 통계 — DB가 없거나 비어 있으면 조용히 생략
+    if let Ok(db) = super::open_db() {
+        if let Ok((count, bytes)) = kmd_core::content_index::stats(&db) {
+            if count > 0 {
+                println!(
+                    "\n  Content index:    {} files ({:.1} MB source text) — try `kmd grep <query>`",
+                    count,
+                    bytes as f64 / (1024.0 * 1024.0)
+                );
+            }
+        }
     }
 }

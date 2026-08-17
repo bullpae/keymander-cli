@@ -5,6 +5,7 @@
 
 pub mod action;
 pub mod config;
+pub mod content_index;
 pub mod db;
 pub mod folder_search;
 pub mod hangul;

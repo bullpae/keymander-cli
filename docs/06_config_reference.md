@@ -120,6 +120,26 @@ toggle_preview = "ctrl+p"
 | multi_llm_prefixes | Vec\<String\> | @llm,@ll,… | `@llm` 별칭 |
 | llm_autopilot | bool | false | LLM 자동 제출(데몬 키 주입, Windows). `@gpt`/`@claude`는 Enter, `@gemini`는 붙여넣기+Enter를 전경창 검증 후 주입. `@@ <질문>`으로 이어서 질문. 자동 키 주입이라 opt-in (docs/09) |
 
+### 4.2.1 [launcher.content_search] — 문서 본문 검색 (docs/15)
+
+파일 이름이 아니라 **내용**으로 찾는 FTS5 인덱스. 스캔 범위는 `search_paths` +
+`ignore_patterns` + `search_depth`를 그대로 공유한다. 데몬이 인덱스 리프레시
+주기(`index_refresh_minutes`)마다 증분 갱신하고(mtime+size 불일치만 재인덱싱),
+데몬이 없으면 `kmd index --rebuild`가 함께 갱신한다. 검색: `kmd grep <질의>`.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| enabled | bool | true | 본문 인덱싱 활성화 |
+| max_file_kb | u64 | 1024 | 파일당 크기 상한 (KB) — 초과 파일 제외 |
+| extensions | Vec\<String\> | [] | 비우면 내장 기본 목록(플레인 텍스트·소스코드). 지정 시 통째로 대체 (점 없이: ["md","txt"]) |
+| max_files | usize | 20000 | 본문 인덱스 대상 파일 수 상한 |
+
+- 인코딩: UTF-8 우선, 실패 시 EUC-KR/CP949 자동 폴백 (legacy 한국어 텍스트)
+- 바이너리는 NUL 스니핑으로 배제, 숨김 파일 제외
+- 저장 위치: `<data_dir>/kmd.db` (content_files + content_fts 테이블)
+- 한국어는 공백 단위 토큰 + 접두어 매칭 — 어절 중간 부분어("고용보험료"에서
+  "보험료")는 현재 미지원, 재현율 부족 시 형태소 색인 도입 예정 (docs/15 P4)
+
 ### 4.3 [launcher.kind_weights]
 
 검색 결과 우선순위 가중치 (0-100). 높을수록 검색 결과에서 상위에 노출됩니다.

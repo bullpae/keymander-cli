@@ -54,6 +54,17 @@ enum Commands {
         #[arg(long)]
         stats: bool,
     },
+    /// Search inside document contents (FTS5 full-text index)
+    Grep {
+        /// Search query (2+ characters)
+        query: Vec<String>,
+        /// Re-sync the content index before searching
+        #[arg(long)]
+        sync: bool,
+        /// Maximum results to show
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -296,6 +307,9 @@ fn main() -> color_eyre::Result<()> {
         }
         Some(Commands::Launch { target }) => {
             cmd::launch::run(&target)?;
+        }
+        Some(Commands::Grep { query, sync, limit }) => {
+            cmd::grep::run(&query.join(" "), limit, sync)?;
         }
         Some(Commands::Index { rebuild, stats }) => {
             cmd::index::run(rebuild, stats)?;

@@ -681,7 +681,8 @@ fn walkdir_into_items<I>(
 }
 
 /// Check if a walkdir entry should be ignored (directory name matches ignore pattern)
-fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool {
+/// (content_index의 본문 스캔도 같은 무시 규칙을 공유한다)
+pub(crate) fn is_ignored_dir(entry: &walkdir::DirEntry, ignore_set: &HashSet<&str>) -> bool {
     if !entry.file_type().is_dir() {
         return false;
     }

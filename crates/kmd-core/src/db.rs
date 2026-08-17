@@ -31,10 +31,21 @@ impl Database {
             .map_err(DbError::Sqlite)?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(DbError::Sqlite)?;
+        // 데몬(본문 인덱싱 쓰기)과 데스크톱/TUI(frecency 읽기)가 같은 파일을
+        // 다른 프로세스에서 연다. WAL이라 읽기-쓰기 동시성은 되지만, 쓰기 겹침
+        // 순간의 SQLITE_BUSY 즉시 실패를 피하려면 대기 시간이 필요하다.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(DbError::Sqlite)?;
 
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
+    }
+
+    /// 크레이트 내부 모듈(content_index 등)이 같은 DB 파일 위에 자체 테이블을
+    /// 다루기 위한 연결 접근자. 외부 크레이트에는 노출하지 않는다.
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     /// Open in-memory database (for testing)
@@ -315,6 +326,31 @@ impl Database {
                 .map_err(DbError::Sqlite)?;
         }
 
+        if version < 3 {
+            // v3: 문서 본문 검색 인덱스 (docs/15).
+            // content_fts의 rowid는 content_files.id와 수동으로 동기화한다
+            // (트리거 없음 — 삽입/삭제는 content_index 모듈이 한 트랜잭션에서 수행).
+            // bundled SQLite에 FTS5가 포함되어 있어 별도 확장 로드는 불필요.
+            self.conn
+                .execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS content_files (
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path       TEXT    NOT NULL UNIQUE,
+                        size       INTEGER NOT NULL,
+                        mtime      INTEGER NOT NULL,
+                        indexed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                    );
+                    CREATE VIRTUAL TABLE IF NOT EXISTS content_fts
+                        USING fts5(body, tokenize='unicode61');
+                    ",
+                )
+                .map_err(DbError::Sqlite)?;
+            self.conn
+                .pragma_update(None, "user_version", 3)
+                .map_err(DbError::Sqlite)?;
+        }
+
         Ok(())
     }
 }
@@ -526,7 +562,7 @@ mod tests {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2, "DB 버전이 2로 업그레이드");
+        assert_eq!(version, 3, "DB 버전이 3으로 업그레이드");
 
         // idx_history_executed_at 인덱스 존재 확인
         let idx_exists: bool = db

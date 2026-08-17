@@ -174,6 +174,33 @@ fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
         "백그라운드 인덱스 리프레시 완료 ({count}개 항목, {}ms)",
         started.elapsed().as_millis()
     );
+
+    sync_content_index(config);
+}
+
+/// 문서 본문 인덱스 증분 갱신 (docs/15 P1) — 파일명 인덱스 리프레시 직후 수행.
+/// 실패해도 파일명 검색에는 영향 없다 (경고만 남기고 계속).
+fn sync_content_index(config: &Config) {
+    if !config.launcher.content_search.enabled {
+        return;
+    }
+    let started = Instant::now();
+    let db_path = Config::default_data_dir().join(kmd_core::DB_FILENAME);
+    match kmd_core::Database::open(&db_path) {
+        Ok(db) => match kmd_core::content_index::sync(&db, &config.launcher) {
+            Ok(s) => tracing::info!(
+                "본문 인덱스 동기화 완료 (스캔 {} · 갱신 {} · 스킵 {} · 제거 {} · 실패 {}, {}ms)",
+                s.scanned,
+                s.indexed,
+                s.skipped,
+                s.removed,
+                s.failed,
+                started.elapsed().as_millis()
+            ),
+            Err(e) => tracing::warn!("본문 인덱스 동기화 실패: {e}"),
+        },
+        Err(e) => tracing::warn!("본문 인덱스 DB 열기 실패: {e}"),
+    }
 }
 
 /// 백그라운드 인덱스 리프레셔 스레드.
@@ -493,6 +520,8 @@ fn process_request(
                     }
                 }
             }
+
+            sync_content_index(&config);
 
             Response::Ok {
                 message: format!("인덱스 리빌드 완료 ({count}개 항목)"),

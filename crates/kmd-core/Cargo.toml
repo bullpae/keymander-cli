@@ -12,6 +12,9 @@ regex = "1"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# 본문 인덱싱 — Windows 한국어 legacy 텍스트(EUC-KR/CP949) 디코드 폴백 (docs/15)
+encoding_rs = "0.8"
+
 # Config / Serialization
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

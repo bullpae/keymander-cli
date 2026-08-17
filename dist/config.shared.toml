@@ -78,6 +78,15 @@
 # Windows 예: search_paths = ["C:\\Users\\사용자\\Documents", "D:\\Projects"]
 # macOS 예:  search_paths = ["/Users/you/Documents"]
 
+# ── 문서 본문 검색 (FTS5, docs/15) ──────────────────────────
+# 스캔 범위는 search_paths·ignore_patterns·search_depth를 그대로 공유.
+# CLI: kmd grep <질의>  (데몬이 리프레시 주기마다 자동 갱신)
+# [launcher.content_search]
+# enabled = true
+# max_file_kb = 1024      # 파일당 크기 상한 (KB)
+# extensions = []          # 비우면 내장 기본(플레인 텍스트·소스). 예: ["md", "txt"]
+# max_files = 20000        # 본문 인덱스 대상 파일 수 상한
+
 # ── 검색 우선순위 가중치 (0-100, 높을수록 상위) ──────────────
 [launcher.kind_weights]
 # directory = 80

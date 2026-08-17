@@ -178,6 +178,38 @@ pub struct LauncherConfig {
     /// 저장된 프롬프트 템플릿 목록 (`@ll :name query` 형태로 사용).
     #[serde(default)]
     pub prompt_templates: Vec<PromptTemplate>,
+    /// 문서 본문 검색(FTS5) 설정 (docs/15).
+    #[serde(default)]
+    pub content_search: ContentSearchConfig,
+}
+
+/// 문서 본문 검색(FTS5) 설정 — `[launcher.content_search]` (docs/15).
+///
+/// 스캔 범위는 `launcher.search_paths` + `ignore_patterns` + `search_depth`를
+/// 그대로 공유하고, 이 섹션은 본문 인덱싱 고유의 노브만 갖는다.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ContentSearchConfig {
+    /// 본문 인덱싱 활성화 여부 (기본 true)
+    pub enabled: bool,
+    /// 파일당 최대 크기 (KB, 기본 1024). 초과 파일은 본문 인덱싱에서 제외.
+    pub max_file_kb: u64,
+    /// 인덱싱할 확장자 목록. 비어 있으면 내장 기본 목록(플레인 텍스트·소스)을
+    /// 사용하고, 지정하면 통째로 대체한다. 점 없이 소문자 (예: ["md", "txt"]).
+    pub extensions: Vec<String>,
+    /// 본문 인덱스 대상 파일 수 상한 (기본 20000). 초과분은 건너뛰고 로그만 남긴다.
+    pub max_files: usize,
+}
+
+impl Default for ContentSearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_file_kb: 1024,
+            extensions: Vec::new(),
+            max_files: 20_000,
+        }
+    }
 }
 
 impl Default for LauncherConfig {
@@ -257,6 +289,7 @@ impl Default for LauncherConfig {
             translate_prefixes: default_translate_prefixes(),
             keymap: KeymapConfig::default(),
             prompt_templates: vec![],
+            content_search: ContentSearchConfig::default(),
         }
     }
 }
