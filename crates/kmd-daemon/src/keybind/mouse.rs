@@ -22,8 +22,9 @@ const MAX_SPEED: f32 = 1300.0;
 const RAMP_MS: f32 = 500.0;
 /// 저속 정밀 모드 배율 (mouse:slow 홀드)
 const SLOW_FACTOR: f32 = 0.25;
-/// 휠 속도 (노치/초)
-const WHEEL_NOTCHES_PER_SEC: f32 = 6.0;
+/// 휠 홀드 연사 속도 (노치/초) — kanata 프리셋 mwheel(50ms 간격)과 같은 체감.
+/// 키다운 즉시 1노치는 pending_wheel이 별도 보장하므로 이 값은 홀드 연사에만 관여한다.
+const WHEEL_NOTCHES_PER_SEC: f32 = 20.0;
 
 /// 램프 경과 시간(ms)에 대한 이동 속도(px/s). slow 모드면 SLOW_FACTOR 적용.
 /// 순수 함수로 분리해 스레드/벽시계 없이 단위 테스트한다 (타이밍 플레이크 방지).
@@ -53,6 +54,10 @@ struct MotionState {
     wheel_up: bool,
     wheel_down: bool,
     slow: bool,
+    /// 키다운 시점에 적립되는 즉시 발사 노치 (+위/-아래).
+    /// 홀드 누적(초당 N노치)만으로는 짧은 탭이 1노치 문턱(1/N초)에 못 미쳐
+    /// 이벤트가 아예 안 나가는 문제를 막는다 — 탭 1회 = 최소 1노치 보장.
+    pending_wheel: i32,
     /// 워커 종료 신호
     shutdown: bool,
 }
@@ -84,12 +89,13 @@ impl MouseWorker {
             let mut acc_wheel = 0f32;
 
             loop {
-                let (u, d, l, r, wu, wd, slow) = {
+                let (u, d, l, r, wu, wd, slow, pending_wheel) = {
                     let mut guard = match lock.lock() {
                         Ok(g) => g,
                         Err(_) => return,
                     };
-                    while !guard.active() && !guard.shutdown {
+                    // pending_wheel이 남아 있으면 홀드가 이미 풀렸어도 발사해야 한다
+                    while !guard.active() && guard.pending_wheel == 0 && !guard.shutdown {
                         // 완전 정지 — 램프/누적 초기화 후 대기
                         ramp_start = None;
                         acc_x = 0.0;
@@ -111,6 +117,7 @@ impl MouseWorker {
                         guard.wheel_up,
                         guard.wheel_down,
                         guard.slow,
+                        std::mem::take(&mut guard.pending_wheel),
                     )
                 };
 
@@ -140,15 +147,16 @@ impl MouseWorker {
                     sink.move_rel(dx, dy);
                 }
 
-                // ── 휠: 고정 속도 노치 누적 ──
+                // ── 휠: 키다운 즉시 노치 + 홀드 고정 속도 누적 ──
                 let wv = (wu as i8 - wd as i8) as f32;
                 if wv != 0.0 {
                     acc_wheel += wv * WHEEL_NOTCHES_PER_SEC * dt;
-                    let notches = acc_wheel as i32;
-                    if notches != 0 {
-                        acc_wheel -= notches as f32;
-                        sink.wheel(notches);
-                    }
+                }
+                let mut notches = acc_wheel as i32;
+                acc_wheel -= notches as f32;
+                notches += pending_wheel;
+                if notches != 0 {
+                    sink.wheel(notches);
                 }
 
                 std::thread::sleep(TICK);
@@ -191,8 +199,18 @@ impl MouseWorker {
                 MouseBind::MoveDown => guard.down = on,
                 MouseBind::MoveLeft => guard.left = on,
                 MouseBind::MoveRight => guard.right = on,
-                MouseBind::WheelUp => guard.wheel_up = on,
-                MouseBind::WheelDown => guard.wheel_down = on,
+                MouseBind::WheelUp => {
+                    if on && !guard.wheel_up {
+                        guard.pending_wheel += 1; // 키다운 즉시 1노치 (탭 보장)
+                    }
+                    guard.wheel_up = on;
+                }
+                MouseBind::WheelDown => {
+                    if on && !guard.wheel_down {
+                        guard.pending_wheel -= 1;
+                    }
+                    guard.wheel_down = on;
+                }
                 MouseBind::Slow => guard.slow = on,
                 MouseBind::BtnLeft | MouseBind::BtnRight | MouseBind::BtnMiddle => return,
             }
@@ -227,6 +245,36 @@ mod tests {
             let _ = self.0.send((dx, dy));
         }
         fn wheel(&mut self, _notches: i32) {}
+    }
+
+    struct WheelSink(mpsc::Sender<i32>);
+    impl MouseSink for WheelSink {
+        fn move_rel(&mut self, _dx: i32, _dy: i32) {}
+        fn wheel(&mut self, notches: i32) {
+            let _ = self.0.send(notches);
+        }
+    }
+
+    #[test]
+    fn wheel_tap_emits_immediate_notch() {
+        let (tx, rx) = mpsc::channel();
+        let worker = MouseWorker::start(WheelSink(tx));
+
+        // 홀드 누적 문턱(1/WHEEL_NOTCHES_PER_SEC초)보다 짧은 탭이라도
+        // pending_wheel 덕에 최소 1노치가 보장돼야 한다
+        worker.engage(MouseBind::WheelUp);
+        worker.release(MouseBind::WheelUp);
+        let n = rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("탭 즉시 노치 발생");
+        assert!(n >= 1, "위 방향 노치 기대: {n}");
+
+        worker.engage(MouseBind::WheelDown);
+        worker.release(MouseBind::WheelDown);
+        let n = rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("탭 즉시 노치 발생");
+        assert!(n <= -1, "아래 방향 노치 기대: {n}");
     }
 
     #[test]

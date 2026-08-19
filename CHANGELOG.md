@@ -4,6 +4,12 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **마우스 레이어 휠(T/G)이 짧은 탭에 무반응이던 문제** — 휠이 홀드 누적
+  (초당 6노치)만으로 동작해 약 167ms 미만 탭은 이벤트가 아예 나가지
+  않았다. 키다운 즉시 1노치를 보장(pending 적립)하고, 홀드 연사 속도를
+  kanata 백엔드 프리셋과 같은 초당 20노치로 올렸다.
+
 ## [0.15.0] — 2026-08-17
 
 ### Added
