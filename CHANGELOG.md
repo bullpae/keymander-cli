@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-08-19
+
 ### Fixed
 - **마우스 레이어 휠(T/G)이 짧은 탭에 무반응이던 문제** — 휠이 홀드 누적
   (초당 6노치)만으로 동작해 약 167ms 미만 탭은 이벤트가 아예 나가지
