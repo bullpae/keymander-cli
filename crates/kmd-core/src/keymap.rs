@@ -568,6 +568,9 @@ fn action_item(name: &str, path: &str, icon: &str, keywords: &str) -> IndexItem 
 
 /// vim-nav 프리셋의 TOML 기본 바인딩 — **기본 레이어 정의의 단일 소스**.
 /// daemon 엔진과 치트시트 모두 [`effective_keymap`]을 거쳐 이 값을 쓴다.
+///
+/// 배치 근거·오발사 등급표·기각한 대안은 `docs/16_keymap_ergonomics.md`.
+/// 키를 옮기기 전에 그 문서의 §2(손가락 배치 기준)와 §5(열려 있는 과제)를 볼 것.
 fn vim_nav_default_layer() -> crate::config::LayerToml {
     use crate::config::{LayerDoubleTapToml, LayerToml};
     let mut mappings = std::collections::HashMap::new();

@@ -16,6 +16,7 @@
 | [04_database_schema.md](04_database_schema.md) | DB 스키마 |
 | [05_theming.md](05_theming.md) | 테마 규격 |
 | [06_config_reference.md](06_config_reference.md) | `config.toml` 전체 레퍼런스 |
+| [16_keymap_ergonomics.md](16_keymap_ergonomics.md) | 키맵 전체 지도(nav/mouse/전역) + 손가락 배치 근거 · 오발사 지도 · 결정 기록 |
 | [07_distribution.md](07_distribution.md) | 배포 채널(brew/apt/yum/winget) 운영 가이드 + 공개 저장소 위생 |
 | [versioning-and-release.md](versioning-and-release.md) | 버전·릴리스 규칙 |
 
@@ -29,6 +30,8 @@
 |---|---|---|
 | [08_layer_passthrough_plan.md](08_layer_passthrough_plan.md) | ✅ v0.9.3 (P0–P3) | `crates/kmd-daemon/src/keybind/engine.rs` |
 | [09_llm_autopilot_plan.md](09_llm_autopilot_plan.md) | ✅ v0.10.0 (Windows 전용) | `crates/kmd-daemon/src/autopilot.rs` |
+| [13_capslock_trigger.md](13_capslock_trigger.md) | ✅ v0.13.0부터 **기본 트리거** | `crates/kmd-core/src/keymap.rs`, `keybind/macos.rs` |
+| [15_content_search_plan.md](15_content_search_plan.md) | ✅ v0.15.0 (P1+P3) | `crates/kmd-core/src/content_index.rs` |
 
 ## 계획 — 아직 구현되지 않음
 
@@ -37,7 +40,7 @@
 | [10_dojo_plan.md](10_dojo_plan.md) | 미구현 (2026-08-08 확인) |
 | [11_refactor_backlog.md](11_refactor_backlog.md) | 리팩토링·개선 백로그 (2026-08-08 전수 감사 기반, 진행 중) |
 | [12_clipboard_plan.md](12_clipboard_plan.md) | 클립보드 히스토리 — 다중 버퍼 붙여넣기 설계 (레이어 즉시 + 런처 탐색) |
-| [13_capslock_trigger.md](13_capslock_trigger.md) | CapsLock 레이어 트리거 실험 (macOS hidutil→F19, opt-in) |
+| [14_testing_plan.md](14_testing_plan.md) | Tier 1 완료, Tier 2(E2E 키 주입)는 v0.13.3에서 착수 — 나머지 진행 중 |
 | [deferred-ideas.md](deferred-ideas.md) | v0.3 로드맵에서 보류한 아이디어 모음 — 재검토용 |
 
 ## 변경 이력

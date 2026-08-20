@@ -27,6 +27,14 @@ All notable changes to keymander are documented here.
   > 블록이 남아 있으면 병합 규칙상 기본값 위에 덮여 `U`가 계속 살아 있다.
   > 해당 블록을 `.I`/`.O`로 바꿔야 한다 (`dist/config.keymap.*.toml` 참고).
 
+### Documentation
+- **`docs/16_keymap_ergonomics.md` 신설** — 키맵 전체 지도(nav·mouse·전역 +
+  두벌식 Shift 지도), 손가락 배치 판단 기준, CapsLock↔LShift 인접의 구조적
+  비용과 오발사 등급표, 열려 있는 과제, 배치 결정 기록. 지금까지 코드 주석과
+  CHANGELOG에 흩어져 있던 근거를 한곳에 모았다.
+- `docs/README.md` 색인 정정 — 13(v0.13.0부터 기본)·15(v0.15.0)를 "계획"에서
+  "설계 이력"으로 옮기고, 누락돼 있던 14를 추가.
+
 ## [0.15.1] — 2026-08-19
 
 ### Fixed
