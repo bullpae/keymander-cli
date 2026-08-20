@@ -155,7 +155,23 @@ fn lower_indexer_thread_priority() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn lower_indexer_thread_priority() {
+    use std::os::raw::{c_int, c_uint};
+
+    // QOS_CLASS_UTILITY(0x11) — 인덱싱/워처 스레드를 시스템이 E-코어·저순위로
+    // 스케줄하게 한다. 이 프로세스는 키 이벤트 탭을 쥐고 있으므로(키보드 먹통
+    // 사고 이력) 백그라운드 스캔이 기본 QoS로 도는 것을 피한다.
+    const QOS_CLASS_UTILITY: c_uint = 0x11;
+    extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: c_uint, relative_priority: c_int) -> c_int;
+    }
+    if unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) } != 0 {
+        tracing::warn!("macOS 인덱서 스레드 QoS 하향 실패");
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn lower_indexer_thread_priority() {}
 
 fn rebuild_full_index(engine: &Arc<Mutex<SearchEngine>>, config: &Config) {
@@ -188,9 +204,8 @@ fn sync_content_index(config: &Config) {
     use std::sync::atomic::AtomicBool;
     static RUNNING: AtomicBool = AtomicBool::new(false);
 
-    if !config.launcher.content_search.enabled {
-        return;
-    }
+    // 비활성이어도 sync()는 호출한다 — sync가 기존 인덱스를 purge해
+    // "꺼도 과거 본문이 남는" 반쪽 비활성화를 막는다 (빈 인덱스면 수 ms no-op).
     if RUNNING.swap(true, Ordering::SeqCst) {
         tracing::debug!("본문 인덱스 sync 겹침 — 스킵");
         return;

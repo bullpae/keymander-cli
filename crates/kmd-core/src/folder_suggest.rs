@@ -57,8 +57,19 @@ pub fn suggest_folders(launcher: &LauncherConfig, max: usize) -> Vec<FolderSugge
     suggest_folders_in(&home, launcher, SystemTime::now(), max)
 }
 
+/// 현재 검색 범위와 겹치는(조상/자손 어느 쪽이든) 폴더인가.
+/// 스캔 시점과 캐시 반환 시점 양쪽에서 쓴다 — Enter로 방금 추가한 폴더가
+/// TTL이 남은 캐시에서 계속 제안되는 staleness를 막는다.
+fn covered_by_search_paths(launcher: &LauncherConfig, path: &Path) -> bool {
+    launcher
+        .search_paths
+        .iter()
+        .any(|sp| sp.starts_with(path) || path.starts_with(sp))
+}
+
 /// 세션 캐시를 거친 제안 조회 — 런처 키 입력 경로용.
 /// 첫 호출만 스캔 비용(예산 상한 내)을 내고, 이후 10분간 캐시를 반환한다.
+/// 캐시 반환 시에도 현재 search_paths 기준으로 다시 걸러낸다.
 pub fn cached_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSuggestion> {
     static CACHE: Mutex<Option<(Instant, Vec<FolderSuggestion>)>> = Mutex::new(None);
     let mut guard = match CACHE.lock() {
@@ -67,13 +78,25 @@ pub fn cached_suggestions(launcher: &LauncherConfig, max: usize) -> Vec<FolderSu
     };
     if let Some((at, cached)) = guard.as_ref() {
         if at.elapsed() < CACHE_TTL {
-            return cached.iter().take(max).cloned().collect();
+            return filter_covered(launcher, cached.iter().cloned(), max);
         }
     }
     let fresh = suggest_folders(launcher, max.max(5));
-    let out: Vec<FolderSuggestion> = fresh.iter().take(max).cloned().collect();
+    let out = filter_covered(launcher, fresh.iter().cloned(), max);
     *guard = Some((Instant::now(), fresh));
     out
+}
+
+/// 검색 범위와 겹치는 항목을 걸러내고 max개까지 반환 (순수 함수 — 테스트용 분리).
+fn filter_covered(
+    launcher: &LauncherConfig,
+    items: impl Iterator<Item = FolderSuggestion>,
+    max: usize,
+) -> Vec<FolderSuggestion> {
+    items
+        .filter(|s| !covered_by_search_paths(launcher, &s.path))
+        .take(max)
+        .collect()
 }
 
 /// 테스트 가능한 내부 구현 — 홈 경로와 현재 시각을 주입받는다.
@@ -111,15 +134,18 @@ fn suggest_folders_in(
             continue;
         }
         // 이미 검색 범위와 겹치는 폴더는 제외 (조상/자손 어느 쪽이든)
-        if launcher
-            .search_paths
-            .iter()
-            .any(|sp| sp.starts_with(&path) || path.starts_with(sp))
-        {
+        if covered_by_search_paths(launcher, &path) {
             continue;
         }
 
-        let count = count_recent_files(&path, &ignore_set, &allowed, recent_cutoff, &mut budget);
+        let count = count_recent_files(
+            &path,
+            &ignore_set,
+            &allowed,
+            &launcher.content_search,
+            recent_cutoff,
+            &mut budget,
+        );
         if count >= MIN_RECENT_FILES {
             suggestions.push(FolderSuggestion {
                 path,
@@ -138,6 +164,7 @@ fn count_recent_files(
     root: &Path,
     ignore_set: &HashSet<&str>,
     allowed: &HashSet<String>,
+    cs: &crate::config::ContentSearchConfig,
     recent_cutoff: SystemTime,
     budget: &mut usize,
 ) -> usize {
@@ -165,6 +192,9 @@ fn count_recent_files(
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
         if !allowed.contains(&ext) {
+            continue;
+        }
+        if crate::content_index::excluded_name(cs, &name.to_lowercase()) {
             continue;
         }
         let recent = entry
@@ -334,6 +364,24 @@ mod tests {
             5,
         );
         assert!(s.is_empty(), "{s:?}");
+    }
+
+    #[test]
+    fn 캐시_반환도_현재_검색범위로_필터() {
+        let a = PathBuf::from("/tmp/kmd-suggest-test-a");
+        let items = vec![FolderSuggestion {
+            path: a.clone(),
+            recent_files: 9,
+        }];
+        let empty = launcher_with_paths(vec![]);
+        assert_eq!(
+            filter_covered(&empty, items.clone().into_iter(), 5).len(),
+            1
+        );
+
+        // Enter로 방금 추가된 폴더는 TTL이 남은 캐시에서도 제안이 사라져야 한다
+        let covering = launcher_with_paths(vec![a]);
+        assert!(filter_covered(&covering, items.into_iter(), 5).is_empty());
     }
 
     #[test]

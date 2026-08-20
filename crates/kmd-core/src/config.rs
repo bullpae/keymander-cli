@@ -199,6 +199,11 @@ pub struct ContentSearchConfig {
     pub extensions: Vec<String>,
     /// 본문 인덱스 대상 파일 수 상한 (기본 20000). 초과분은 건너뛰고 로그만 남긴다.
     pub max_files: usize,
+    /// 파일명에 포함되면 인덱싱에서 제외하는 마커 (소문자 부분일치).
+    /// 비어 있으면 내장 기본 목록(secret/credential/password/passwd)을 사용하고,
+    /// 지정하면 통째로 대체한다. 시크릿성 파일 본문이 인덱스 DB에 복제되는
+    /// 것을 막는 안전장치다.
+    pub exclude_names: Vec<String>,
 }
 
 impl Default for ContentSearchConfig {
@@ -208,6 +213,7 @@ impl Default for ContentSearchConfig {
             max_file_kb: 1024,
             extensions: Vec::new(),
             max_files: 20_000,
+            exclude_names: Vec::new(),
         }
     }
 }
@@ -637,7 +643,11 @@ impl Config {
 
         let content =
             toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        std::fs::write(path, content).map_err(|e| ConfigError::Io(path.clone(), e))?;
+        // 원자적 쓰기 (tmp + rename) — 데몬의 주기적 config 재로드가
+        // 부분 파일을 읽고 기본값으로 폴백하는 창을 없앤다.
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, content).map_err(|e| ConfigError::Io(tmp.clone(), e))?;
+        std::fs::rename(&tmp, path).map_err(|e| ConfigError::Io(path.clone(), e))?;
         Ok(())
     }
 
