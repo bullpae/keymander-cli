@@ -97,7 +97,7 @@ kmd keymap start           # 시작 (kanata 백엔드)
 |----|------|
 | 커서 이동 | `CapsLock` 홀드 + `H J K L` |
 | 페이지 위/아래 | `CapsLock` 홀드 + `N` / `M` |
-| 단어 점프, 줄 처음/끝 | `CapsLock` 홀드 + `U` / `I` (더블탭 = 줄 처음/끝) |
+| 단어 점프, 줄 처음/끝 | `CapsLock` 홀드 + `I` / `O` (더블탭 = 줄 처음/끝) |
 | 지우기 (Backspace / Delete) | `CapsLock` 홀드 + `.` / `/` |
 
 **왜 이 배치인가:** 왼손이 홀드하고 오른손이 움직입니다 — Vim의 홈로우

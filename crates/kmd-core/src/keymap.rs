@@ -588,14 +588,26 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     // 레이어 불변식: 오발사해도 무해한 액션(이동·글자 삭제·런처)만 남긴다.
     // ','는 최빈 삭제 키 '.' 옆의 완충 빈칸으로 의도적으로 비워 둔다.
 
-    // 단어/줄 이동은 U/I — J/K 세로열 위의 검지+중지(최빈 기능에 최강 손가락).
-    // 이전 I/O 배치는 중지+약지였고, O/P를 비워 오른손 위 행의 오타 안전지대를 넓혔다.
+    // 단어/줄 이동은 I/O — 중지+약지 (2026-08-20, U/I에서 되돌림).
+    //
+    // 위 행은 손바닥에서 멀어지는 신전(펴기) 동작이라 긴 손가락이 유리하고,
+    // 적합도는 중지 ≥ 약지 > 검지 순이다. U/I는 "검지+중지가 최강 손가락"이라는
+    // 이유로 골랐지만, 검지가 강한 건 누르는 힘이지 뻗는 거리가 아니다 —
+    // 위 행의 병목은 힘이 아니라 도달성이라 검지가 셋 중 제일 불리하다.
+    //
+    // 부하 분산도 I/O가 낫다. 오른손 검지는 이미 H(←)/J(↓)/N(PgUp)/M(PgDn)을
+    // 맡는데 U까지 얹으면 최빈 기능 5개가 한 손가락에 몰리고, U↔H/J/N/M이
+    // 전부 같은 손가락의 2행 왕복(same-finger bigram)이 된다. I(중지)/O(약지)로
+    // 두면 검지 4 · 중지 2 · 약지 2로 흩어진다.
+    //
+    // U/I가 비웠던 O/P 안전지대는 P만 유지된다(ㅖ=Shift+P는 흔하고, ㅒ=Shift+O는
+    // 드물다). O 오발사는 단어 이동 — 레이어 불변식이 허용하는 무해 등급이다.
     let mut double_taps = std::collections::HashMap::new();
 
     #[cfg(target_os = "macos")]
     {
         double_taps.insert(
-            "U".into(),
+            "I".into(),
             LayerDoubleTapToml {
                 single: "Alt+Left".into(),
                 double: "Cmd+Left".into(),
@@ -603,7 +615,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
             },
         );
         double_taps.insert(
-            "I".into(),
+            "O".into(),
             LayerDoubleTapToml {
                 single: "Alt+Right".into(),
                 double: "Cmd+Right".into(),
@@ -614,7 +626,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
     #[cfg(not(target_os = "macos"))]
     {
         double_taps.insert(
-            "U".into(),
+            "I".into(),
             LayerDoubleTapToml {
                 single: "Ctrl+Left".into(),
                 double: "Home".into(),
@@ -622,7 +634,7 @@ fn vim_nav_default_layer() -> crate::config::LayerToml {
             },
         );
         double_taps.insert(
-            "I".into(),
+            "O".into(),
             LayerDoubleTapToml {
                 single: "Ctrl+Right".into(),
                 double: "End".into(),
@@ -1211,8 +1223,8 @@ mod tests {
             "CapsLock 탭 = 무동작 (한영은 RAlt 탭으로)"
         );
         assert!(nav.mappings.contains_key("H"));
-        assert!(nav.double_taps.contains_key("U"));
         assert!(nav.double_taps.contains_key("I"));
+        assert!(nav.double_taps.contains_key("O"));
         // 한/영 주 경로 = RAlt 탭 (물리 한영키 자리), 보조 = Shift+Space 콤보
         let mouse = e.layers.get("mouse").expect("mouse 레이어");
         assert_eq!(mouse.tap_action.as_deref(), Some("Hangul"));
@@ -1382,12 +1394,17 @@ mod tests {
             assert!(!nav.mappings.contains_key(k), "{k}는 제거된 매핑");
         }
 
-        // 단어 이동 더블탭은 U/I (검지+중지) — 구 I/O 배치는 폐기
-        assert!(nav.double_taps.contains_key("U"));
+        // 단어 이동 더블탭은 I/O (중지+약지) — 위 행은 긴 손가락이 유리하다.
+        // U/I(검지+중지)는 검지에 최빈 기능 5개를 몰아 2026-08-20에 되돌렸다.
         assert!(nav.double_taps.contains_key("I"));
+        assert!(nav.double_taps.contains_key("O"));
         assert!(
-            !nav.double_taps.contains_key("O"),
-            "O는 빈 키 — 오른손 위 행 오타 안전지대"
+            !nav.double_taps.contains_key("U"),
+            "U는 빈 키 — 검지는 H/J/N/M만 담당"
+        );
+        assert!(
+            !nav.mappings.contains_key("O"),
+            "O는 더블탭 전용 — 평범한 매핑과 겹치지 않는다"
         );
     }
 

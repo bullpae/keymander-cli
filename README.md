@@ -376,7 +376,7 @@ kmd keymap list-presets    # all built-in presets
 ```
 
 The `vim-nav` preset provides:
-- `CapsLock` hold + HJKL = arrow keys, N/M = PageUp/Down, U/I = word jump
+- `CapsLock` hold + HJKL = arrow keys, N/M = PageUp/Down, I/O = word jump
   (double-tap = line start/end)
 - `CapsLock` + `.` / `/` = Backspace / Delete (plain taps — mash them freely).
   Every action on the layer is deliberately harmless-on-misfire: paste, copy
