@@ -12,7 +12,12 @@
     </array>
     <key>WatchPaths</key>
     <array>
+        <!-- opt 심링크는 brew가 rm+재생성해서 launchd 감시가 유실될 수 있다
+             (실측: 0.15.2 업그레이드는 발동, 0.15.3은 미발동). Cellar 디렉터리는
+             업그레이드마다 하위 항목이 바뀌고 자신은 유지되므로 안정적으로 발동한다.
+             sync.sh는 동기화 완료 상태면 no-op이라 중복 발동은 무해하다. -->
         <string>/opt/homebrew/opt/keymander</string>
+        <string>/opt/homebrew/Cellar/keymander</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
