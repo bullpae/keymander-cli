@@ -1126,19 +1126,19 @@ mod tests {
         }
         assert!(
             !layer.mappings.contains_key(&VKey::I) && !layer.mappings.contains_key(&VKey::O),
-            "I는 double_tap_mappings, O는 빈 키"
-        );
-        assert!(
-            layer.double_tap_mappings.contains_key(&VKey::U),
-            "U 더블탭 = 단어/줄 이동 (뒤)"
+            "I/O는 double_tap_mappings 전용 — 평범한 매핑과 겹치지 않는다"
         );
         assert!(
             layer.double_tap_mappings.contains_key(&VKey::I),
-            "I 더블탭 = 단어/줄 이동 (앞)"
+            "I 더블탭 = 이전 단어 / 줄 처음"
         );
         assert!(
-            !layer.double_tap_mappings.contains_key(&VKey::O),
-            "구 I/O 배치 폐기 — 단어 이동은 U/I 검지+중지"
+            layer.double_tap_mappings.contains_key(&VKey::O),
+            "O 더블탭 = 다음 단어 / 줄 끝"
+        );
+        assert!(
+            !layer.double_tap_mappings.contains_key(&VKey::U),
+            "U/I 배치 폐기 (2026-08-20) — 위 행은 중지+약지, 검지는 H/J/N/M만"
         );
         assert!(
             !layer.double_tap_mappings.contains_key(&VKey::Slash),

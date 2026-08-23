@@ -39,15 +39,19 @@ M = "PageDown"
 "/" = "Delete"                                  # 전방 삭제 (fn+Delete)
 Space = "launch:kmd-desktop"
 
-# 단어/줄 이동 = U/I (J/K 세로열 위 검지+중지 — 최빈 기능에 최강 손가락)
-# CapsLock+U 한 번: 이전 단어 (Option+←), 더블: 줄 시작 (Cmd+←)
-[launcher.keymap.layers.nav.double_taps.U]
+# 단어/줄 이동 = I/O (중지+약지). 위 행은 손바닥에서 멀어지는 신전 동작이라
+# 긴 손가락이 유리하다 — 적합도는 중지 ≥ 약지 > 검지. 검지가 강한 건 누르는
+# 힘이지 뻗는 거리가 아니다. 게다가 검지는 이미 H/J/N/M 4키를 맡고 있어,
+# U까지 얹으면 최빈 기능 5개가 한 손가락의 2행 왕복이 된다. (2026-08-20)
+#
+# CapsLock+I 한 번: 이전 단어 (Option+←), 더블: 줄 시작 (Cmd+←)
+[launcher.keymap.layers.nav.double_taps.I]
 single = "Alt+Left"
 double = "Cmd+Left"
 timeout_ms = 300
 
-# CapsLock+I 한 번: 다음 단어 (Option+→), 더블: 줄 끝 (Cmd+→)
-[launcher.keymap.layers.nav.double_taps.I]
+# CapsLock+O 한 번: 다음 단어 (Option+→), 더블: 줄 끝 (Cmd+→)
+[launcher.keymap.layers.nav.double_taps.O]
 single = "Alt+Right"
 double = "Cmd+Right"
 timeout_ms = 300
