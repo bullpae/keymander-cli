@@ -666,6 +666,14 @@ impl Config {
             "general.reset_ime_on_launch" => get!(self.general.reset_ime_on_launch),
             // launcher
             "launcher.file_search_provider" => get!(str self.launcher.file_search_provider),
+            "launcher.everything_path" => Some(
+                self.launcher
+                    .everything_path
+                    .clone()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             "launcher.max_results" => get!(self.launcher.max_results),
             "launcher.search_depth" => get!(self.launcher.search_depth),
             "launcher.quit_on_launch" => get!(self.launcher.quit_on_launch),
@@ -776,6 +784,13 @@ impl Config {
             // launcher
             "launcher.file_search_provider" => {
                 self.launcher.file_search_provider = value.to_string()
+            }
+            "launcher.everything_path" => {
+                self.launcher.everything_path = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
             }
             "launcher.max_results" => {
                 self.launcher.max_results = parse_or(value, self.launcher.max_results)

@@ -349,7 +349,7 @@ mod platform {
                 biHeight: height as i32, // bottom-up
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
+                biCompression: BI_RGB.0,
                 ..Default::default()
             },
             ..Default::default()

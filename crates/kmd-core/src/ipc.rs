@@ -165,6 +165,64 @@ pub enum Response {
     Pong,
 }
 
+impl Response {
+    /// `Status` 응답을 사람이 읽는 줄 목록으로 만든다. 다른 변형이면 `None`.
+    ///
+    /// `kmd daemon status`(CLI)와 `kmd-daemon status`(데몬 바이너리)가 같은
+    /// 화면을 보여주는데, 예전에는 양쪽이 각자 30줄을 destructure해 출력했다.
+    /// 필드를 하나 늘릴 때 한쪽만 고치면 컴파일 에러(E0027)로 걸리거나 —
+    /// 더 나쁘게는 — **한쪽에만 표시되는 조용한 불일치**가 났다. 실제로
+    /// `hook_health` 추가 때 한 번 물렸다. 그래서 서식은 여기 한 곳에만 둔다.
+    ///
+    /// `extra_line`은 훅 상태 다음에 끼워 넣을 호출자별 줄이다
+    /// (CLI = 로그 경로, 데몬 = 자동 시작 등록 여부).
+    pub fn status_lines(&self, extra_line: Option<String>) -> Option<Vec<String>> {
+        let Response::Status {
+            uptime_secs,
+            index_items,
+            pid,
+            keymap_layers,
+            config_error,
+            keybind_error,
+            hook_health,
+        } = self
+        else {
+            return None;
+        };
+
+        let mut lines = vec![
+            "데몬 상태: 실행 중".to_string(),
+            format!("  PID:        {pid}"),
+            format!("  가동 시간:  {uptime_secs}초"),
+            format!("  인덱스:     {index_items}개 항목"),
+        ];
+
+        // 훅이 죽었으면 아래 레이어 목록은 config에서 온 설정값일 뿐 실제 동작이
+        // 아니다 — 오해하지 않도록 목록보다 먼저 못 박는다.
+        if keybind_error.is_some() {
+            lines.push("  키 훅:      ❌ 미동작 (아래 키 입력이 가로채지지 않습니다)".to_string());
+        }
+        for layer in keymap_layers {
+            lines.push(format!("  레이어:     {layer}"));
+        }
+        if let Some(hook) = hook_health {
+            lines.push(format!("  키보드 훅:  {hook}"));
+        }
+        lines.extend(extra_line);
+        if let Some(err) = keybind_error {
+            lines.push(format!("  ⚠ 키 훅:    {err}"));
+        }
+        if let Some(err) = config_error {
+            lines.push(format!("  ⚠ 설정:     {err}"));
+            lines.push(
+                "              → 데몬이 기본 설정으로 동작 중입니다. config.toml을 고친 뒤 재시작하세요."
+                    .to_string(),
+            );
+        }
+        Some(lines)
+    }
+}
+
 /// IPC 전송용 검색 결과 아이템
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {
@@ -473,5 +531,48 @@ mod tests {
         let res = Response::Pong;
         let encoded = encode_response(&res).unwrap();
         assert!(encoded.contains("Pong"));
+    }
+
+    fn status_sample(hook_health: Option<&str>, keybind_error: Option<&str>) -> Response {
+        Response::Status {
+            uptime_secs: 42,
+            index_items: 7,
+            pid: 1234,
+            keymap_layers: vec!["nav: CapsLock 홀드".into()],
+            config_error: None,
+            keybind_error: keybind_error.map(str::to_string),
+            hook_health: hook_health.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn status_lines는_호출자_줄을_훅_상태_다음에_끼운다() {
+        let lines = status_sample(Some("설치됨"), None)
+            .status_lines(Some("  로그:       /tmp/daemon.log".into()))
+            .expect("Status 응답");
+
+        let hook = lines.iter().position(|l| l.contains("키보드 훅")).unwrap();
+        let extra = lines.iter().position(|l| l.contains("로그:")).unwrap();
+        assert_eq!(extra, hook + 1, "호출자 줄은 훅 상태 바로 다음");
+        assert!(lines[0].contains("실행 중"));
+        assert!(lines.iter().any(|l| l.contains("1234")), "PID 표시");
+    }
+
+    #[test]
+    fn 훅_실패는_레이어_목록보다_먼저_경고한다() {
+        // 훅이 죽으면 레이어 목록은 config 설정값일 뿐 실제 동작이 아니다
+        let lines = status_sample(None, Some("SetWindowsHookEx 실패"))
+            .status_lines(None)
+            .expect("Status 응답");
+
+        let warn = lines.iter().position(|l| l.contains("미동작")).unwrap();
+        let layer = lines.iter().position(|l| l.contains("레이어:")).unwrap();
+        assert!(warn < layer, "경고가 레이어 목록보다 앞");
+        assert!(lines.iter().any(|l| l.contains("SetWindowsHookEx 실패")));
+    }
+
+    #[test]
+    fn status가_아닌_응답은_none() {
+        assert!(Response::Pong.status_lines(None).is_none());
     }
 }

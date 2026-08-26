@@ -4,6 +4,46 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **TUI 설정의 "Everything path"가 아무것도 저장하지 않던 버그** — 설정 화면은
+  `launcher.everything_path` 키를 노출하는데 `Config::get_value`/`set_value`
+  양쪽 모두 해당 분기가 없었다. 읽기는 항상 `None`이라 **값이 있어도 화면은
+  빈칸**이었고, 쓰기는 `UnknownKey` 오류가 나는데 호출부가 `let _ =`로 삼켜
+  **UI상으로는 저장된 것처럼 보이면서 실제로는 버려졌다.** Everything이 Windows
+  전용이라 발견이 늦었다.
+  - 재발 방지: 모든 `SettingItem.key`가 `get_value`/`set_value`를 왕복하는지
+    검사하는 테스트 추가 (`src/tui/settings/items.rs`). 설정 키는 네 곳
+    (구조체 · get · set · 설정 화면)에 손으로 열거되는데 이를 잇는 컴파일 타임
+    장치가 없어, 같은 종류의 누락이 언제든 재발할 수 있었다.
+- **kanata `.kbd` 프리셋이 엔진 기본값과 두 세대 어긋나 있던 문제** —
+  `kmd keymap init vim-nav`가 설치하는 프리셋에 트리거가 아직 `alt`였고,
+  2026-08-12에 **레이어 불변식으로 제거한** `y`(줄 복사) `p`(붙여넣기)
+  `u`(줄 삭제) `,`(단어 삭제)가 그대로 남아 있었다 — 프리셋을 쓰면 금지한
+  오발사 위험이 되살아났다. 마우스 배치도 구 버전(`c`/`g` 클릭, `r`/`v` 휠)이었다.
+  트리거 CapsLock · 위험 액션 제거 · `W`/`R` 클릭 · `T`/`G` 휠로 정렬했다.
+  - 재발 방지: 열 정렬(defsrc ↔ 각 deflayer) · 금지 액션 부재 · 트리거 일치를
+    검사하는 테스트 3개 추가. kanata 바이너리 없이 잡을 수 있는 것만 검사한다.
+  - ⚠️ 이 프리셋은 **kanata 실행으로 검증하지 못했다**(로컬 미설치). 데몬 내장
+    엔진 경로에는 영향이 없다.
+
+### Changed
+- `daemon status` 출력 서식을 `kmd_core::ipc::Response::status_lines` 한 곳으로
+  통합 — `kmd daemon status`와 `kmd-daemon status`가 각자 30줄을 destructure해
+  출력하고 있었다. `hook_health` 추가 때 한쪽만 고쳐 컴파일 에러가 났던 지점이고,
+  다음엔 **한쪽에만 표시되는 조용한 불일치**가 될 수 있었다.
+- clippy 경고 2건 정리 (`needless_return`, `unnecessary_cast`) — 경고 0건 복귀.
+
+### Documentation
+- `docs/16` §5 정정 — `Alt+key` 충돌 범위는 **nav 매핑 11개 키뿐**이고 미매핑
+  키는 `passthrough`로 보존된다(초판은 통째로 깨진다고 과장). `Alt+Shift+key`도
+  "구조적 불가"가 아니라 **설계 선택**임을 AutoHotkey 대조로 명시 — AHK의 수정자
+  핫키는 정확 일치 매칭이라 등록 안 한 조합이 통과하고, AHK의 커스텀 조합
+  (`CapsLock & h::`)은 와일드카드 기본이라 우리 레이어와 같게 동작한다.
+- `docs/16` §5-1b 신설 — 리본 KeyTip은 **순차 방식**이라 `LAlt` 트리거에서는
+  `Alt+H` 하나가 아니라 **`Alt` 탭 자체가 죽어 체계 전체**가 막힌다.
+  완화책은 `tap_action = "LAlt"`.
+- 트리거 결정은 **실사용 검증 대기로 보류** 상태임을 문서 상단과 결정 기록에 명시.
+
 ### Changed
 - **nav 레이어 단어/줄 이동 더블탭을 `U`/`I` → `I`/`O`로 되돌림** (v0.14.0에서
   바꾼 것을 복원). `CapsLock+I` = 이전 단어 / 2탭 = 줄 처음,

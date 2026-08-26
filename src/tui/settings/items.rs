@@ -284,3 +284,56 @@ pub fn items_for_tab(tab: &SettingsTab) -> Vec<SettingItem> {
         ],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 설정 화면의 모든 항목이 `Config`의 get/set과 실제로 연결돼 있는지.
+    ///
+    /// 설정 키는 네 곳(구조체 · `get_value` · `set_value` · 이 파일)에 손으로
+    /// 열거되는데 이를 잇는 컴파일 타임 장치가 없다. 실제로
+    /// `launcher.everything_path`가 이 목록에만 있고 `Config` 양쪽에 없어서,
+    /// "Everything path" 필드가 **항상 빈칸으로 보이고 입력해도 조용히 버려지는**
+    /// 버그가 있었다 (2026-08-27 발견). 호출부가 `let _ = set_value(..)`로
+    /// 오류를 삼켜 UI상으로는 정상처럼 보였다.
+    #[test]
+    fn 모든_설정_항목_키가_config에_연결돼_있다() {
+        let mut config = kmd_core::Config::default();
+
+        for tab in SettingsTab::ALL {
+            for item in items_for_tab(tab) {
+                if matches!(item.widget, WidgetKind::ListAdd) {
+                    assert!(
+                        item.key.is_empty(),
+                        "ListAdd는 목록 추가 마커라 config 키가 없어야 한다: {}",
+                        item.label
+                    );
+                    continue;
+                }
+
+                let current = config.get_value(item.key).unwrap_or_else(|| {
+                    panic!(
+                        "'{}' 항목의 키 '{}'를 Config::get_value가 모른다 — \
+                         화면에는 항상 빈 값이 표시된다",
+                        item.label, item.key
+                    )
+                });
+
+                // ReadOnly는 표시 전용 (_portable_mode / _data_path)
+                if matches!(item.widget, WidgetKind::ReadOnly) {
+                    continue;
+                }
+
+                // 읽은 값을 그대로 되쓰는 왕복 — 실패하면 편집이 조용히 버려진다
+                config.set_value(item.key, &current).unwrap_or_else(|e| {
+                    panic!(
+                        "'{}' 항목의 키 '{}'를 Config::set_value가 거부한다 ({e}) — \
+                         편집해도 저장되지 않는다",
+                        item.label, item.key
+                    )
+                });
+            }
+        }
+    }
+}

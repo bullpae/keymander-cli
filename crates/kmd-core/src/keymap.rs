@@ -20,7 +20,7 @@ pub struct BuiltinPreset {
 pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
     BuiltinPreset {
         name: "vim-nav",
-        description: "Alt 홀드 → Vim 네비게이션, RAlt 홀드 → 마우스, CapsLock tap/hold → Caps/Ctrl",
+        description: "CapsLock 홀드 → Vim 네비게이션, RAlt 홀드 → 마우스 / 탭 → 한영",
         content: VIM_NAV_KBD,
     },
     BuiltinPreset {
@@ -32,9 +32,13 @@ pub const BUILTIN_PRESETS: &[BuiltinPreset] = &[
 
 const VIM_NAV_KBD: &str = r#";; ============================================================
 ;; keymander vim-nav 프로파일
-;; Alt 홀드 → Vim 스타일 네비게이션 + Alt+Space → kmd-desktop 실행
-;; CapsLock → 짧게 탭 = CapsLock, 홀드 = Ctrl (HHKB 스타일)
-;; RAlt 홀드 → 마우스 레이어 (ESDF 이동 + Space/C/G 클릭 + R/V 휠)
+;; CapsLock 홀드 → Vim 스타일 네비게이션 + CapsLock+Space → kmd-desktop 실행
+;; CapsLock 짧게 탭 → 무동작 (한/영은 RAlt 탭)
+;; RAlt 홀드 → 마우스 레이어 (ESDF 이동 + W/R 클릭 + T/G 휠)
+;; RAlt 짧게 탭 → 한/영 (물리 한영키 자리)
+;;
+;; 배치는 데몬 엔진 기본값(vim_nav_default_layer)과 일치시킨다.
+;; 근거·불변식: docs/16_keymap_ergonomics.md
 ;;
 ;; 의존: kanata (https://github.com/jtroo/kanata)
 ;; 생성: kmd keymap init vim-nav
@@ -47,68 +51,66 @@ const VIM_NAV_KBD: &str = r#";; ================================================
 )
 
 ;; ── 2. 물리 키 매핑 ──────────────────────────────────────────
+;; Alt는 트리거가 아니므로 defsrc에 넣지 않는다 — 앱의 Alt 단축키가
+;; 손대지 않은 채로 통과한다 (docs/13).
 (defsrc
-  caps alt  ralt lsft spc  e    s    d    f    r    v    c    g    h    j    k    l    n    m    i    o    .    /    y    p    u    ,
+  caps ralt lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /
 )
 
 ;; ── 3. 기본 레이어 ──────────────────────────────────────────
 (deflayer default
-  @caps-th @nav-mod @mouse-mod lsft spc  e    s    d    f    r    v    c    g    h    j    k    l    n    m    i    o    .    /    y    p    u    ,
+  @nav-mod @mouse-mod lsft spc  e    s    d    f    w    r    t    g    h    j    k    l    n    m    i    o    .    /
 )
 
 ;; ── 4. 네비게이션 레이어 ────────────────────────────────────
-;;    Alt 홀드 상태에서 동작하는 Vim 스타일 키셋
+;;    CapsLock 홀드 상태에서 동작하는 Vim 스타일 키셋
 ;;
 ;;    h/j/k/l  = ←↓↑→          n/m = PageUp/PageDown
-;;    i        = 단어 앞(1탭) / Home(2탭)
-;;    o        = 단어 뒤(1탭) / End(2탭)
+;;    i        = 이전 단어(1탭) / 줄 처음(2탭)   ← 중지
+;;    o        = 다음 단어(1탭) / 줄 끝(2탭)     ← 약지
 ;;    .        = Backspace      / = Delete   (둘 다 연타 그대로)
-;;    ,        = 앞 단어 삭제   u = 줄 삭제 (연타 개념이 없는 키로 분리)
-;;    y        = 줄 복사        p = 붙여넣기
-;;    Space    = kmd-desktop 실행 (Alt+Space)
+;;    Space    = kmd-desktop 실행
+;;    Shift    = 통과 (Shift+네비 = 선택 확장)
+;;
+;;    레이어 불변식: 오발사해도 무해한 액션(이동·글자 삭제·런처)만 둔다.
+;;    붙여넣기·줄 복사·줄 삭제·단어 삭제는 넣지 않는다 — CapsLock과 LShift가
+;;    같은 새끼손가락 인접 키라 오타 비용이 비싸다 (docs/16 §3).
 (deflayer navigation
-  _  _  _  _  @launch-kmd  _  _  _  _  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc del @y-cp @p-vt @del-line C-bspc
+  _  _  _  @launch-kmd  _  _  _  _  _  _  _  _  left down up rght pgup pgdn @i-dt @o-dt bspc del
 )
 
 ;; ── 5. 마우스 레이어 ────────────────────────────────────────
 ;;    RAlt 홀드 상태 — 홀드 손(오른엄지)과 조작 손(왼손) 분리
 ;;
 ;;    e/s/d/f  = 포인터 ↑←↓→ (시간 가속, 타이핑 홈포지션 유지)
-;;    r/v      = 휠 ↑/↓ (검지 세로열 r-f-v)
-;;    Space    = 좌클릭 (홀드 = 드래그)   c/g = 우/중 클릭
+;;    w/r      = 좌/우클릭 (이동 클러스터 왼쪽·오른쪽)
+;;    t/g      = 휠 ↑/↓ (위 키는 위로, 아래 키는 아래로)
+;;    Space    = 좌클릭 (홀드 = 드래그 — w는 s와 같은 약지라 엄지가 담당)
 ;;    j/k/l    = 좌/우/중 클릭 (오른손 별칭)   LShift = 저속 정밀 모드
 ;;    나머지 키는 차단 (오타 방지)
 (deflayer mouse
-  XX _  _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r @ms-wu @ms-wd mrgt mmid XX mlft mrgt mmid XX XX XX XX XX XX XX XX XX XX
+  XX _  @ms-slow @ms-lclk @ms-u @ms-l @ms-d @ms-r mlft mrgt @ms-wu @ms-wd XX mlft mrgt mmid XX XX XX XX XX XX
 )
 
 ;; ── 6. 기능 정의 ────────────────────────────────────────────
 (defalias
-  ;; --- keymander 실행 (Alt+Space) ---
+  ;; --- keymander 실행 (CapsLock+Space) ---
   launch-kmd (cmd kmd-desktop)
-
-  ;; --- 기초 매크로 (편집 기능) ---
-  del-line (macro home S-end del)
-  y-cp     (macro home S-end C-c)
-  p-vt     C-v
 
   ;; --- 복합 기능 (tap-dance) ---
   ;; 200ms 이내에 연타하면 두 번째 기능이 실행됩니다.
   ;; 삭제키(. /)에는 tap-dance를 걸지 않는다 — 연타로 지우는 습관이
-  ;; 줄 삭제로 오발사되기 때문. 줄 삭제는 u 전용 키로 뺐다.
+  ;; 다른 액션으로 오발사되기 때문.
   i-dt  (tap-dance 200 (C-left home))
   o-dt  (tap-dance 200 (C-rght end))
 
-  ;; --- Alt 레이어 전환 ---
-  ;; Alt 홀드 → navigation 레이어, Alt 짧게 탭 → ESC
-  nav-mod (tap-hold 200 200 esc (layer-toggle navigation))
-
-  ;; --- CapsLock 모드탭 (HHKB 스타일) ---
-  ;; 짧게 탭 → CapsLock, 홀드 중 다른 키 → Ctrl 조합 (즉시 판정)
-  caps-th (tap-hold-press 200 200 caps lctl)
+  ;; --- CapsLock 레이어 전환 ---
+  ;; 홀드 → navigation 레이어. 탭은 아무 출력도 내지 않는다(무동작) —
+  ;; 실수 탭이 조용히 입력 소스를 바꾸던 문제로 탭 한/영을 RAlt로 옮겼다.
+  nav-mod (layer-toggle navigation)
 
   ;; --- RAlt 마우스 레이어 ---
-  ;; 짧게 탭 → RAlt(한영 배열 유지), 홀드 → 마우스 레이어
+  ;; 짧게 탭 → RAlt(= 한국어 배열의 물리 한/영키), 홀드 → 마우스 레이어
   mouse-mod (tap-hold-press 200 200 ralt (layer-toggle mouse))
 
   ;; --- 마우스 이동 (가속: 4ms 간격, 500ms에 걸쳐 1→6px) ---
@@ -1524,5 +1526,95 @@ mod tests {
         let e = effective_keymap(&km);
         assert_eq!(e.layers.len(), 3, "nav+mouse(프리셋) + sym(사용자)");
         assert!(e.layers.contains_key("sym"));
+    }
+
+    // ── kanata 프리셋 드리프트 가드 ────────────────────────────────────
+    //
+    // `.kbd` 프리셋(`kmd keymap init vim-nav`)과 데몬 엔진 기본값은 서로 다른
+    // 백엔드용이라 컴파일러가 이어주지 않는다. 실제로 두 세대(트리거 Alt→CapsLock,
+    // 위험 액션 제거, 마우스 재배치) 동안 프리셋만 방치돼, 프리셋을 설치하면
+    // **레이어 불변식이 금지한 액션이 되살아나는** 상태였다 (2026-08-27 발견).
+    //
+    // kanata 바이너리 없이도 잡을 수 있는 것만 검사한다 — 열 정렬과 금지 액션.
+
+    /// `(name ... )` 블록 안의 토큰 목록. 주석(`;;`)은 제외.
+    fn kbd_block_tokens(kbd: &str, header: &str) -> Vec<String> {
+        let start = kbd
+            .find(header)
+            .unwrap_or_else(|| panic!("{header} 블록 없음"));
+        let body_start = start + header.len();
+        let end = body_start
+            + kbd[body_start..]
+                .find(
+                    "
+)",
+                )
+                .expect("블록 종료 괄호");
+        kbd[body_start..end]
+            .lines()
+            .map(|l| l.split(";;").next().unwrap_or(""))
+            .flat_map(|l| l.split_whitespace())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn kanata_프리셋_레이어_열이_defsrc와_정렬된다() {
+        let kbd = preset_content("vim-nav").expect("vim-nav 프리셋");
+        let src = kbd_block_tokens(kbd, "(defsrc");
+        assert!(src.len() > 10, "defsrc 파싱 실패: {}개", src.len());
+
+        for layer in [
+            "(deflayer default",
+            "(deflayer navigation",
+            "(deflayer mouse",
+        ] {
+            let cols = kbd_block_tokens(kbd, layer);
+            assert_eq!(
+                cols.len(),
+                src.len(),
+                "{layer} 열 수가 defsrc({})와 다르다 — kanata 설정이 깨진다",
+                src.len()
+            );
+        }
+    }
+
+    #[test]
+    fn kanata_프리셋에_금지된_액션이_없다() {
+        let kbd = preset_content("vim-nav").expect("vim-nav 프리셋");
+        // 레이어 불변식(docs/16 §1-2): 오발사해도 무해한 액션만 둔다.
+        // 붙여넣기·줄 복사·줄 삭제·단어 삭제는 2026-08-12에 제거했다.
+        for banned in ["del-line", "y-cp", "p-vt", "C-bspc", "C-v"] {
+            assert!(
+                !kbd.contains(banned),
+                "프리셋에 금지된 액션 '{banned}'가 남아 있다 (docs/16 §1-2 레이어 불변식)"
+            );
+        }
+    }
+
+    #[test]
+    fn kanata_프리셋_트리거가_엔진_기본값과_같다() {
+        let kbd = preset_content("vim-nav").expect("vim-nav 프리셋");
+        let nav = effective_keymap(&keymap_with_profile("vim-nav"));
+        let engine_trigger = &nav.layers.get("nav").expect("nav 레이어").trigger;
+        assert_eq!(engine_trigger, "CapsLock", "엔진 기본 트리거 전제");
+
+        let src = kbd_block_tokens(kbd, "(defsrc");
+        assert_eq!(
+            src.first().map(String::as_str),
+            Some("caps"),
+            "defsrc 첫 열 = caps"
+        );
+
+        let default_layer = kbd_block_tokens(kbd, "(deflayer default");
+        assert_eq!(
+            default_layer.first().map(String::as_str),
+            Some("@nav-mod"),
+            "caps 자리가 nav 레이어 트리거여야 한다"
+        );
+        assert!(
+            !kbd.contains("caps-th"),
+            "CapsLock이 레이어 트리거면 HHKB 모드탭은 함께 쓸 수 없다 (엔진의 user_defined_capslock 가드와 같은 이유)"
+        );
     }
 }

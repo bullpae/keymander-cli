@@ -8,8 +8,8 @@
 > 레이어 엔진 동작은 [08](08_layer_passthrough_plan.md) 참고.
 >
 > **"Alt로 되돌리는 게 낫지 않나"를 다시 꺼내기 전에 §5를 먼저 읽을 것** —
-> 2026-08-26에 문헌까지 대조해 재검토했고, 무엇이 살고 무엇이 못 사는지
-> 코드 수준으로 확정해 뒀다.
+> 문헌까지 대조해 재검토했고, 무엇이 살고 무엇이 못 사는지 코드 수준으로
+> 정리해 뒀다. 트리거 결정 자체는 **실사용 검증 대기로 보류**(2026-08-27).
 
 ## 1. 전체 키맵 지도
 
@@ -287,24 +287,53 @@ v0.14.0이 `I`/`O` → `U`/`I`로 옮겼다가 **되돌린** 기록이다 (2026-
 `EngageChord`로 OS에 그대로 넘어간다. Windows/macOS 어댑터 양쪽 구현 완료
 (v0.9.3, [08](08_layer_passthrough_plan.md)).
 
-**하지만 두 축은 구조적으로 못 살린다:**
+**충돌 범위는 nav에 매핑된 11개 키뿐이다.** 매핑되지 않은 키는
+`UnmappedBehavior::Passthrough`가 그대로 코드 모드로 넘긴다(`engine.rs` §4의
+Passthrough 분기).
 
-| 조합 | `LAlt` 트리거일 때 | 이유 |
+| 조합 | `LAlt` 트리거 + `passthrough` | 이유 |
 |---|---|---|
 | `Ctrl+Alt+key` | ✅ 보존 | 4-pre2가 투과 |
-| `Alt+key` | ❌ 충돌 | 다른 수정자가 없어 4-pre2가 발동 안 함. `Alt+H`(Office 홈 리본) `Alt+N`(삽입) `Alt+M` `Alt+I` `Alt+O` `Alt+J/K/L` 전부 nav 키 |
-| `Alt+Shift+key` | ❌ 충돌 | 가드가 **Shift를 일부러 제외**한다(Shift+네비 = 선택 확장 보존). `Alt+Shift+N`(HWP 자간좁히기) → `Shift+PageUp` |
+| `Alt+F` `Alt+E` `Alt+V` `Alt+A` `Alt+W` `Alt+P` `Alt+Tab` `Alt+F4` … | ✅ 보존 | 미매핑 → `EngageChord` |
+| `Alt+Shift+<미매핑 키>` | ✅ 보존 | 위와 같은 경로 (Shift는 물리 통과) |
+| `Alt+` **`H J K L N M I O . / Space`** | ❌ 충돌 | nav 매핑이 이긴다 |
+| `Alt+Shift+<위 11개>` | ❌ 충돌 | 가드가 Shift를 제외 → `Shift+네비`가 된다. `Alt+Shift+N`(HWP 자간좁히기) → `Shift+PageUp` |
 
-즉 **메뉴 니모닉 축은 트리거가 Alt인 한 못 피한다.** [13](13_capslock_trigger.md)이
-CapsLock으로 옮긴 이유가 정확히 이 두 줄이다.
+리본으로 치면 `Alt+H`(홈) `Alt+N`(삽입) `Alt+M`(수식/편지) 정도가 실제 손실이다.
+
+> **정정(2026-08-27)**: 이 절의 초판은 `Alt+key`가 통째로 깨진다고 썼는데
+> 과했다. 그리고 `Alt+Shift+key`를 "구조적 불가"라고 단정했지만 **그건 우리
+> 설계 선택이다** — AutoHotkey의 수정자 핫키는 등록한 수정자 집합이 *정확히*
+> 일치할 때만 발동해서(`!h::`는 `Alt+Shift+H`에 반응하지 않음) 등록 안 한
+> 조합이 전부 통과한다. 대신 선택 확장은 `!+h::`로 **따로 등록**해야 한다.
+> 흥미롭게도 AHK의 커스텀 조합(`CapsLock & h::`)은 와일드카드가 기본이라
+> **우리 레이어와 같게 동작한다** — 차이는 "AHK vs keymander"가 아니라
+> **"수정자 핫키 vs 레이어"**다. 우리도 §6 #6처럼 키 단위 정책을 두면 둘 다
+> 가질 수 있다.
+
+### 5-1b. 더 큰 함정 — `Alt` 탭이 죽으면 KeyTip 전체가 죽는다
+
+리본 접근 키는 **순차 방식**이다. `Alt`를 눌렀다 떼면 KeyTip이 뜨고 그다음
+글자를 누른다. 그런데 레이어 트리거의 키다운은 무조건 억제되고(`engine.rs` §3),
+뗄 때 탭으로 판정되면 `tap_action`이 대신 나간다. `tap_action = "Escape"`면:
+
+**`Alt` 탭 → Escape → KeyTip이 아예 안 뜬다.** `Alt+H` 하나가 아니라
+`Alt+F`/`Alt+N`/`Alt+Q` 등 **체계 전체**가 막힌다. 위 표의 "미매핑 키는 보존"은
+*홀드해서 코드로 치는 경로*에만 해당한다.
+
+완화책: `tap_action = "LAlt"`. `SendKey`는 down+up 완전한 타건을 주입하므로
+(`send_key_press`) 앱이 보는 건 평범한 Alt 타건이고 KeyTip이 정상 표시된다.
+대신 "탭 = Esc" 편의는 포기한다.
 
 ### 5-2. 두 선택지는 서로 다른 곳에서 깨진다
 
 | 축 | `LAlt` 트리거 | `CapsLock` 트리거 |
 |---|---|---|
 | `Ctrl+Alt+key` | ✅ 보존 | ✅ 무관 |
-| `Alt+key` 리본·메뉴 니모닉 | ❌ 충돌 | ✅ 완전 보존 |
-| `Alt+Shift+key` | ❌ 충돌 | ✅ 보존 |
+| `Alt+key` — 미매핑 키 | ✅ 보존 | ✅ 무관 |
+| `Alt+key` — nav 매핑 11개 | ❌ 충돌 (`Alt+H`/`N`/`M` 리본) | ✅ 보존 |
+| `Alt` 탭 → KeyTip | ⚠️ `tap_action="LAlt"` 필요 (§5-1b) | ✅ 무관 |
+| `Alt+Shift+key` | ⚠️ 매핑 키만 충돌 · 설계로 수정 가능 (§6 #6) | ✅ 보존 |
 | `LShift` 동시 사용 | ✅ 엄지/새끼 독립 | ❌ 같은 새끼 (물리적 불가) |
 | 일반 타이핑 오발사 | ✅ Alt는 평소 안 눌림 | ❌ 인접 + 동일 손가락 (§3) |
 | 새끼 부하 | ✅ 엄지로 분산 | ❌ 새끼 집중 |
@@ -320,6 +349,11 @@ CapsLock으로 옮긴 이유가 정확히 이 두 줄이다.
 - 주로 에디터·터미널·브라우저이고 Alt+글자를 거의 안 쓴다 → **Alt가 낫다.**
 
 ### 5-3. 채택 — 레이어 안의 Shift (`CapsLock` 유지)
+
+> **2026-08-27 유보**: §5-1 정정으로 `LAlt` 복귀 비용이 초판 추정보다 작아졌다
+> (실제 손실은 리본 `Alt+H`/`Alt+N`/`Alt+M` 정도 + `tap_action` 조정).
+> 사용자가 CapsLock을 실사용으로 더 검증하기로 해 **트리거 결정 자체는 보류**
+> 상태다. 아래 채택안은 어느 트리거를 고르든 유효하므로 그대로 둔다.
 
 Alt로 돌아갈 유일한 강한 논거가 §3-2 **(B) 동시 입력 충돌**인데, 이건
 트리거를 바꾸지 않고도 없앨 수 있다. nav 레이어에서 **왼손이 통째로 비어
@@ -363,6 +397,7 @@ ExpECT PDF, Engram 논문, JMB 논문 본문은 접근이 막혀(403/바이너�
 | 3 | `N`/`M`(PgUp/PgDn)과 단어 이동의 자리 교환 | 아래 행이 위 행보다 편한데(§2), 지금은 *덜 쓰는* 페이지 이동이 *더 편한* 자리를 차지한다 | 재학습 비용이 커 보류 |
 | 4 | kanata 프리셋(`VIM_NAV_KBD`) 드리프트 정리 | `.kbd`에 이미 제거된 `P`/`Y`/`U`/`,`와 구 마우스 배치(`c`/`g` 클릭, `r`/`v` 휠)가 남아 있다. 엔진은 `W`/`R` 클릭, `T`/`G` 휠 | 미착수 |
 | 5 | **레이어 로컬 Shift** — nav 레이어의 왼손 키(예: `F`)를 홀드하는 동안 Shift 주입. `BindAction`에 수정자 홀드 액션 추가 | §3-2 (B) 동시 입력 충돌을 트리거 교체 없이 제거한다. 새끼는 트리거만, Shift는 검지가 담당 | **채택, 미착수** (→ §5-3) |
+| 6 | **키 단위 Shift 정책** — 레이어에 `shift = "exact"` + `shift_mappings` 도입. 4-pre2의 Shift 제외 조건을 "그 키가 `shift_mappings`에 있는가"로 교체 | `Alt+Shift+H`는 선택 확장, `Alt+Shift+N`은 앱으로 투과 — AHK가 열거 방식으로 자연히 얻는 것을 레이어 모델에서도 얻는다. `LAlt` 복귀를 검토할 때만 필요 (→ §5-1) | 미착수 |
 
 트리거를 **새끼손가락 밖의 새 자리로** 빼는 안은 마땅한 곳이 없어 기각했다 —
 `LCtrl`/`Tab`도 왼새끼, 오른손 키는 네비 키와 같은 손, `LWin`은 `Win+L`(화면
@@ -382,6 +417,7 @@ Shift 충돌만 떼어내는** 쪽을 택했다.
 | 2026-08-12 | nav에서 `P`/`Y`/`U`/`,` 제거 | 레이어 불변식 — CapsLock↔LShift 오발사가 붙여넣기·줄 삭제로 이어짐 |
 | 2026-08-12 | 단어 이동 `I`/`O` → `U`/`I` | "검지+중지가 최강 손가락" + O/P 안전지대 |
 | **2026-08-20** | **단어 이동 `U`/`I` → `I`/`O` 복원** | **위 행 적합도는 중지 ≥ 약지 > 검지. 검지 부하 5 → 4, SFB 4쌍 해소** |
+| **2026-08-27** | **트리거 결정 보류 — 실사용 검증 후 재판단** | `Alt+key`는 nav 매핑 11개만 충돌하고 나머지는 passthrough로 보존됨을 확인. `Alt+Shift`도 구조적 불가가 아니라 설계 선택(AHK 대조) — §5-1 정정 |
 | **2026-08-26** | **트리거 재검토 → CapsLock 유지 + 레이어 로컬 Shift 채택** | **`Ctrl+Alt`는 이미 보존되지만 `Alt+key`·`Alt+Shift+key`는 구조적으로 못 살린다. Alt 복귀의 유일한 강한 논거(Shift 동시 사용)는 왼손 Shift로 제거 가능 (§5)** |
 
 ## 참고 문헌
@@ -394,5 +430,7 @@ Shift 충돌만 떼어내는** 쪽을 택했다.
 - [Types of Typing Errors and What Causes Each One](https://likelytypo.com/articles/types-of-typing-errors.html) — 대체/전치 오류와 같은 손가락 인접의 관계 개괄. → §3-1
 - [Reducing Proactive Interference in Motor Tasks](https://www.tandfonline.com/doi/abs/10.1080/00222895.2019.1635984) — *Journal of Motor Behavior* 52(3). 타이핑 맥락의 자동화 패턴 변경과 선행간섭. → §4
 - [How effector-specific is the effect of sequence learning by motor execution and motor imagery?](https://link.springer.com/article/10.1007/s00221-017-5096-z) — *Experimental Brain Research*. 시퀀스 학습의 이펙터 특이성은 문헌이 엇갈린다는 근거. → §4
+- [Hotkeys — Definition & Usage | AutoHotkey v2](https://www.autohotkey.com/docs/v2/Hotkeys.htm) — 수정자 핫키의 정확 일치 매칭 vs 커스텀 조합의 와일드카드 기본값. → §5-1
+- [Use the keyboard to work with the ribbon — Microsoft Support](https://support.microsoft.com/en-us/office/use-the-keyboard-to-work-with-the-ribbon-954cd3f7-2f77-4983-978d-c09b20e31f0e) — KeyTip 순차 동작(`Alt` → 글자). → §5-1b
 - [Ergonomic Keyboard Mods: Modifiers](https://colemakmods.github.io/ergonomic-mods/modifiers.html) — CapsLock-모디파이어의 Shift 동일 새끼 충돌과 "엄지로 분산" 권고. → §3-1, §5
 - [Chord skill: learning optimized hand postures and bimanual coordination](https://pmc.ncbi.nlm.nih.gov/articles/PMC10224868/) — 코드(동시 누름) 학습의 이펙터 특이성
