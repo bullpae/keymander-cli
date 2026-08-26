@@ -34,6 +34,22 @@ All notable changes to keymander are documented here.
   CHANGELOG에 흩어져 있던 근거를 한곳에 모았다.
 - `docs/README.md` 색인 정정 — 13(v0.13.0부터 기본)·15(v0.15.0)를 "계획"에서
   "설계 이력"으로 옮기고, 누락돼 있던 14를 추가.
+- **`docs/16` §5 트리거 재검토 추가** — "`LAlt`로 되돌리는 게 낫지 않나"에 대한
+  결론을 코드·문헌 근거와 함께 확정. `Ctrl+Alt+key`는 `unmapped="passthrough"`로
+  **이미 보존되지만**(4-pre2 + `EngageChord`, v0.9.3), `Alt+key`(리본 니모닉)와
+  `Alt+Shift+key`(HWP 자간좁히기)는 구조적으로 못 살린다 — 후자는 가드가
+  Shift를 일부러 제외하기 때문. CapsLock 유지 + **레이어 로컬 Shift**(왼손 키
+  홀드 = Shift)로 §3-2의 동시 입력 충돌만 떼어내는 쪽을 채택.
+- `docs/16` §2·§3·§4에 문헌 대조 추가 — 키 위치별 노력 비용 모델(Engram,
+  IJHCI 2026), "인접 + 같은 손가락"이 대체 오류의 조건이라는 오류 분류 연구,
+  자동화 패턴 변경 시의 선행간섭(JMB 2020). 원문 대조 한계는 §5-5에 명시.
+
+### Fixed
+- **`unmapped = "passthrough"` 설명이 낡아 있던 것 수정** —
+  `dist/config.keymap.{windows,macos}.toml`이 *"어댑터 구현 전까지는 plain과
+  동일하게 동작"*이라고 안내했지만 어댑터는 v0.9.3에 들어갔다. 이 주석을 믿고
+  `passthrough`를 빼면 `LAlt` 트리거에서 `Ctrl+Alt+key`가 깨진다. Shift가
+  투과 대상에서 제외된다는 점도 함께 명시.
 
 ## [0.15.1] — 2026-08-19
 

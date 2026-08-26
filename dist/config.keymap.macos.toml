@@ -25,7 +25,11 @@ tap_hold_ms = 200
 # trigger = "LAlt"
 # tap_action = "Escape"
 # 미매핑 키 동작: "plain"(맨키 통과, 기본) | "passthrough"(트리거 조합을 OS로 투과,
-# 예: Alt+Tab 유지 — 어댑터 구현 전까지는 plain과 동일하게 동작) | "block"(억제)
+# 예: Cmd+Alt+H가 nav 매핑을 건너뛰고 OS로 간다) | "block"(억제)
+#
+# ※ 트리거가 modifier(LAlt 등)일 때만 의미가 있다. 그리고 Shift는 예외 —
+#   Shift+네비 = 선택 확장이 더 유용해서 투과시키지 않는다.
+#   자세한 트레이드오프: docs/16_keymap_ergonomics.md §5
 # unmapped = "passthrough"
 
 [launcher.keymap.layers.nav.mappings]

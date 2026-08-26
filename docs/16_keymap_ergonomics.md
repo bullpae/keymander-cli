@@ -6,6 +6,10 @@
 >
 > 트리거 선택(왜 LAlt가 아니라 CapsLock인가)의 배경은 [13](13_capslock_trigger.md),
 > 레이어 엔진 동작은 [08](08_layer_passthrough_plan.md) 참고.
+>
+> **"Alt로 되돌리는 게 낫지 않나"를 다시 꺼내기 전에 §5를 먼저 읽을 것** —
+> 2026-08-26에 문헌까지 대조해 재검토했고, 무엇이 살고 무엇이 못 사는지
+> 코드 수준으로 확정해 뒀다.
 
 ## 1. 전체 키맵 지도
 
@@ -114,6 +118,15 @@ RShift 필요 (왼손 문자):    1 2 3 4 5      →  ! @ # $ %
 **같은 손가락의 행 왕복(same-finger bigram)을 늘리지 않는다.** 레이아웃
 분석에서 피로·속도 저하의 최대 원인으로 꼽히는 패턴이다.
 
+> **문헌 대조** — 이 세 기준은 피어리뷰된 배치 최적화 연구의 비용 모델과
+> 일치한다. Engram 연구(IJHCI, 2026)는 30개 키 위치마다 **어느 손가락이
+> 닿는지에 따른 노력 비용**을 매기는데, 그 근거가 (1) 손가락 힘 차이
+> (새끼 < 검지), (2) **뻗기보다 말기가 쉽다**는 방향성, (3) 행 스태거
+> 기하다. 크라우드소싱한 타이핑 선호 데이터에서 **중지는 홈 행과 그 위
+> 행에 활동이 몰린다**는 관찰도 §4의 판단과 같은 방향이다.
+> ([Engram Study](https://www.tandfonline.com/doi/full/10.1080/10447318.2026.2665409),
+> [프로젝트](https://github.com/binarybottle/engram))
+
 ### 표준 운지 (오른손, ANSI)
 
 | 손가락 | 담당 키 |
@@ -143,6 +156,24 @@ RShift 필요 (왼손 문자):    1 2 3 4 5      →  ! @ # $ %
 중심 간 ≈ 19.6mm — `A`↔`Z` 수준이고, 사이에 촉각 경계가 없다.
 
 Alt 시절에는 엄지 vs 새끼라 이 충돌 자체가 성립하지 않았다.
+
+> **문헌 대조 — "인접"만으로는 부족하고 "인접 + 같은 손가락"이 조건이다.**
+>
+> 타이핑 오류 분류 연구의 일관된 결과: 대체(substitution) 오류 대부분은
+> **키보드상 인접하면서 동시에 같은 손가락이 담당하는** 두 글자 사이에서
+> 일어난다. 반대로 다른 손·다른 손가락이 치는 글자쌍은 순서 오류가 덜한데,
+> **독립적인 운동 경로가 타이밍 간섭을 줄이기** 때문이다.
+> ([ExpECT — Kano & MacKenzie](https://www.yorku.ca/mack/bhci2007.pdf),
+> [오류 유형 개괄](https://likelytypo.com/articles/types-of-typing-errors.html))
+>
+> `CapsLock`↔`LShift`는 이 조건을 정확히 만족한다. `LAlt`↔`LShift`는 인접성도
+> 손가락도 둘 다 어긋난다 — **트리거를 바꾸며 없던 오류 조건을 만든 것**이다.
+>
+> 커뮤니티에도 알려진 결함이다. Colemak 인체공학 모드 문서는 CapsLock을
+> Ctrl로 쓸 때 `Ctrl+Shift+Tab` 같은 조합이 *"real hassle"*이 된다고 적고,
+> **권장 해법으로 "모디파이어를 엄지로 분산"**을 든다.
+> ([Colemak Mods: Modifiers](https://colemakmods.github.io/ergonomic-mods/modifiers.html))
+> — 이 권고가 §5의 판단을 가른다.
 
 ### 3-2. 실패가 두 종류다
 
@@ -235,7 +266,95 @@ v0.14.0이 `I`/`O` → `U`/`I`로 옮겼다가 **되돌린** 기록이다 (2026-
 
 후자는 시간이 지나도 사라지지 않는다. `U`/`I`의 신고 증상은 후자였다.
 
-## 5. 열려 있는 과제
+> **문헌 대조** — 자동화된 동작 패턴을 바꾸면 **선행간섭(proactive
+> interference)**으로 초기 수행 저하가 생긴다. 옛 표상이 일차운동피질에 남아
+> 새 패턴과 경쟁하기 때문이고, `Journal of Motor Behavior`(2020)는 이걸
+> **타이핑 맥락에서** 다뤘다. 즉 배치를 바꾼 직후의 불편은 **일정 부분 반드시
+> 발생하며, 그 자체는 배치가 나쁘다는 증거가 아니다.** 위 구분 기준이 필요한
+> 이유다.
+> ([Reducing Proactive Interference in Motor Tasks](https://www.tandfonline.com/doi/abs/10.1080/00222895.2019.1635984))
+
+## 5. 트리거 재검토 — `LAlt` vs `CapsLock`
+
+2026-08-26 재검토 기록. **결론은 "재검토했고 CapsLock을 유지하되, Shift 충돌은
+별도로 해결한다"**이다. 같은 논의를 다시 열기 전에 아래를 읽을 것.
+
+### 5-1. `Ctrl+Alt+key`는 이미 보존된다 (구현 완료)
+
+`LAlt` 트리거의 가장 큰 걱정인 "Ctrl+Alt 조합까지 잡아먹는다"는 **해결돼 있다.**
+`engine.rs` 4-pre2 — 트리거가 modifier이고 `unmapped = "passthrough"`일 때,
+**트리거 외의 비-Shift 수정자가 함께 눌린 키 down은 매핑을 건너뛰고**
+`EngageChord`로 OS에 그대로 넘어간다. Windows/macOS 어댑터 양쪽 구현 완료
+(v0.9.3, [08](08_layer_passthrough_plan.md)).
+
+**하지만 두 축은 구조적으로 못 살린다:**
+
+| 조합 | `LAlt` 트리거일 때 | 이유 |
+|---|---|---|
+| `Ctrl+Alt+key` | ✅ 보존 | 4-pre2가 투과 |
+| `Alt+key` | ❌ 충돌 | 다른 수정자가 없어 4-pre2가 발동 안 함. `Alt+H`(Office 홈 리본) `Alt+N`(삽입) `Alt+M` `Alt+I` `Alt+O` `Alt+J/K/L` 전부 nav 키 |
+| `Alt+Shift+key` | ❌ 충돌 | 가드가 **Shift를 일부러 제외**한다(Shift+네비 = 선택 확장 보존). `Alt+Shift+N`(HWP 자간좁히기) → `Shift+PageUp` |
+
+즉 **메뉴 니모닉 축은 트리거가 Alt인 한 못 피한다.** [13](13_capslock_trigger.md)이
+CapsLock으로 옮긴 이유가 정확히 이 두 줄이다.
+
+### 5-2. 두 선택지는 서로 다른 곳에서 깨진다
+
+| 축 | `LAlt` 트리거 | `CapsLock` 트리거 |
+|---|---|---|
+| `Ctrl+Alt+key` | ✅ 보존 | ✅ 무관 |
+| `Alt+key` 리본·메뉴 니모닉 | ❌ 충돌 | ✅ 완전 보존 |
+| `Alt+Shift+key` | ❌ 충돌 | ✅ 보존 |
+| `LShift` 동시 사용 | ✅ 엄지/새끼 독립 | ❌ 같은 새끼 (물리적 불가) |
+| 일반 타이핑 오발사 | ✅ Alt는 평소 안 눌림 | ❌ 인접 + 동일 손가락 (§3) |
+| 새끼 부하 | ✅ 엄지로 분산 | ❌ 새끼 집중 |
+
+**이건 인체공학 대 인체공학이 아니라 인체공학 대 앱 호환성이다.**
+순수 인체공학만 보면 Alt가 낫고 — Colemak 권고("모디파이어를 엄지로")가
+가리키는 방향이 바로 `LAlt`다. Alt의 결함은 신체가 아니라 **소프트웨어 관습**에서
+온다.
+
+따라서 정답은 사용 패턴에 달렸다:
+
+- 리본·메뉴를 **Alt 니모닉으로 조작한다** → CapsLock 유지.
+- 주로 에디터·터미널·브라우저이고 Alt+글자를 거의 안 쓴다 → **Alt가 낫다.**
+
+### 5-3. 채택 — 레이어 안의 Shift (`CapsLock` 유지)
+
+Alt로 돌아갈 유일한 강한 논거가 §3-2 **(B) 동시 입력 충돌**인데, 이건
+트리거를 바꾸지 않고도 없앨 수 있다. nav 레이어에서 **왼손이 통째로 비어
+있기** 때문이다.
+
+```
+CapsLock  +  F  +  H   →  Shift+←  (선택 확장)
+ 왼새끼     왼검지 오른검지   ← 세 이펙터가 전부 독립
+```
+
+새끼는 트리거만 잡고 Shift는 검지가 맡는다. Colemak의 "모디파이어를 분산하라"를
+**CapsLock을 버리지 않고** 만족시키는 셈이다. (B)가 사라지면 남는 건 연습으로
+줄어드는 (A)뿐이다.
+
+필요한 작업: `BindAction`에 "레이어 키를 누르는 동안 수정자 홀드" 액션 추가.
+`mouse:slow`가 이미 비슷한 상태 유지 구조라 크지 않다. → §6 #5
+
+### 5-4. `LAlt`를 시험하려면
+
+되돌리기는 config 세 줄이다. **세 번째 줄이 없으면 `Ctrl+Alt+key`까지 깨져서
+"역시 Alt는 안 되는구나"라는 잘못된 결론이 난다.**
+
+```toml
+trigger = "LAlt"
+tap_action = "Escape"
+unmapped = "passthrough"    # ← 필수. 이게 4-pre2를 켠다
+```
+
+### 5-5. 인용의 한계
+
+이 절과 §2·§3·§4의 문헌 인용은 **초록과 검색 요약까지만 확인한 것**이다 —
+ExpECT PDF, Engram 논문, JMB 논문 본문은 접근이 막혀(403/바이너리) 원문
+대조를 못 했다. 결론을 뒤집을 만한 재검토를 할 때는 원문을 먼저 확보할 것.
+
+## 6. 열려 있는 과제
 
 | # | 제안 | 해결하는 것 | 상태 |
 |---|---|---|---|
@@ -243,14 +362,16 @@ v0.14.0이 `I`/`O` → `U`/`I`로 옮겼다가 **되돌린** 기록이다 (2026-
 | 2 | `Shift+Space` 한/영 combo 제거 검토 | 한/영 주 경로는 이미 RAlt 탭으로 단일화됐다. 남겨두면 슬립 시 런처가 뜨는 경로가 하나 더 생긴다 | 미착수 |
 | 3 | `N`/`M`(PgUp/PgDn)과 단어 이동의 자리 교환 | 아래 행이 위 행보다 편한데(§2), 지금은 *덜 쓰는* 페이지 이동이 *더 편한* 자리를 차지한다 | 재학습 비용이 커 보류 |
 | 4 | kanata 프리셋(`VIM_NAV_KBD`) 드리프트 정리 | `.kbd`에 이미 제거된 `P`/`Y`/`U`/`,`와 구 마우스 배치(`c`/`g` 클릭, `r`/`v` 휠)가 남아 있다. 엔진은 `W`/`R` 클릭, `T`/`G` 휠 | 미착수 |
+| 5 | **레이어 로컬 Shift** — nav 레이어의 왼손 키(예: `F`)를 홀드하는 동안 Shift 주입. `BindAction`에 수정자 홀드 액션 추가 | §3-2 (B) 동시 입력 충돌을 트리거 교체 없이 제거한다. 새끼는 트리거만, Shift는 검지가 담당 | **채택, 미착수** (→ §5-3) |
 
-트리거를 새끼손가락 밖으로 빼는 **구조적 해결은 마땅한 자리가 없어 기각**했다 —
+트리거를 **새끼손가락 밖의 새 자리로** 빼는 안은 마땅한 곳이 없어 기각했다 —
 `LCtrl`/`Tab`도 왼새끼, 오른손 키는 네비 키와 같은 손, `LWin`은 `Win+L`(화면
 잠금) 위험, `Space`는 롤오버 문제로 이미 기각([13](13_capslock_trigger.md)).
-`LAlt`가 인체공학적으로는 가장 나았고 앱 단축키를 가리는 게 문제였으므로,
-되돌리는 대신 #1로 버티는 쪽을 택한다.
+`LAlt`로 되돌리는 안은 §5에서 별도로 검토했다 — 인체공학적으로는 가장 낫지만
+`Alt+key`·`Alt+Shift+key`를 구조적으로 못 살려서, **CapsLock을 유지하고 #5로
+Shift 충돌만 떼어내는** 쪽을 택했다.
 
-## 6. 결정 기록
+## 7. 결정 기록
 
 | 날짜 | 결정 | 근거 |
 |---|---|---|
@@ -261,3 +382,17 @@ v0.14.0이 `I`/`O` → `U`/`I`로 옮겼다가 **되돌린** 기록이다 (2026-
 | 2026-08-12 | nav에서 `P`/`Y`/`U`/`,` 제거 | 레이어 불변식 — CapsLock↔LShift 오발사가 붙여넣기·줄 삭제로 이어짐 |
 | 2026-08-12 | 단어 이동 `I`/`O` → `U`/`I` | "검지+중지가 최강 손가락" + O/P 안전지대 |
 | **2026-08-20** | **단어 이동 `U`/`I` → `I`/`O` 복원** | **위 행 적합도는 중지 ≥ 약지 > 검지. 검지 부하 5 → 4, SFB 4쌍 해소** |
+| **2026-08-26** | **트리거 재검토 → CapsLock 유지 + 레이어 로컬 Shift 채택** | **`Ctrl+Alt`는 이미 보존되지만 `Alt+key`·`Alt+Shift+key`는 구조적으로 못 살린다. Alt 복귀의 유일한 강한 논거(Shift 동시 사용)는 왼손 Shift로 제거 가능 (§5)** |
+
+## 참고 문헌
+
+원문 대조 여부는 §5-5 참고 — 아래는 초록·요약 수준에서 확인한 것이다.
+
+- [Optimizing Comfortable Keyboard Layouts Using Human Typing Preferences and Language-Dependent n-Grams: The Engram Study](https://www.tandfonline.com/doi/full/10.1080/10447318.2026.2665409) — *International Journal of Human-Computer Interaction*. 키 위치별 노력 비용 모델(손가락 힘·뻗기 vs 말기·스태거). → §2
+- [Engram 프로젝트 (binarybottle)](https://github.com/binarybottle/engram) — 위 논문의 구현·데이터
+- [ExpECT: An Expanded Error Categorisation Method for Text Input](https://www.yorku.ca/mack/bhci2007.pdf) — Kano & MacKenzie. 텍스트 입력 오류 분류. → §3-1
+- [Types of Typing Errors and What Causes Each One](https://likelytypo.com/articles/types-of-typing-errors.html) — 대체/전치 오류와 같은 손가락 인접의 관계 개괄. → §3-1
+- [Reducing Proactive Interference in Motor Tasks](https://www.tandfonline.com/doi/abs/10.1080/00222895.2019.1635984) — *Journal of Motor Behavior* 52(3). 타이핑 맥락의 자동화 패턴 변경과 선행간섭. → §4
+- [How effector-specific is the effect of sequence learning by motor execution and motor imagery?](https://link.springer.com/article/10.1007/s00221-017-5096-z) — *Experimental Brain Research*. 시퀀스 학습의 이펙터 특이성은 문헌이 엇갈린다는 근거. → §4
+- [Ergonomic Keyboard Mods: Modifiers](https://colemakmods.github.io/ergonomic-mods/modifiers.html) — CapsLock-모디파이어의 Shift 동일 새끼 충돌과 "엄지로 분산" 권고. → §3-1, §5
+- [Chord skill: learning optimized hand postures and bimanual coordination](https://pmc.ncbi.nlm.nih.gov/articles/PMC10224868/) — 코드(동시 누름) 학습의 이펙터 특이성

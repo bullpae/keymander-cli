@@ -13,6 +13,11 @@
 > **인접 비용**: CapsLock↔LShift가 같은 새끼손가락이라는 데서 오는 구조적
 > 비용과 오발사 등급표는 [16_keymap_ergonomics.md](16_keymap_ergonomics.md) §3에
 > 정리돼 있다. 트리거를 바꾸려는 검토를 시작하기 전에 그쪽을 먼저 볼 것.
+>
+> **LAlt 복귀 재검토(2026-08-26)**: 16번 §5에 결론이 있다 — `Ctrl+Alt+key`는
+> `unmapped="passthrough"`로 **이미 보존되지만**, `Alt+key`(리본 니모닉)와
+> `Alt+Shift+key`(HWP)는 구조적으로 못 살린다. CapsLock 유지 + 레이어 로컬
+> Shift로 간다.
 
 ## 배경
 
