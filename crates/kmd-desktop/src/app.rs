@@ -28,7 +28,7 @@ use iced::{
     Task,
 };
 
-use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
+use kmd_core::plugin::{builtin_calc, builtin_shell};
 use kmd_core::single_instance::Guard;
 use kmd_core::web;
 use kmd_core::{IndexItem, ItemKind, Source};

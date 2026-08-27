@@ -489,9 +489,130 @@ pub fn version_items(app_label: &str, app_version: &str, use_emoji: bool) -> Vec
     ]
 }
 
+// ── 프리픽스별 결과 생성 (순수) ──────────────────────────────────────────────
+//
+// 아래 함수들은 **쿼리 → 항목 목록**만 담당한다. 데스크톱과 TUI가 같은
+// 프리픽스 문자열(`:emoji`/`:e`, `!`/`>`, `:keymap`/`:km`)을 각자 벗겨내던
+// 것을 여기로 모았다 — 별칭 하나를 추가할 때 한쪽만 고치면 두 UI의 동작이
+// 갈라지는 것이 실제 위험이었다.
+//
+// 결과를 상태에 반영하는 방식(점수·정렬·검색 모드)은 UI마다 다르므로
+// 여기서 다루지 않는다. 마찬가지로 UI별로 이미 갈라진 핸들러
+// (`transform`은 데스크톱=결과 항목/TUI=상태 메시지, `prompt`·`keys`는
+// 설정 출처가 다름)는 의도적으로 통합하지 않았다.
+
+/// `:calc <식>` — 계산기 항목.
+pub fn calc_items(query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let expr = query.strip_prefix(":calc").unwrap_or("").trim();
+    crate::plugin::builtin_calc::CalcExtension.search_with_emoji(expr, use_emoji)
+}
+
+/// `:emoji <키워드>` / `:e <키워드>` — 이모지 항목.
+pub fn emoji_items(query: &str) -> Vec<IndexItem> {
+    let keyword = query
+        .strip_prefix(":emoji")
+        .or_else(|| query.strip_prefix(":e"))
+        .unwrap_or("")
+        .trim();
+    crate::plugin::builtin_emoji::EmojiExtension.search_emoji(keyword)
+}
+
+/// `!<명령>` / `><명령>` — 셸 항목. `!g rust`처럼 웹 검색으로 보이는 입력이면
+/// 전환 힌트를 두 번째 자리에 끼운다.
+pub fn shell_items(query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
+    use crate::plugin::Extension as _;
+    let mut items = crate::plugin::builtin_shell::ShellExtension.search(shell_query);
+    if let Some(hint) = bang_web_hint(query, use_emoji) {
+        let pos = items.len().min(1);
+        items.insert(pos, hint);
+    }
+    items
+}
+
+/// `:keymap <하위명령>` / `:km <하위명령>` — 키맵 항목.
+pub fn keymap_query_items(config: &crate::Config, query: &str, use_emoji: bool) -> Vec<IndexItem> {
+    let sub = query
+        .strip_prefix(":keymap")
+        .or_else(|| query.strip_prefix(":km"))
+        .unwrap_or("")
+        .trim();
+    crate::keymap::keymap_items(config, sub, use_emoji)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 프리픽스 결과 생성 (데스크톱·TUI 공용) ─────────────────────────
+    //
+    // 이 별칭 파싱이 예전에는 두 UI에 각각 복사돼 있었다. 별칭을 하나 늘릴 때
+    // 한쪽만 고치면 같은 입력에 다른 결과가 나온다.
+
+    #[test]
+    fn emoji_별칭_두_가지가_같은_키워드를_준다() {
+        let long = emoji_items(":emoji heart");
+        let short = emoji_items(":e heart");
+        assert!(!long.is_empty(), ":emoji 결과 있음");
+        assert_eq!(
+            long.iter().map(|i| &i.name).collect::<Vec<_>>(),
+            short.iter().map(|i| &i.name).collect::<Vec<_>>(),
+            ":emoji 와 :e 는 같은 결과여야 한다"
+        );
+    }
+
+    #[test]
+    fn shell_프리픽스_두_가지가_같은_결과를_준다() {
+        let bang = shell_items("!echo", false);
+        let gt = shell_items(">echo", false);
+        assert_eq!(
+            bang.iter().map(|i| &i.name).collect::<Vec<_>>(),
+            gt.iter().map(|i| &i.name).collect::<Vec<_>>(),
+            "! 와 > 는 같은 결과여야 한다"
+        );
+    }
+
+    #[test]
+    fn shell은_웹검색처럼_보이면_전환_힌트를_끼운다() {
+        // `!g rust` — 셸 명령이 아니라 웹 검색 의도로 보이는 입력
+        let items = shell_items("!g rust", false);
+        let hint_pos = items
+            .iter()
+            .position(|i| i.name.contains('@'))
+            .expect("전환 힌트가 있어야 한다");
+        assert!(
+            hint_pos <= 1,
+            "힌트는 최상단 또는 두 번째 자리 (실제 {hint_pos})"
+        );
+
+        // 평범한 셸 입력에는 힌트가 없다
+        assert!(
+            !shell_items("!echo hi", false)
+                .iter()
+                .any(|i| i.name.contains('@')),
+            "일반 셸 입력에는 전환 힌트를 넣지 않는다"
+        );
+    }
+
+    #[test]
+    fn calc는_프리픽스만_벗기고_식을_넘긴다() {
+        let items = calc_items(":calc 2+3", false);
+        assert!(
+            items.iter().any(|i| i.name.contains('5')),
+            "2+3 결과 5가 있어야 한다: {items:?}"
+        );
+    }
+
+    #[test]
+    fn 프리픽스만_있고_인자가_없어도_패닉하지_않는다() {
+        // 사용자는 ":e"까지만 친 상태를 반드시 거친다 — 매 키 입력마다 호출된다
+        for q in [":calc", ":emoji", ":e", "!", ">", ":keymap", ":km"] {
+            let _ = calc_items(q, false);
+            let _ = emoji_items(q);
+            let _ = shell_items(q, false);
+            let _ = keymap_query_items(&crate::Config::default(), q, false);
+        }
+    }
 
     #[test]
     fn sigil_prefixes() {

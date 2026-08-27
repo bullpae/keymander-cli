@@ -299,32 +299,17 @@ impl App {
     }
 
     pub(super) fn handle_calc_query(&mut self, query: &str) {
-        let expr = query.strip_prefix(":calc").unwrap_or("").trim();
-        let calc = builtin_calc::CalcExtension;
-        self.apply_contains_items(calc.search_with_emoji(expr, self.use_emoji));
+        let items = kmd_core::query_prefix::calc_items(query, self.use_emoji);
+        self.apply_contains_items(items);
     }
 
     pub(super) fn handle_emoji_query(&mut self, query: &str) {
-        let search_query = query
-            .strip_prefix(":emoji")
-            .or_else(|| query.strip_prefix(":e"))
-            .unwrap_or("")
-            .trim();
-        let emoji_ext = builtin_emoji::EmojiExtension;
-        self.apply_contains_items(emoji_ext.search_emoji(search_query));
+        let items = kmd_core::query_prefix::emoji_items(query);
+        self.apply_contains_items(items);
     }
 
     pub(super) fn handle_shell_query(&mut self, query: &str) {
-        let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
-        let shell_ext = builtin_shell::ShellExtension;
-        let mut items = shell_ext.search(shell_query);
-
-        // !g rust → @g rust 웹 검색 전환 힌트 (셸 항목 아래에 표시)
-        if let Some(hint) = kmd_core::query_prefix::bang_web_hint(query, self.use_emoji) {
-            let pos = items.len().min(1);
-            items.insert(pos, hint);
-        }
-
+        let items = kmd_core::query_prefix::shell_items(query, self.use_emoji);
         self.apply_contains_items(items);
     }
 
@@ -379,12 +364,8 @@ impl App {
 
     /// :keymap / :km 쿼리 처리
     pub(super) fn handle_keymap_query(&mut self, query: &str) {
-        let sub = query
-            .strip_prefix(":keymap")
-            .or_else(|| query.strip_prefix(":km"))
-            .unwrap_or("")
-            .trim();
-        let items = kmd_core::keymap::keymap_items(&self.runtime_config, sub, self.use_emoji);
+        let items =
+            kmd_core::query_prefix::keymap_query_items(&self.runtime_config, query, self.use_emoji);
         self.apply_contains_items(items);
     }
 

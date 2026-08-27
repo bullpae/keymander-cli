@@ -15,7 +15,7 @@ use kmd_core::index::{
     files::{dir_icon, icon_for_path},
     ItemKind, Source,
 };
-use kmd_core::plugin::{builtin_calc, builtin_emoji, builtin_shell, Extension};
+use kmd_core::plugin::{builtin_calc, builtin_shell, Extension};
 use kmd_core::query_prefix::QueryPrefix;
 use kmd_core::search::{SearchEngine, SearchMode, SearchResult};
 use kmd_core::web;
@@ -1234,22 +1234,14 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
 
 /// Handle :calc prefix (explicit calculator mode)
 fn handle_calc_query(query: &str, state: &mut AppState) {
-    let expr = query.strip_prefix(":calc").unwrap_or("").trim();
-    let calc = builtin_calc::CalcExtension;
-    let items = calc.search_with_emoji(expr, state.use_emoji);
+    let items = kmd_core::query_prefix::calc_items(query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }
 
 /// Handle :emoji or :e prefix (emoji search)
 fn handle_emoji_query(query: &str, state: &mut AppState) {
-    let search_query = query
-        .strip_prefix(":emoji")
-        .or_else(|| query.strip_prefix(":e"))
-        .unwrap_or("")
-        .trim();
-    let emoji_ext = builtin_emoji::EmojiExtension;
-    let items = emoji_ext.search_emoji(search_query);
+    let items = kmd_core::query_prefix::emoji_items(query);
     state.results = items_to_results(items, SCORE_CALC);
     state.selected_index = 0;
 }
@@ -1310,13 +1302,8 @@ fn handle_settings_query(state: &mut AppState) {
 
 /// Handle :keymap / :km prefix — kanata 키맵 제어 항목 표시
 fn handle_keymap_query(query: &str, state: &mut AppState) {
-    let sub = query
-        .strip_prefix(":keymap")
-        .or_else(|| query.strip_prefix(":km"))
-        .unwrap_or("")
-        .trim();
     let config = crate::cmd::load_config().unwrap_or_default();
-    let items = kmd_core::keymap::keymap_items(&config, sub, state.use_emoji);
+    let items = kmd_core::query_prefix::keymap_query_items(&config, query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -1365,23 +1352,9 @@ fn handle_content_search(query: &str, state: &mut AppState, db: Option<&kmd_core
 
 /// Handle ! prefix (shell commands and quick actions)
 fn handle_shell_query(query: &str, state: &mut AppState) {
-    let shell_query = query.strip_prefix(['!', '>']).unwrap_or("").trim();
-    let shell_ext = builtin_shell::ShellExtension;
-    let items = shell_ext.search(shell_query);
+    // 웹 검색 전환 힌트(`!g rust` → `@g rust`) 삽입까지 core가 담당한다
+    let items = kmd_core::query_prefix::shell_items(query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
-
-    // !g rust → @g rust 웹 검색 전환 힌트 (셸 항목 아래에 표시)
-    if let Some(hint) = kmd_core::query_prefix::bang_web_hint(query, state.use_emoji) {
-        let pos = state.results.len().min(1);
-        state.results.insert(
-            pos,
-            SearchResult {
-                item: hint,
-                score: 0,
-            },
-        );
-    }
-
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
 }
@@ -1650,6 +1623,166 @@ mod tests {
                 None,
             );
         }
+    }
+
+    // ── 프리픽스 디스패치 테이블 ────────────────────────────────────────
+    //
+    // update_search의 14-arm match가 각 프리픽스를 **자기 핸들러로** 보내는지
+    // 고정한다. arm 하나를 잘못 연결하거나 프리픽스 판정이 바뀌면 사용자는
+    // "엉뚱한 결과가 나온다"로만 겪고 컴파일러는 아무 말도 안 한다.
+
+    fn results_for(query: &str) -> AppState {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, query);
+        state
+    }
+
+    #[test]
+    fn calc_프리픽스는_계산_결과로_간다() {
+        let st = results_for(":calc 2+3");
+        assert!(
+            st.results.iter().any(|r| r.item.name.contains('5')),
+            "2+3 → 5 가 없다: {:?}",
+            st.results.iter().map(|r| &r.item.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn emoji_프리픽스는_이모지_결과로_간다() {
+        // 주의: 별칭 뒤 공백부터 내장 한글 조합이 자동으로 켜지므로(§emoji_keyword_started)
+        // 여기서 "heart"를 타이핑하면 자모로 조합된다. 라우팅만 확인하려면
+        // 공백 없는 상태를 본다.
+        let st = results_for(":emoji");
+        assert!(
+            !st.results.is_empty(),
+            "이모지 핸들러로 라우팅되어 목록이 나와야 한다"
+        );
+    }
+
+    #[test]
+    fn emoji_키워드는_한글_조합으로_입력된다() {
+        // `:e ` 이후 자동 한글 조합이 켜지므로 로마자 타이핑은 자모가 된다.
+        // 한국어 키워드로 이모지를 찾는 것이 이 모드의 의도다.
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, "/e ");
+        assert!(state.hangul_mode, "공백 후 한글 조합 활성");
+
+        type_str(&mut state, &mut engine, "gkdns"); // → 하늘
+        assert!(
+            state.effective_query().contains('하') || state.effective_query().contains('느'),
+            "한글로 조합돼야 한다: {}",
+            state.effective_query()
+        );
+    }
+
+    #[test]
+    fn shell_프리픽스는_contains_모드로_전환된다() {
+        let st = results_for("!echo");
+        assert!(!st.results.is_empty());
+        assert_eq!(st.search_mode_label(), SearchMode::Contains.label());
+    }
+
+    #[test]
+    fn version_프리픽스는_버전을_보여준다() {
+        let st = results_for(":version");
+        let names: Vec<_> = st.results.iter().map(|r| r.item.name.clone()).collect();
+        assert!(
+            names.iter().any(|n| n.contains(env!("CARGO_PKG_VERSION"))),
+            "버전 문자열이 없다: {names:?}"
+        );
+    }
+
+    #[test]
+    fn help_keys_keymap_프리픽스가_각각_결과를_낸다() {
+        for q in [":help", ":keys", ":keymap"] {
+            assert!(
+                !results_for(q).results.is_empty(),
+                "'{q}' 가 빈 결과 — 디스패치가 끊겼을 수 있다"
+            );
+        }
+    }
+
+    #[test]
+    fn 미지원_콜론_명령은_안내를_최상단에_붙인다() {
+        let st = results_for(":이런명령은없다");
+        assert!(
+            !st.results.is_empty(),
+            "일반 검색 폴스루 + 안내가 있어야 한다"
+        );
+    }
+
+    #[test]
+    fn 프리픽스만_입력한_중간_상태에서_패닉하지_않는다() {
+        // 사용자는 ":calc"를 치기까지 ":", ":c", ":ca" ... 를 모두 거친다
+        for q in [":", ":c", ":ca", ":cal", ":calc", ":e", "!", ">", "@"] {
+            let _ = results_for(q);
+        }
+    }
+
+    // ── 선택 상태 전이 ──────────────────────────────────────────────────
+
+    #[test]
+    fn 선택_이동은_결과_범위를_벗어나지_않는다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, ":help");
+        let n = state.results.len();
+        assert!(n >= 2, "이동을 검증하려면 결과가 2개 이상이어야 한다");
+
+        let down = |st: &mut AppState, e: &mut SearchEngine| {
+            handle_key(
+                st,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                e,
+                None,
+            )
+        };
+        let up = |st: &mut AppState, e: &mut SearchEngine| {
+            handle_key(st, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), e, None)
+        };
+
+        // 위로: 0에서 더 못 올라간다
+        up(&mut state, &mut engine);
+        assert_eq!(state.selected_index, 0, "맨 위에서 Up은 무동작");
+
+        down(&mut state, &mut engine);
+        assert_eq!(state.selected_index, 1);
+
+        // 아래로: 마지막을 넘지 않는다
+        for _ in 0..(n + 5) {
+            down(&mut state, &mut engine);
+        }
+        assert_eq!(state.selected_index, n - 1, "맨 아래에서 Down은 무동작");
+    }
+
+    #[test]
+    fn 쿼리가_바뀌면_선택이_처음으로_돌아간다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        type_str(&mut state, &mut engine, ":help");
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &mut engine,
+            None,
+        );
+        assert_eq!(state.selected_index, 1);
+
+        // 한 글자 더 입력 → 결과가 다시 만들어지므로 선택은 0으로
+        type_str(&mut state, &mut engine, "x");
+        assert_eq!(state.selected_index, 0, "새 결과에서는 첫 항목 선택");
+    }
+
+    #[test]
+    fn 입력하면_드릴다운에서_빠져나온다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        state.drill_path = Some(std::path::PathBuf::from("."));
+
+        type_str(&mut state, &mut engine, "a");
+        assert!(state.drill_path.is_none(), "타이핑은 드릴 모드를 종료한다");
     }
 
     #[test]
