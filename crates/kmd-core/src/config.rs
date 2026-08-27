@@ -612,6 +612,104 @@ impl Default for KeybindingsConfig {
     }
 }
 
+// ── 단순 설정 키 레지스트리 ──────────────────────────────────────────────────
+//
+// 설정 키는 오랫동안 `get_value`와 `set_value` 두 개의 거대한 match에 **각각**
+// 손으로 적혀 있었다. 둘을 잇는 컴파일 타임 장치가 없어서 한쪽만 적는 실수가
+// 조용히 통과했다 — 실제로 `launcher.everything_path`가 설정 화면에만 있고
+// 양쪽에 다 없어서 "입력해도 버려지는" 버그가 있었다 (2026-08-27).
+//
+// 아래 매크로는 **한 줄 선언에서 get/set 양쪽을 함께 생성**한다. 여기 적힌 키는
+// 비대칭이 원천적으로 불가능하다. 리스트 정규화나 읽기 전용 의사 키처럼 처리가
+// 특별한 것은 여전히 `get_value`/`set_value`의 명시적 arm으로 남는다.
+//
+// 종류:
+//   num  — `FromStr` + `Display` (숫자·불리언). 파싱 실패는 오류로 전파
+//   text — `String` 필드. 임의 문자열을 그대로 받는다
+macro_rules! config_registry {
+    ( $( $key:literal => $($field:ident).+ , $kind:ident ; )* ) => {
+        impl Config {
+            /// 레지스트리 키면 값을, 아니면 `None`.
+            fn registry_get(&self, key: &str) -> Option<String> {
+                match key {
+                    $( $key => Some(registry_read!($kind, self.$($field).+)), )*
+                    _ => None,
+                }
+            }
+
+            /// 레지스트리 키면 설정하고 `Some(())`, 아니면 `None`.
+            fn registry_set(&mut self, key: &str, value: &str) -> Result<Option<()>, ConfigError> {
+                match key {
+                    $(
+                        $key => {
+                            registry_write!($kind, self.$($field).+, key, value);
+                            Ok(Some(()))
+                        }
+                    )*
+                    _ => Ok(None),
+                }
+            }
+
+            /// 레지스트리에 선언된 키 전체 (테스트·문서용).
+            pub fn registry_keys() -> &'static [&'static str] {
+                &[ $($key),* ]
+            }
+        }
+    };
+}
+
+macro_rules! registry_read {
+    (num, $f:expr) => {
+        $f.to_string()
+    };
+    (text, $f:expr) => {
+        $f.clone()
+    };
+}
+
+macro_rules! registry_write {
+    (num, $f:expr, $key:expr, $value:expr) => {
+        $f = $value.parse().map_err(|_| ConfigError::InvalidValue {
+            key: $key.to_string(),
+            value: $value.to_string(),
+            expected: std::any::type_name_of_val(&$f),
+        })?
+    };
+    (text, $f:expr, $key:expr, $value:expr) => {
+        $f = $value.to_string()
+    };
+}
+
+config_registry! {
+    "general.render_fps"               => general.render_fps, num;
+    "general.show_preview"             => general.show_preview, num;
+    "general.preview_width_percent"    => general.preview_width_percent, num;
+    "general.theme"                    => general.theme, text;
+    "general.emoji_icons"              => general.emoji_icons, num;
+    "general.reset_ime_on_launch"      => general.reset_ime_on_launch, num;
+    "launcher.file_search_provider"    => launcher.file_search_provider, text;
+    "launcher.max_results"             => launcher.max_results, num;
+    "launcher.search_depth"            => launcher.search_depth, num;
+    "launcher.quit_on_launch"          => launcher.quit_on_launch, num;
+    "launcher.index_directories"       => launcher.index_directories, num;
+    "launcher.scan_drives"             => launcher.scan_drives, num;
+    "launcher.drive_scan_depth"        => launcher.drive_scan_depth, num;
+    "launcher.index_refresh_minutes"   => launcher.index_refresh_minutes, num;
+    "launcher.kind_weights.directory"  => launcher.kind_weights.directory, num;
+    "launcher.kind_weights.app"        => launcher.kind_weights.app, num;
+    "launcher.kind_weights.file"       => launcher.kind_weights.file, num;
+    "launcher.kind_weights.executable" => launcher.kind_weights.executable, num;
+    "launcher.kind_weights.system_cmd" => launcher.kind_weights.system_cmd, num;
+    "launcher.kind_weights.web_search" => launcher.kind_weights.web_search, num;
+    "keybindings.global_hotkey"        => keybindings.global_hotkey, text;
+    "keybindings.toggle_keymap"        => keybindings.toggle_keymap, text;
+    "keybindings.quit"                 => keybindings.quit, text;
+    "keybindings.next"                 => keybindings.next, text;
+    "keybindings.prev"                 => keybindings.prev, text;
+    "keybindings.select"               => keybindings.select, text;
+    "keybindings.toggle_preview"       => keybindings.toggle_preview, text;
+}
+
 impl Config {
     /// Load config from a directory (reads config.toml)
     pub fn load(config_dir: &Path) -> Result<Self, ConfigError> {
@@ -669,17 +767,15 @@ impl Config {
                 Some($field.clone().unwrap_or_default())
             };
         }
+        // 레지스트리 키(get/set이 한 선언에서 생성됨)를 먼저 본다
+        if let Some(v) = self.registry_get(key) {
+            return Some(v);
+        }
+
         match key {
             // general
-            "general.render_fps" => get!(self.general.render_fps),
-            "general.show_preview" => get!(self.general.show_preview),
-            "general.preview_width_percent" => get!(self.general.preview_width_percent),
-            "general.theme" => get!(str self.general.theme),
             "general.editor" => get!(opt self.general.editor),
-            "general.emoji_icons" => get!(self.general.emoji_icons),
-            "general.reset_ime_on_launch" => get!(self.general.reset_ime_on_launch),
             // launcher
-            "launcher.file_search_provider" => get!(str self.launcher.file_search_provider),
             "launcher.everything_path" => Some(
                 self.launcher
                     .everything_path
@@ -688,20 +784,7 @@ impl Config {
                     .to_string_lossy()
                     .to_string(),
             ),
-            "launcher.max_results" => get!(self.launcher.max_results),
-            "launcher.search_depth" => get!(self.launcher.search_depth),
-            "launcher.quit_on_launch" => get!(self.launcher.quit_on_launch),
-            "launcher.index_directories" => get!(self.launcher.index_directories),
-            "launcher.scan_drives" => get!(self.launcher.scan_drives),
-            "launcher.drive_scan_depth" => get!(self.launcher.drive_scan_depth),
-            "launcher.index_refresh_minutes" => get!(self.launcher.index_refresh_minutes),
             // kind_weights
-            "launcher.kind_weights.directory" => get!(self.launcher.kind_weights.directory),
-            "launcher.kind_weights.app" => get!(self.launcher.kind_weights.app),
-            "launcher.kind_weights.file" => get!(self.launcher.kind_weights.file),
-            "launcher.kind_weights.executable" => get!(self.launcher.kind_weights.executable),
-            "launcher.kind_weights.system_cmd" => get!(self.launcher.kind_weights.system_cmd),
-            "launcher.kind_weights.web_search" => get!(self.launcher.kind_weights.web_search),
             "launcher.multi_llm_providers" => Some(self.launcher.multi_llm_providers.join(",")),
             "launcher.multi_llm_prefixes" => Some(self.launcher.multi_llm_prefixes.join(",")),
             "launcher.llm_autopilot" => Some(self.launcher.llm_autopilot.to_string()),
@@ -741,13 +824,6 @@ impl Config {
             ),
             "launcher.keymap.active_profile" => Some(self.launcher.keymap.active_profile.clone()),
             // keybindings
-            "keybindings.global_hotkey" => get!(str self.keybindings.global_hotkey),
-            "keybindings.toggle_keymap" => get!(str self.keybindings.toggle_keymap),
-            "keybindings.quit" => get!(str self.keybindings.quit),
-            "keybindings.next" => get!(str self.keybindings.next),
-            "keybindings.prev" => get!(str self.keybindings.prev),
-            "keybindings.select" => get!(str self.keybindings.select),
-            "keybindings.toggle_preview" => get!(str self.keybindings.toggle_preview),
             // virtual keys (read-only, computed at runtime)
             "_portable_mode" => Some(
                 if crate::portable::is_portable() {
@@ -764,29 +840,13 @@ impl Config {
 
     /// Set a config value by dot-separated key path
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
-        /// `value`를 필드 타입으로 파싱한다. 실패는 **오류로 전파**한다.
-        ///
-        /// 예전에는 파싱 실패 시 기존 값을 그대로 두고 `Ok(())`를 반환했다.
-        /// 그래서 `kmd config set general.render_fps "abc"`가 "Set ..." 성공
-        /// 메시지와 종료코드 0을 내면서 값은 그대로였고, TUI는 결과를
-        /// `let _ =`로 버린 뒤 무조건 "변경됨"으로 표시했다 — 사용자는 저장된
-        /// 줄 알지만 실제로는 버려지는 조용한 유실이었다 (2026-08-27 발견).
-        fn parse_field<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, ConfigError> {
-            value.parse().map_err(|_| ConfigError::InvalidValue {
-                key: key.to_string(),
-                value: value.to_string(),
-                expected: std::any::type_name::<T>(),
-            })
+        // 레지스트리 키는 여기서 처리된다 — get/set 비대칭이 불가능한 쪽
+        if self.registry_set(key, value)?.is_some() {
+            return Ok(());
         }
 
         match key {
             // general
-            "general.render_fps" => self.general.render_fps = parse_field(key, value)?,
-            "general.show_preview" => self.general.show_preview = parse_field(key, value)?,
-            "general.preview_width_percent" => {
-                self.general.preview_width_percent = parse_field(key, value)?
-            }
-            "general.theme" => self.general.theme = value.to_string(),
             "general.editor" => {
                 self.general.editor = if value.is_empty() {
                     None
@@ -794,14 +854,7 @@ impl Config {
                     Some(value.to_string())
                 }
             }
-            "general.emoji_icons" => self.general.emoji_icons = parse_field(key, value)?,
-            "general.reset_ime_on_launch" => {
-                self.general.reset_ime_on_launch = parse_field(key, value)?
-            }
             // launcher
-            "launcher.file_search_provider" => {
-                self.launcher.file_search_provider = value.to_string()
-            }
             "launcher.everything_path" => {
                 self.launcher.everything_path = if value.trim().is_empty() {
                     None
@@ -809,38 +862,7 @@ impl Config {
                     Some(PathBuf::from(value))
                 }
             }
-            "launcher.max_results" => self.launcher.max_results = parse_field(key, value)?,
-            "launcher.search_depth" => self.launcher.search_depth = parse_field(key, value)?,
-            "launcher.quit_on_launch" => self.launcher.quit_on_launch = parse_field(key, value)?,
-            "launcher.index_directories" => {
-                self.launcher.index_directories = parse_field(key, value)?
-            }
-            "launcher.scan_drives" => self.launcher.scan_drives = parse_field(key, value)?,
-            "launcher.index_refresh_minutes" => {
-                self.launcher.index_refresh_minutes = parse_field(key, value)?
-            }
-            "launcher.drive_scan_depth" => {
-                self.launcher.drive_scan_depth = parse_field(key, value)?
-            }
             // kind_weights
-            "launcher.kind_weights.directory" => {
-                self.launcher.kind_weights.directory = parse_field(key, value)?
-            }
-            "launcher.kind_weights.app" => {
-                self.launcher.kind_weights.app = parse_field(key, value)?
-            }
-            "launcher.kind_weights.file" => {
-                self.launcher.kind_weights.file = parse_field(key, value)?
-            }
-            "launcher.kind_weights.executable" => {
-                self.launcher.kind_weights.executable = parse_field(key, value)?
-            }
-            "launcher.kind_weights.system_cmd" => {
-                self.launcher.kind_weights.system_cmd = parse_field(key, value)?
-            }
-            "launcher.kind_weights.web_search" => {
-                self.launcher.kind_weights.web_search = parse_field(key, value)?
-            }
             "launcher.multi_llm_providers" => {
                 self.launcher.multi_llm_providers = value
                     .split(',')
@@ -950,13 +972,6 @@ impl Config {
                 self.launcher.keymap.active_profile = value.to_string()
             }
             // keybindings
-            "keybindings.global_hotkey" => self.keybindings.global_hotkey = value.to_string(),
-            "keybindings.toggle_keymap" => self.keybindings.toggle_keymap = value.to_string(),
-            "keybindings.quit" => self.keybindings.quit = value.to_string(),
-            "keybindings.next" => self.keybindings.next = value.to_string(),
-            "keybindings.prev" => self.keybindings.prev = value.to_string(),
-            "keybindings.select" => self.keybindings.select = value.to_string(),
-            "keybindings.toggle_preview" => self.keybindings.toggle_preview = value.to_string(),
             _ => return Err(ConfigError::UnknownKey(key.to_string())),
         }
         Ok(())
@@ -1124,6 +1139,69 @@ mod tests {
     // 예전에는 파싱 실패 시 기존 값을 유지한 채 Ok(())를 반환해서,
     // `kmd config set general.render_fps abc`가 성공 메시지 + 종료코드 0을
     // 내면서 값은 그대로였다. TUI는 그 결과마저 버리고 "변경됨"으로 표시했다.
+
+    // ── 설정 키 레지스트리 ─────────────────────────────────────────────
+
+    #[test]
+    fn 레지스트리_키는_전부_get과_set이_된다() {
+        // 매크로가 양쪽을 함께 생성하므로 비대칭은 원천적으로 불가능하지만,
+        // 선언 자체가 잘못돼도(오타난 필드 경로 등) 여기서 걸린다.
+        let mut c = Config::default();
+        for key in Config::registry_keys() {
+            let v = c
+                .get_value(key)
+                .unwrap_or_else(|| panic!("레지스트리 키 '{key}' 를 get_value가 모른다"));
+            c.set_value(key, &v)
+                .unwrap_or_else(|e| panic!("레지스트리 키 '{key}' 를 set_value가 거부한다: {e}"));
+            assert_eq!(
+                c.get_value(key).as_deref(),
+                Some(v.as_str()),
+                "'{key}' 왕복 값이 달라졌다"
+            );
+        }
+    }
+
+    #[test]
+    fn 레지스트리_숫자_키는_잘못된_값을_거부한다() {
+        let mut c = Config::default();
+        // num 종류만 골라낸다 — 값이 숫자/불리언으로 파싱되는 키
+        let numeric: Vec<&str> = Config::registry_keys()
+            .iter()
+            .copied()
+            .filter(|k| {
+                let v = Config::default().get_value(k).unwrap_or_default();
+                v.parse::<i64>().is_ok() || v.parse::<bool>().is_ok()
+            })
+            .collect();
+        assert!(numeric.len() >= 10, "숫자/불리언 키가 충분히 잡혀야 한다");
+
+        for key in numeric {
+            assert!(
+                c.set_value(key, "완전히 잘못된 값").is_err(),
+                "'{key}' 가 잘못된 값을 조용히 받아들인다"
+            );
+        }
+    }
+
+    #[test]
+    fn 레지스트리와_명시적_arm이_겹치지_않는다() {
+        // 같은 키가 양쪽에 있으면 레지스트리가 먼저 이겨 명시적 arm이
+        // 죽은 코드가 된다 — 읽는 사람이 잘못된 곳을 고치게 된다.
+        let src = include_str!("config.rs");
+        let (_, after) = src.split_once("pub fn get_value").expect("get_value");
+        let (get_body, rest) = after.split_once("pub fn set_value").expect("set_value");
+        for key in Config::registry_keys() {
+            let needle = format!("\"{key}\" =>");
+            assert!(
+                !get_body.contains(&needle),
+                "'{key}' 가 레지스트리와 get_value 양쪽에 있다"
+            );
+            assert!(
+                !rest.contains(&needle),
+                "'{key}' 가 레지스트리와 set_value 양쪽에 있다"
+            );
+        }
+    }
 
     #[test]
     fn 숫자_필드에_숫자가_아닌_값은_거부한다() {

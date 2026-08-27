@@ -111,6 +111,11 @@ pub struct AppState {
     pub translate_providers: Vec<String>,
     /// Command aliases used for translation.
     pub translate_prefixes: Vec<String>,
+    /// 로드된 설정 — **키 입력마다 디스크를 다시 읽지 않기 위한 캐시**.
+    /// 예전에는 `:keys`/`:keymap`/`:prompt`/`?` 핸들러가 매 키 입력마다
+    /// `load_config()`로 config.toml을 읽었다 (데스크톱은 캐시를 쓴다).
+    /// 설정을 바꾸는 경로는 이 값을 함께 갱신해 캐시가 어긋나지 않게 한다.
+    pub config: kmd_core::Config,
     /// Cached effective query (query + composing char), updated on every input change
     cached_effective_query: String,
     /// Whether the UI needs to be redrawn
@@ -199,6 +204,7 @@ pub fn run_app(
     engine.load(index.items);
 
     // Initialize state
+    let cached_config = config.clone();
     let mut state = AppState {
         query: String::new(),
         results: Vec::new(),
@@ -228,6 +234,7 @@ pub fn run_app(
         spell_prefixes: config.launcher.spell_prefixes.clone(),
         translate_providers: config.launcher.translate_providers.clone(),
         translate_prefixes: config.launcher.translate_prefixes.clone(),
+        config: cached_config,
         cached_effective_query: String::new(),
         dirty: true,
     };
@@ -353,8 +360,11 @@ fn handle_settings_key_event(
             state.settings = None;
         }
         SettingsAction::Save { needs_rebuild } => {
-            // Apply the edited config
+            // Apply the edited config.
+            // `config`(메인 루프 소유)와 `state.config`(핸들러가 읽는 캐시)를
+            // 함께 갱신한다 — 한쪽만 고치면 `:keys`/`:keymap`이 옛 설정을 보게 된다.
             *config = settings_state.config.clone();
+            state.config = settings_state.config.clone();
             settings_state.dirty = false;
 
             // Save to file
@@ -452,19 +462,8 @@ fn handle_key(
         // Open settings modal
         (KeyCode::F(2), _) => {
             flush_composer(state);
-            match crate::cmd::load_config() {
-                Ok(config) => {
-                    state.settings = Some(SettingsState::new(config));
-                }
-                Err(e) => {
-                    let config = kmd_core::Config::default();
-                    state.settings = Some(SettingsState::new(config));
-                    state.status_message = Some(format!(
-                        "\u{26A0}\u{FE0F} Config load failed, using defaults: {}",
-                        e
-                    ));
-                }
-            }
+            // 캐시된 설정으로 연다 — 시작 시 로드한 값과 이후 변경이 모두 반영돼 있다
+            state.settings = Some(SettingsState::new(state.config.clone()));
         }
 
         (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
@@ -637,8 +636,8 @@ fn tui_try_llm_launch(state: &mut AppState) -> bool {
         return false;
     }
 
-    let config = crate::cmd::load_config().unwrap_or_default();
-    let final_prompt = kmd_core::prompt::apply_template(&config.launcher.prompt_templates, &prompt);
+    let final_prompt =
+        kmd_core::prompt::apply_template(&state.config.launcher.prompt_templates, &prompt);
     let plan = web::build_llm_launch_plan(&services, &final_prompt);
     let has_paste = plan
         .jobs
@@ -676,8 +675,8 @@ fn tui_try_llm_launch(state: &mut AppState) -> bool {
 
 /// `@@ <프롬프트>` 이어서 질문 — 데몬에 위임 (열 URL 없음).
 fn tui_send_llm_followup(state: &mut AppState, prompt: &str) {
-    let config = crate::cmd::load_config().unwrap_or_default();
-    let final_prompt = kmd_core::prompt::apply_template(&config.launcher.prompt_templates, prompt);
+    let final_prompt =
+        kmd_core::prompt::apply_template(&state.config.launcher.prompt_templates, prompt);
     let req = kmd_core::ipc::Request::LlmFollowup {
         prompt: final_prompt,
     };
@@ -750,9 +749,8 @@ fn execute_selected(
         }
         // 폴더 제안 → search_paths에 추가 + config 저장 (docs/15 P2)
         if keywords.starts_with(kmd_core::folder_suggest::SUGGEST_MARKER) {
-            let mut config = crate::cmd::load_config().unwrap_or_default();
             if let Some(msg) =
-                kmd_core::folder_suggest::execute_suggest_action(&mut config, &keywords)
+                kmd_core::folder_suggest::execute_suggest_action(&mut state.config, &keywords)
             {
                 state.status_message = Some(msg);
             }
@@ -762,14 +760,13 @@ fn execute_selected(
         }
         // 설정 모달 열기 (:set)
         if keywords == "kmd:tui:open_settings" {
-            let config = crate::cmd::load_config().unwrap_or_default();
-            state.settings = Some(SettingsState::new(config));
+            state.settings = Some(SettingsState::new(state.config.clone()));
             return;
         }
         // 키맵 액션 (start/stop/프로파일 전환)
         if keywords.starts_with("kmd:keymap:") && !keywords.ends_with(":noop") {
-            let mut config = crate::cmd::load_config().unwrap_or_default();
-            if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut config, &keywords) {
+            if let Some(msg) = kmd_core::keymap::execute_keymap_action(&mut state.config, &keywords)
+            {
                 state.status_message = Some(msg);
             }
             let query = kmd_core::query_prefix::normalize_slash_command(&state.query)
@@ -1146,16 +1143,9 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
         .unwrap_or("")
         .trim();
 
-    let config = match crate::cmd::load_config() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            state.status_message = Some(format!("❌ 설정 로드 실패: {e}"));
-            state.results.clear();
-            state.selected_index = 0;
-            return;
-        }
-    };
-    let templates = &config.launcher.prompt_templates;
+    // 캐시된 설정을 쓴다 — 매 키 입력마다 디스크를 읽지 않는다.
+    // 아래 add/remove는 캐시를 직접 고치고 저장하므로 캐시가 어긋나지 않는다.
+    let templates = state.config.launcher.prompt_templates.clone();
 
     // :prompt add <name> <body>
     if sub.starts_with("add ") {
@@ -1169,17 +1159,20 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
             } else if body.is_empty() {
                 state.status_message = Some("❌ 본문이 비어 있습니다".to_string());
             } else {
-                let mut cfg = config;
-                cfg.launcher
+                state
+                    .config
+                    .launcher
                     .prompt_templates
                     .retain(|t| !t.name.eq_ignore_ascii_case(name));
-                cfg.launcher
+                state
+                    .config
+                    .launcher
                     .prompt_templates
                     .push(kmd_core::config::PromptTemplate {
                         name: name.to_string(),
                         body: body.to_string(),
                     });
-                if let Err(e) = cfg.save() {
+                if let Err(e) = state.config.save() {
                     state.status_message = Some(format!("❌ 저장 실패: {e}"));
                 } else {
                     state.status_message = Some(format!("✅ 템플릿 '{name}' 저장됨"));
@@ -1204,13 +1197,14 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
         if name.is_empty() {
             state.status_message = Some("사용법: :prompt remove <name>".to_string());
         } else {
-            let mut cfg = config;
-            let before = cfg.launcher.prompt_templates.len();
-            cfg.launcher
+            let before = state.config.launcher.prompt_templates.len();
+            state
+                .config
+                .launcher
                 .prompt_templates
                 .retain(|t| !t.name.eq_ignore_ascii_case(name));
-            if cfg.launcher.prompt_templates.len() < before {
-                if let Err(e) = cfg.save() {
+            if state.config.launcher.prompt_templates.len() < before {
+                if let Err(e) = state.config.save() {
                     state.status_message = Some(format!("❌ 저장 실패: {e}"));
                 } else {
                     state.status_message = Some(format!("✅ 템플릿 '{name}' 삭제됨"));
@@ -1226,7 +1220,7 @@ fn handle_prompt_query(query: &str, state: &mut AppState) {
 
     // :prompt list 또는 :prompt (필터링)
     let filter = sub.strip_prefix("list").unwrap_or(sub).trim();
-    let items = kmd_core::prompt::list_templates_as_items(templates, filter, state.use_emoji);
+    let items = kmd_core::prompt::list_templates_as_items(&templates, filter, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -1302,8 +1296,7 @@ fn handle_settings_query(state: &mut AppState) {
 
 /// Handle :keymap / :km prefix — kanata 키맵 제어 항목 표시
 fn handle_keymap_query(query: &str, state: &mut AppState) {
-    let config = crate::cmd::load_config().unwrap_or_default();
-    let items = kmd_core::query_prefix::keymap_query_items(&config, query, state.use_emoji);
+    let items = kmd_core::query_prefix::keymap_query_items(&state.config, query, state.use_emoji);
     state.results = items_to_results(items, SCORE_CALC);
     state.search_mode = SearchMode::Contains;
     state.selected_index = 0;
@@ -1311,9 +1304,8 @@ fn handle_keymap_query(query: &str, state: &mut AppState) {
 
 /// Handle :keys / :k prefix — 키 바인딩 치트시트 표시
 fn handle_keys_query(state: &mut AppState) {
-    let config = crate::cmd::load_config().unwrap_or_default();
     let items = kmd_core::keymap::keybinding_cheatsheet(
-        &config,
+        &state.config,
         state.use_emoji,
         kmd_core::keymap::CheatsheetApp::Tui,
     );
@@ -1335,9 +1327,7 @@ fn handle_content_search(query: &str, state: &mut AppState, db: Option<&kmd_core
         kmd_core::content_index::launcher_results(db, query, state.use_emoji, SEARCH_RESULT_LIMIT);
     // 빈 질의(`?`만 입력) → 사용법 안내 아래에 "자주 변하는 폴더" 제안 (docs/15 P2)
     if kmd_core::content_index::strip_query(query).is_empty() {
-        let launcher = crate::cmd::load_config()
-            .map(|c| c.launcher)
-            .unwrap_or_default();
+        let launcher = state.config.launcher.clone();
         state
             .results
             .extend(kmd_core::folder_suggest::suggestion_results(
@@ -1609,6 +1599,7 @@ mod tests {
             spell_prefixes: Vec::new(),
             translate_providers: Vec::new(),
             translate_prefixes: Vec::new(),
+            config: kmd_core::Config::default(),
             cached_effective_query: String::new(),
             dirty: true,
         }

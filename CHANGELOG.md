@@ -5,6 +5,21 @@ All notable changes to keymander are documented here.
 ## [Unreleased]
 
 ### Changed
+- **설정 키를 단일 레지스트리로 통합 (R2-5)** — `config_registry!` 매크로가
+  **한 줄 선언에서 `get_value`/`set_value` 양쪽을 함께 생성**한다. 단순 키
+  27개(숫자·불리언·문자열)에서 get/set 비대칭이 **원천적으로 불가능**해졌고,
+  두 match에 각각 손으로 적혀 있던 중복 arm 54개가 사라졌다. 리스트 정규화나
+  읽기 전용 의사 키(`_data_path` 등) 16개는 여전히 명시적 arm이다.
+  같은 키가 레지스트리와 명시적 arm 양쪽에 있으면(뒤엣것이 죽은 코드가 된다)
+  테스트가 잡는다.
+- **TUI가 키 입력마다 config.toml을 읽던 것을 캐시로 (R2-7)** —
+  `:keys`/`:keymap`/`:prompt`/`?` 핸들러가 매 키 입력마다 `load_config()`로
+  디스크를 읽고 있었다(데스크톱은 캐시된 `runtime_config`를 쓴다).
+  `AppState.config` 캐시를 두고, 설정을 바꾸는 경로(설정 모달 저장, 폴더 제안
+  추가, 키맵 액션, 템플릿 add/remove)는 캐시를 직접 고쳐 어긋나지 않게 했다.
+  `load_config()` 호출 **11곳 → 1곳**(시작 시 1회).
+
+### Changed
 - **`process_key` 451줄 단일 함수를 진입점 43줄 + 12단계로 분해** — 섹션
   우선순위가 곧 이 엔진의 의미라, 분해 **전에** 40스텝 시나리오의 결정
   시퀀스 전체를 채취해 `process_key_동작_스냅샷` characterization 테스트로
