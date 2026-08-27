@@ -300,6 +300,49 @@ impl EngineState {
     pub fn process_key(&mut self, vkey: VKey, is_down: bool, tick: u32) -> KeyDecision {
         let is_up = !is_down;
 
+        // 수정자 물리 상태는 어떤 단계보다 먼저 갱신한다 — 아래 모든 판정이
+        // `modifiers_held`를 본다.
+        self.track_modifier_state(vkey, is_down);
+
+        // **이 순서가 곧 의미다.** 한 칸만 어긋나도 특정 조합에서만 조용히
+        // 다르게 동작한다. 순서를 바꾸려면 `process_key_동작_스냅샷` 테스트가
+        // 먼저 깨져야 하고, 왜 달라졌는지 설명할 수 있어야 한다.
+        if let Some(d) = self.step_consumed_key(vkey, is_up) {
+            return d;
+        }
+        if let Some(d) = self.step_keymap_toggle(vkey, is_down) {
+            return d;
+        }
+        if let Some(d) = self.step_orphaned_layer_key(vkey, is_up) {
+            return d;
+        }
+        if let Some(d) = self.step_keymap_disabled(vkey, is_down) {
+            return d;
+        }
+        if let Some(d) = self.step_tap_hold(vkey, is_down, tick) {
+            return d;
+        }
+        if let Some(d) = self.step_layer_trigger(vkey, is_down, tick) {
+            return d;
+        }
+        if let Some(d) = self.step_layer_mapping(vkey, is_down, tick) {
+            return d;
+        }
+        if let Some(d) = self.step_combo(vkey, is_down) {
+            return d;
+        }
+        if let Some(d) = self.step_double_tap(vkey, is_down, tick) {
+            return d;
+        }
+        if let Some(d) = self.step_remap(vkey, is_down) {
+            return d;
+        }
+
+        self.step_record_tap(vkey, is_up, tick)
+    }
+
+    /// 수정자 키의 물리 눌림 상태를 추적한다 (결정을 내리지 않는다).
+    fn track_modifier_state(&mut self, vkey: VKey, is_down: bool) {
         // ── 1. 수정자 키 물리 상태 추적 ──
         // (mods_used_while_held와 modifiers_held는 서로 다른 필드라 동시 차용
         // 가능 — 키 이벤트마다 도는 훅 경로이므로 중간 Vec 할당 없이 복사)
@@ -320,7 +363,13 @@ impl EngineState {
             self.mods_used_while_held
                 .extend(self.modifiers_held.iter().copied());
         }
+    }
 
+    /// 콤보·더블탭으로 이미 소비된 키를 억제한다 (오토리피트 재발화 방지).
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_consumed_key(&mut self, vkey: VKey, is_up: bool) -> Option<KeyDecision> {
         // ── 2. 콤보/더블탭으로 소비된 키 억제 ──
         // keyup은 물론, 홀드 중 오토리피트 down도 막는다 — 안 막으면 Shift+Space
         // 홀드 시 리피트마다 콤보(한/영 토글 등)가 재발화한다. 진짜 재입력은
@@ -329,15 +378,22 @@ impl EngineState {
             if is_up {
                 self.combo_consumed_key = None;
             }
-            return KeyDecision::Suppress;
+            return Some(KeyDecision::Suppress);
         }
         if self.dt_consumed_key == Some(vkey) {
             if is_up {
                 self.dt_consumed_key = None;
             }
-            return KeyDecision::Suppress;
+            return Some(KeyDecision::Suppress);
         }
+        None
+    }
 
+    /// 키맵 전체 on/off 토글 조합을 처리한다.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_keymap_toggle(&mut self, vkey: VKey, is_down: bool) -> Option<KeyDecision> {
         // ── keymap on/off 토글 ──
         if is_down && !is_modifier_key(&vkey) {
             if let Some(toggle) = self.config.toggle_keymap.as_ref() {
@@ -350,19 +406,26 @@ impl EngineState {
                     self.keymap_enabled = enabled;
                     self.combo_consumed_key = Some(vkey);
                     if let Some(trigger) = chord_trigger {
-                        return KeyDecision::ReleaseChord {
+                        return Some(KeyDecision::ReleaseChord {
                             trigger,
                             deferred_action: None,
-                        };
+                        });
                     }
                     if had_mouse {
-                        return KeyDecision::MouseStopAll;
+                        return Some(KeyDecision::MouseStopAll);
                     }
-                    return KeyDecision::Suppress;
+                    return Some(KeyDecision::Suppress);
                 }
             }
         }
+        None
+    }
 
+    /// 트리거를 먼저 뗀 뒤 남은 레이어 키의 누출을 막는다.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_orphaned_layer_key(&mut self, vkey: VKey, is_up: bool) -> Option<KeyDecision> {
         // ── 2.1 레이어가 소비한 채 남겨진(orphan) 키 억제 ──
         // 트리거를 먼저 뗀 뒤에도 눌려 있는 키의 오토리피트 down이
         // 맨키로 누출되지 않게 keyup까지 전부 억제한다.
@@ -370,9 +433,16 @@ impl EngineState {
             if is_up {
                 self.orphaned_layer_keys.remove(&vkey);
             }
-            return KeyDecision::Suppress;
+            return Some(KeyDecision::Suppress);
         }
+        None
+    }
 
+    /// 키맵이 꺼져 있을 때 — Launch 콤보만 살려 두고 나머지는 통과시킨다.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_keymap_disabled(&mut self, vkey: VKey, is_down: bool) -> Option<KeyDecision> {
         // ── keymap 비활성 시: Launch 콤보만 동작 ──
         if !self.keymap_enabled {
             if is_down && !is_modifier_key(&vkey) {
@@ -388,12 +458,19 @@ impl EngineState {
 
                 if let Some(action) = combo_action {
                     self.combo_consumed_key = Some(vkey);
-                    return KeyDecision::execute(action);
+                    return Some(KeyDecision::execute(action));
                 }
             }
-            return KeyDecision::PassThrough;
+            return Some(KeyDecision::PassThrough);
         }
+        None
+    }
 
+    /// tap-hold(모드탭): 짧게 탭 = tap 키, 홀드 중 다른 키 = hold 수정자 chord.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_tap_hold(&mut self, vkey: VKey, is_down: bool, tick: u32) -> Option<KeyDecision> {
         // ── 2.5 tap-hold(모드탭) 처리 ──
         // 짧게 탭 = tap 키, 홀드 중 다른 키 down = hold 수정자 chord (즉시 판정).
         // 홀드만 하다 떼면(타임아웃 초과) 아무 동작 없음 — HHKB 동작과 동일.
@@ -407,11 +484,11 @@ impl EngineState {
                     if self.active_layer.is_some() {
                         self.layer_key_used = true;
                     }
-                    return KeyDecision::Suppress;
+                    return Some(KeyDecision::Suppress);
                 }
                 if self.active_tap_hold == Some(idx) {
                     // OS 오토리피트 — 억제 (down_tick은 최초 값 유지)
-                    return KeyDecision::Suppress;
+                    return Some(KeyDecision::Suppress);
                 }
                 // 다른 tap-hold가 활성 중 → 아래 '다른 키' 처리로 폴스루
             }
@@ -424,18 +501,18 @@ impl EngineState {
 
                 if engaged {
                     // hold 수정자가 주입돼 있음 — up 주입으로 해제
-                    return KeyDecision::ReleaseChord {
+                    return Some(KeyDecision::ReleaseChord {
                         trigger: th.hold,
                         deferred_action: None,
-                    };
+                    });
                 }
                 let elapsed = tick.wrapping_sub(self.tap_hold_down_tick);
                 if elapsed < th.timeout_ms {
                     if let Some(tap_key) = th.tap {
-                        return KeyDecision::execute(BindAction::SendKey(tap_key));
+                        return Some(KeyDecision::execute(BindAction::SendKey(tap_key)));
                     }
                 }
-                return KeyDecision::Suppress;
+                return Some(KeyDecision::Suppress);
             }
         }
 
@@ -443,22 +520,29 @@ impl EngineState {
         if let Some(th_idx) = self.active_tap_hold {
             if self.tap_hold_engaged {
                 // hold 수정자가 주입된 상태 — 모든 키를 OS 조합으로 통과
-                return KeyDecision::PassThrough;
+                return Some(KeyDecision::PassThrough);
             }
             if is_down && !is_modifier_key(&vkey) {
                 // 다른 키 down → hold 확정. 수정자 down + 키 down을 원자
                 // 주입해 Ctrl+C 등이 타임아웃 대기 없이 즉시 동작한다.
                 let hold = self.config.tap_holds[th_idx].hold;
                 self.tap_hold_engaged = true;
-                return KeyDecision::EngageChord {
+                return Some(KeyDecision::EngageChord {
                     trigger: hold,
                     key: vkey,
-                };
+                });
             }
             // 수정자 down/키 up은 아래 일반 흐름으로 (물리 수정자는 통과 —
             // 이후 키 down에서 hold와 함께 OS 조합이 된다: Caps+Shift+K 등)
         }
+        None
+    }
 
+    /// 레이어 트리거 키의 down/up — 레이어 진입·해제와 탭 액션을 결정한다.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_layer_trigger(&mut self, vkey: VKey, is_down: bool, tick: u32) -> Option<KeyDecision> {
         // ── 3. 레이어 트리거 키 처리 ──
         if is_down {
             if let Some(idx) = self
@@ -473,7 +557,7 @@ impl EngineState {
                     self.layer_key_used = false;
                     self.pending_layer_launch = None;
                 }
-                return KeyDecision::Suppress;
+                return Some(KeyDecision::Suppress);
             }
         } else if let Some(active_idx) = self.active_layer {
             let is_active_trigger = self
@@ -490,10 +574,10 @@ impl EngineState {
                     self.layer_key_used = false;
                     self.deactivate_layer_keys();
                     let deferred = self.pending_layer_launch.take();
-                    return KeyDecision::ReleaseChord {
+                    return Some(KeyDecision::ReleaseChord {
                         trigger: vkey,
                         deferred_action: deferred,
-                    };
+                    });
                 }
                 let elapsed = tick.wrapping_sub(self.trigger_down_tick);
                 let layer = &self.config.layers[active_idx];
@@ -510,21 +594,28 @@ impl EngineState {
                 // 더 이상 레이어 매핑으로 오지 않으므로 여기서 전부 정지
                 if !self.mouse_keys_held.is_empty() {
                     self.mouse_keys_held.clear();
-                    return KeyDecision::MouseStopAll;
+                    return Some(KeyDecision::MouseStopAll);
                 }
 
                 if !was_used && elapsed < tap_hold_ms {
                     if let Some(tap_key) = tap_action {
-                        return KeyDecision::execute(BindAction::SendKey(tap_key));
+                        return Some(KeyDecision::execute(BindAction::SendKey(tap_key)));
                     }
                 } else if let Some(action) = pending_launch {
                     // 지연된 Launch — 트리거 키가 떨어진 지금 실행
-                    return KeyDecision::execute(action);
+                    return Some(KeyDecision::execute(action));
                 }
-                return KeyDecision::Suppress;
+                return Some(KeyDecision::Suppress);
             }
         }
+        None
+    }
 
+    /// 활성 레이어 안에서의 키 매핑 (더블탭·마우스·미매핑 동작 포함).
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_layer_mapping(&mut self, vkey: VKey, is_down: bool, tick: u32) -> Option<KeyDecision> {
         // ── 4. 활성 레이어 매핑 확인 ──
         if let Some(layer_idx) = self.active_layer {
             let trigger = self.config.layers[layer_idx].trigger;
@@ -532,7 +623,7 @@ impl EngineState {
             // 4-pre. 코드 모드 중에는 홀드가 끝날 때까지 매핑 키 포함 전부
             // OS 조합으로 통과한다 (A안 — OS에는 주입된 트리거가 눌려 있음)
             if self.chord_engaged {
-                return KeyDecision::PassThrough;
+                return Some(KeyDecision::PassThrough);
             }
 
             // 4-pre2. 트리거 외의 비-Shift 수정자(Cmd/Ctrl/Win)가 함께 눌린
@@ -551,7 +642,7 @@ impl EngineState {
                 if other_mod_held {
                     self.chord_engaged = true;
                     self.layer_key_used = true;
-                    return KeyDecision::EngageChord { trigger, key: vkey };
+                    return Some(KeyDecision::EngageChord { trigger, key: vkey });
                 }
             }
 
@@ -567,10 +658,10 @@ impl EngineState {
                     // single 액션은 반복 실행(연속 단어 이동), double 액션 직후는
                     // 반복 금지(줄 삭제 매크로 연사 방지 → 억제)
                     if self.layer_dt_held == Some(vkey) {
-                        return match self.layer_dt_repeat_action.clone() {
+                        return Some(match self.layer_dt_repeat_action.clone() {
                             Some(action) => KeyDecision::execute_in_layer(action, trigger),
                             None => KeyDecision::Suppress,
-                        };
+                        });
                     }
 
                     self.layer_key_used = true;
@@ -583,7 +674,7 @@ impl EngineState {
                         if elapsed < dt.timeout_ms {
                             self.layer_dt_last_key = None;
                             self.layer_dt_repeat_action = None;
-                            return KeyDecision::execute_in_layer(dt.double_action, trigger);
+                            return Some(KeyDecision::execute_in_layer(dt.double_action, trigger));
                         }
                     }
 
@@ -591,7 +682,7 @@ impl EngineState {
                     self.layer_dt_last_key = Some(vkey);
                     self.layer_dt_last_tick = tick;
                     self.layer_dt_repeat_action = Some(dt.single_action.clone());
-                    return KeyDecision::execute_in_layer(dt.single_action, trigger);
+                    return Some(KeyDecision::execute_in_layer(dt.single_action, trigger));
                 }
                 if self.layer_dt_held == Some(vkey) {
                     self.layer_dt_held = None;
@@ -599,9 +690,9 @@ impl EngineState {
                 // 우리가 소비한 down의 up만 억제 — 레이어 활성 전부터 눌려
                 // 있던 키의 up은 통과 (stuck 방지)
                 if self.layer_keys_down.remove(&vkey) {
-                    return KeyDecision::Suppress;
+                    return Some(KeyDecision::Suppress);
                 }
-                return KeyDecision::PassThrough;
+                return Some(KeyDecision::PassThrough);
             }
 
             // 4b. 일반 레이어 매핑
@@ -613,18 +704,18 @@ impl EngineState {
                     if is_down {
                         if self.mouse_keys_held.contains(&vkey) {
                             // OS 오토리피트 — 이미 활성
-                            return KeyDecision::Suppress;
+                            return Some(KeyDecision::Suppress);
                         }
                         self.layer_key_used = true;
                         self.layer_dt_last_key = None;
                         self.mouse_keys_held.insert(vkey);
-                        return KeyDecision::MouseEngage(mb);
+                        return Some(KeyDecision::MouseEngage(mb));
                     }
                     if self.mouse_keys_held.remove(&vkey) {
-                        return KeyDecision::MouseRelease(mb);
+                        return Some(KeyDecision::MouseRelease(mb));
                     }
                     // 레이어 활성 전부터 눌려 있던 키의 up — 통과 (stuck 방지)
-                    return KeyDecision::PassThrough;
+                    return Some(KeyDecision::PassThrough);
                 }
                 if is_down {
                     self.layer_key_used = true;
@@ -634,15 +725,15 @@ impl EngineState {
                     // 눌린 채 실행하면 새 프로세스 포커스/IME에 간섭한다
                     if matches!(action, BindAction::Launch(_)) {
                         self.pending_layer_launch = Some(action);
-                        return KeyDecision::Suppress;
+                        return Some(KeyDecision::Suppress);
                     }
-                    return KeyDecision::execute_in_layer(action, trigger);
+                    return Some(KeyDecision::execute_in_layer(action, trigger));
                 }
                 // 우리가 소비한 down의 up만 억제 (stuck 방지)
                 if self.layer_keys_down.remove(&vkey) {
-                    return KeyDecision::Suppress;
+                    return Some(KeyDecision::Suppress);
                 }
-                return KeyDecision::PassThrough;
+                return Some(KeyDecision::PassThrough);
             }
 
             // 4c. 미매핑 키 — 레이어별 unmapped 정책 적용
@@ -655,13 +746,13 @@ impl EngineState {
                         if is_down {
                             self.layer_key_used = true;
                             self.layer_keys_down.insert(vkey);
-                            return KeyDecision::Suppress;
+                            return Some(KeyDecision::Suppress);
                         }
                         // 우리가 소비한 down의 up만 억제 (stuck 방지)
                         if self.layer_keys_down.remove(&vkey) {
-                            return KeyDecision::Suppress;
+                            return Some(KeyDecision::Suppress);
                         }
-                        return KeyDecision::PassThrough;
+                        return Some(KeyDecision::PassThrough);
                     }
                 }
                 // VIA KC_TRNS: 트리거 조합으로 코드 모드 진입.
@@ -670,12 +761,19 @@ impl EngineState {
                     if is_down && !is_modifier_key(&vkey) && is_modifier_key(&trigger) {
                         self.chord_engaged = true;
                         self.layer_key_used = true;
-                        return KeyDecision::EngageChord { trigger, key: vkey };
+                        return Some(KeyDecision::EngageChord { trigger, key: vkey });
                     }
                 }
             }
         }
+        None
+    }
 
+    /// 수정자+키 콤보 리맵.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_combo(&mut self, vkey: VKey, is_down: bool) -> Option<KeyDecision> {
         // ── 5. 콤보 리맵 확인 (수정자+키 조합) ──
         if is_down && !is_modifier_key(&vkey) {
             let combo_action = self
@@ -687,10 +785,17 @@ impl EngineState {
 
             if let Some(action) = combo_action {
                 self.combo_consumed_key = Some(vkey);
-                return KeyDecision::execute(action);
+                return Some(KeyDecision::execute(action));
             }
         }
+        None
+    }
 
+    /// 전역 더블탭 판정.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_double_tap(&mut self, vkey: VKey, is_down: bool, tick: u32) -> Option<KeyDecision> {
         // ── 6. 더블탭 확인 ──
         if is_down {
             let dt_binding = self
@@ -709,22 +814,34 @@ impl EngineState {
                         if is_modifier_key(&vkey) {
                             self.modifiers_held.remove(&vkey);
                         }
-                        return KeyDecision::execute(dt.action);
+                        return Some(KeyDecision::execute(dt.action));
                     }
                 }
             } else if !is_modifier_key(&vkey) {
                 self.last_tap_key = None;
             }
         }
+        None
+    }
 
+    /// 단순 1:1 리매핑.
+    ///
+    /// `None`이면 다음 단계로 넘어간다 — 반환 순서가 곧 우선순위다
+    /// (`process_key` 참조).
+    fn step_remap(&mut self, vkey: VKey, is_down: bool) -> Option<KeyDecision> {
         // ── 7. 단순 리매핑 확인 ──
         if let Some(action) = self.config.remaps.get(&vkey).cloned() {
             if is_down {
-                return KeyDecision::execute(action);
+                return Some(KeyDecision::execute(action));
             }
-            return KeyDecision::Suppress;
+            return Some(KeyDecision::Suppress);
         }
+        None
+    }
 
+    /// keyup 시 더블탭용 탭 완료를 기록하고, 아무도 처리하지 않은
+    /// 이벤트를 OS로 통과시킨다.
+    fn step_record_tap(&mut self, vkey: VKey, is_up: bool, tick: u32) -> KeyDecision {
         // ── 8. 더블탭 상태 기록 (keyup 시 탭 완료 기록) ──
         if is_up {
             // 홀드 중 다른 키와 조합된 수정자는 탭으로 기록하지 않는다
@@ -747,6 +864,160 @@ mod tests {
     use super::*;
     use crate::keybind::{DoubleTapBinding, Layer, LayerDoubleTap, Modifier};
     use std::collections::HashMap;
+
+    // ── Characterization: process_key 전체 동작 스냅샷 ──────────────────
+    //
+    // process_key는 451줄 단일 함수였고 섹션 우선순위(수정자 추적 → 소비 억제
+    // → 토글 → orphan → 비활성 → tap-hold → 레이어 트리거 → 레이어 매핑 →
+    // 콤보 → 더블탭 → 리맵 → 탭 기록)가 곧 의미다. 함수를 쪼갤 때 이 순서가
+    // 한 칸이라도 어긋나면 특정 조합에서만 조용히 다르게 동작한다.
+    //
+    // 그래서 **분해 전에** 실제 결정 시퀀스를 통째로 박아 둔다. 아래 기대값은
+    // 분해 이전 구현이 낸 출력이며, 리팩토링이 의미를 바꾸면 여기서 깨진다.
+    // 값을 "고쳐서 통과시키는" 것은 이 테스트의 목적을 무효화한다 —
+    // 달라졌다면 먼저 왜 달라졌는지 설명할 수 있어야 한다.
+
+    /// 레이어·콤보·더블탭·탭홀드·리맵·토글을 한 설정에 모은 종합 시나리오용 config
+    fn characterization_config() -> KeybindConfig {
+        let mut cfg = layer_config();
+        cfg.remaps
+            .insert(VKey::CapsLock, BindAction::SendKey(VKey::Escape));
+        cfg.toggle_keymap = Some(ComboTrigger {
+            key: VKey::K,
+            modifiers: vec![Modifier::Ctrl, Modifier::Alt],
+        });
+        cfg.combos.push((
+            ComboTrigger {
+                key: VKey::Space,
+                modifiers: vec![Modifier::Shift],
+            },
+            BindAction::SendKey(VKey::Hangul),
+        ));
+        cfg
+    }
+
+    /// 키 시퀀스를 흘려 결정 문자열 목록을 만든다.
+    fn trace(cfg: KeybindConfig, seq: &[(VKey, bool, u32)]) -> Vec<String> {
+        let mut e = EngineState::new(cfg);
+        seq.iter()
+            .map(|(k, down, t)| format!("{:?}", e.process_key(*k, *down, *t)))
+            .collect()
+    }
+
+    #[test]
+    fn process_key_동작_스냅샷() {
+        let seq: Vec<(VKey, bool, u32)> = vec![
+            // 평범한 타이핑
+            (VKey::A, true, 0),
+            (VKey::A, false, 50),
+            // 리맵 (CapsLock → Escape)
+            (VKey::CapsLock, true, 100),
+            (VKey::CapsLock, false, 150),
+            // 레이어 홀드 + 매핑 키 (LAlt 홀드 → H = Left)
+            (VKey::LAlt, true, 200),
+            (VKey::H, true, 250),
+            (VKey::H, false, 300),
+            (VKey::LAlt, false, 400),
+            // 레이어 탭 (tap_hold_ms 안에 뗌 → tap_action)
+            (VKey::LAlt, true, 500),
+            (VKey::LAlt, false, 550),
+            // 레이어 안 더블탭 (I 연타)
+            (VKey::LAlt, true, 600),
+            (VKey::I, true, 650),
+            (VKey::I, false, 680),
+            (VKey::I, true, 700),
+            (VKey::I, false, 730),
+            (VKey::LAlt, false, 800),
+            // Shift+Space 콤보
+            (VKey::LShift, true, 900),
+            (VKey::Space, true, 950),
+            (VKey::Space, false, 1000),
+            (VKey::LShift, false, 1050),
+            // Ctrl+Alt+K 토글 → 키맵 비활성
+            (VKey::LCtrl, true, 1100),
+            (VKey::LAlt, true, 1150),
+            (VKey::K, true, 1200),
+            (VKey::K, false, 1250),
+            (VKey::LAlt, false, 1300),
+            (VKey::LCtrl, false, 1350),
+            // 비활성 상태에서는 레이어가 안 먹는다
+            (VKey::LAlt, true, 1400),
+            (VKey::H, true, 1450),
+            (VKey::H, false, 1500),
+            (VKey::LAlt, false, 1550),
+            // 다시 토글 → 활성 복귀
+            (VKey::LCtrl, true, 1600),
+            (VKey::LAlt, true, 1650),
+            (VKey::K, true, 1700),
+            (VKey::K, false, 1750),
+            (VKey::LAlt, false, 1800),
+            (VKey::LCtrl, false, 1850),
+            // 복귀 후 레이어 재확인
+            (VKey::LAlt, true, 1900),
+            (VKey::H, true, 1950),
+            (VKey::H, false, 2000),
+            (VKey::LAlt, false, 2050),
+        ];
+
+        let got = trace(characterization_config(), &seq);
+
+        // 분해 이전 구현의 출력 (2026-08-27 채취)
+        let expected: &[&str] = &[
+            "PassThrough",
+            "PassThrough",
+            "Execute { action: SendKey(Escape), layer_trigger: None }",
+            "Suppress",
+            "Suppress",
+            "Execute { action: SendKey(Left), layer_trigger: Some(LAlt) }",
+            "Suppress",
+            "Suppress",
+            "Suppress",
+            "Execute { action: SendKey(Escape), layer_trigger: None }",
+            "Suppress",
+            "Execute { action: SendKey(Home), layer_trigger: Some(LAlt) }",
+            "Suppress",
+            "Execute { action: SendKey(End), layer_trigger: Some(LAlt) }",
+            "Suppress",
+            "Suppress",
+            "PassThrough",
+            "Execute { action: SendKey(Hangul), layer_trigger: None }",
+            "Suppress",
+            "PassThrough",
+            "PassThrough",
+            "Suppress",
+            "Suppress",
+            "Suppress",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "PassThrough",
+            "Suppress",
+            "Suppress",
+            "PassThrough",
+            "PassThrough",
+            "Suppress",
+            "Execute { action: SendKey(Left), layer_trigger: Some(LAlt) }",
+            "Suppress",
+            "Suppress",
+        ];
+
+        assert_eq!(
+            got.len(),
+            expected.len(),
+            "시퀀스 길이 불일치 — 테스트를 고치기 전에 왜 달라졌는지 확인할 것"
+        );
+        for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+            let (key, down, tick) = seq[i];
+            assert_eq!(
+                g, e,
+                "step {i} ({key:?} down={down} tick={tick}) 의 결정이 달라졌다"
+            );
+        }
+    }
 
     fn empty_config() -> KeybindConfig {
         KeybindConfig::empty()
