@@ -257,9 +257,14 @@ fn render_list_content(
 fn render_help_bar(frame: &mut Frame, area: Rect, state: &SettingsState, theme: &Theme) {
     let mut lines = Vec::new();
 
-    // Description of selected item
+    // 편집 실패가 있으면 설명 대신 그것을 보여준다 (조용히 버려지지 않도록).
     let items = items::items_for_tab(&state.active_tab);
-    if let Some(item) = items.get(state.selected_item) {
+    if let Some(err) = &state.error {
+        lines.push(Line::styled(
+            format!("  ! {err}"),
+            Style::default().fg(theme.red).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(item) = items.get(state.selected_item) {
         lines.push(Line::styled(
             format!("  {}", item.description),
             Style::default().fg(theme.subtext),

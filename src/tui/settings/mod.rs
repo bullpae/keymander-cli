@@ -23,6 +23,9 @@ pub struct SettingsState {
     pub config: kmd_core::Config,
     /// Whether changes were made
     pub dirty: bool,
+    /// 마지막 편집 실패 메시지. `set_value`가 거부한 입력을 사용자에게 보여준다 —
+    /// 예전에는 결과를 `let _ =`로 버려서 잘못된 값도 "변경됨"으로 표시됐다.
+    pub error: Option<String>,
 }
 
 impl SettingsState {
@@ -35,6 +38,7 @@ impl SettingsState {
             edit_buffer: String::new(),
             config,
             dirty: false,
+            error: None,
         }
     }
 
@@ -206,8 +210,15 @@ fn handle_edit_key(state: &mut SettingsState, key: crossterm::event::KeyEvent) -
                 let value = state.edit_buffer.clone();
                 match item.widget {
                     items::WidgetKind::Text | items::WidgetKind::Number => {
-                        let _ = state.config.set_value(item.key, &value);
-                        state.dirty = true;
+                        match state.config.set_value(item.key, &value) {
+                            Ok(()) => {
+                                state.dirty = true;
+                                state.error = None;
+                            }
+                            // 파싱 실패 등 — 값은 그대로다. dirty를 올리면
+                            // 저장되지 않은 변경이 있는 것처럼 보이므로 올리지 않는다.
+                            Err(e) => state.error = Some(e.to_string()),
+                        }
                     }
                     _ => {}
                 }
@@ -245,8 +256,13 @@ fn handle_enter(state: &mut SettingsState) {
             // Toggle boolean value
             if let Some(current) = state.config.get_value(item.key) {
                 let new_val = if current == "true" { "false" } else { "true" };
-                let _ = state.config.set_value(item.key, new_val);
-                state.dirty = true;
+                match state.config.set_value(item.key, new_val) {
+                    Ok(()) => {
+                        state.dirty = true;
+                        state.error = None;
+                    }
+                    Err(e) => state.error = Some(e.to_string()),
+                }
             }
         }
         items::WidgetKind::Text | items::WidgetKind::Number => {
@@ -264,8 +280,13 @@ fn handle_enter(state: &mut SettingsState) {
             if let Some(current) = state.config.get_value(item.key) {
                 let idx = options.iter().position(|o| *o == current).unwrap_or(0);
                 let next_idx = (idx + 1) % options.len();
-                let _ = state.config.set_value(item.key, options[next_idx]);
-                state.dirty = true;
+                match state.config.set_value(item.key, options[next_idx]) {
+                    Ok(()) => {
+                        state.dirty = true;
+                        state.error = None;
+                    }
+                    Err(e) => state.error = Some(e.to_string()),
+                }
             }
         }
         items::WidgetKind::ListAdd => {
@@ -296,8 +317,13 @@ fn adjust_current_value(state: &mut SettingsState, delta: i32) {
     if let Some(current) = state.config.get_value(item.key) {
         if let Ok(val) = current.parse::<i32>() {
             let new_val = (val + delta).clamp(0, 100);
-            let _ = state.config.set_value(item.key, &new_val.to_string());
-            state.dirty = true;
+            match state.config.set_value(item.key, &new_val.to_string()) {
+                Ok(()) => {
+                    state.dirty = true;
+                    state.error = None;
+                }
+                Err(e) => state.error = Some(e.to_string()),
+            }
         }
     }
 }

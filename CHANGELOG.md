@@ -5,6 +5,35 @@ All notable changes to keymander are documented here.
 ## [Unreleased]
 
 ### Fixed
+- **잘못된 설정값이 "저장됨"으로 보이면서 조용히 버려지던 문제** —
+  `Config::set_value`의 파싱 헬퍼가 실패 시 기존 값을 그대로 두고 `Ok(())`를
+  반환했다. 그래서 `kmd config set general.render_fps abc`가 **성공 메시지와
+  종료코드 0**을 내면서 값은 그대로였고, TUI 설정 화면은 결과를 `let _ =`로
+  버린 뒤 무조건 "변경됨(dirty)"으로 표시했다. 이제 `ConfigError::InvalidValue`로
+  전파하고, TUI는 실패 시 dirty를 올리지 않으며 도움말 줄에 사유를 표시한다.
+  (Codex 교차 리뷰 2026-08-27에서 발견 — 직전 커밋의 설정 키 왕복 테스트는
+  "현재 값 되쓰기"라 항상 파싱에 성공해 이 결함을 통과시켰다.)
+- **`kmd config set`이 config.toml의 주석을 전부 날리고 저장이 비원자적이던 문제** —
+  `Config::save`가 구조체를 통째로 직렬화해 `fs::write`로 덮어썼다. 손으로 단
+  주석이 한 번에 사라졌고, 저장 도중 프로세스가 죽거나 디스크가 차면 **반쪽 파일**이
+  남을 수 있었다. `toml_edit`로 기존 문서의 값만 갈아끼워 주석·키 순서를 보존하고,
+  임시 파일 → flush/sync → rename 으로 원자적으로 교체한다. 기존 파일이 깨져
+  파싱되지 않으면 병합을 포기하고 새로 쓴다(저장 실패보다 낫다).
+
+### Changed
+- 설정 항목 왕복 테스트를 강화 — 위젯 종류에 맞는 **다른 값**을 넣고 되읽어
+  실제 반영을 확인하고, 숫자·불리언 위젯은 잘못된 값을 거부하는지도 본다.
+  기존 테스트는 키 존재만 보장했다.
+- `kmd-core`에 `toml_edit`를 명시 의존성으로 추가 (`toml`의 전이 의존이었으나
+  직접 사용하게 됨).
+
+### Documentation
+- `docs/16` 모순 정리 — 열려 있는 과제 #4(kanata 드리프트)가 직전 커밋에서
+  해결됐는데 "미착수"로 남아 있던 것을 완료로 바꾸고 실행 검증 미완 단서를 명시.
+  결정 기록의 날짜 역순을 바로잡고, 08-26 행의 "`Alt+key`·`Alt+Shift+key`는
+  구조적으로 못 살린다"가 다음 날 정정됐음을 그 자리에 표시.
+
+### Fixed
 - **TUI 설정의 "Everything path"가 아무것도 저장하지 않던 버그** — 설정 화면은
   `launcher.everything_path` 키를 노출하는데 `Config::get_value`/`set_value`
   양쪽 모두 해당 분기가 없었다. 읽기는 항상 `None`이라 **값이 있어도 화면은

@@ -627,7 +627,16 @@ impl Config {
         Ok(config)
     }
 
-    /// Save config to its TOML file
+    /// Save config to its TOML file.
+    ///
+    /// 두 가지를 지킨다.
+    ///
+    /// 1. **사용자 주석·키 순서 보존** — 기존 파일이 있으면 `toml_edit`로 문서를
+    ///    열어 값만 갈아끼운다. 예전에는 구조체를 통째로 직렬화해 덮어써서
+    ///    `kmd config set` 한 번에 손으로 단 주석이 전부 사라졌다.
+    /// 2. **원자적 교체** — 임시 파일에 쓰고 flush/sync 뒤 rename 한다. 예전의
+    ///    직접 `fs::write`는 디스크가 차거나 프로세스가 중간에 죽으면 config.toml이
+    ///    반쪽 파일로 남을 수 있었다.
     pub fn save(&self) -> Result<(), ConfigError> {
         let path = self.config_path.as_ref().ok_or(ConfigError::NoPath)?;
 
@@ -635,10 +644,15 @@ impl Config {
             std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io(path.clone(), e))?;
         }
 
-        let content =
+        let serialized =
             toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        std::fs::write(path, content).map_err(|e| ConfigError::Io(path.clone(), e))?;
-        Ok(())
+        let content = match std::fs::read_to_string(path) {
+            Ok(existing) => merge_into_document(&existing, &serialized)?,
+            // 파일이 없거나 못 읽으면 새로 쓴다 (보존할 주석도 없다)
+            Err(_) => serialized,
+        };
+
+        write_atomic(path, &content)
     }
 
     /// Get a config value by dot-separated key path
@@ -750,22 +764,27 @@ impl Config {
 
     /// Set a config value by dot-separated key path
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
-        /// Parse `value` into the same type as `current`, returning `current` on failure.
-        fn parse_or<T: std::str::FromStr>(value: &str, current: T) -> T {
-            value.parse().unwrap_or(current)
+        /// `value`를 필드 타입으로 파싱한다. 실패는 **오류로 전파**한다.
+        ///
+        /// 예전에는 파싱 실패 시 기존 값을 그대로 두고 `Ok(())`를 반환했다.
+        /// 그래서 `kmd config set general.render_fps "abc"`가 "Set ..." 성공
+        /// 메시지와 종료코드 0을 내면서 값은 그대로였고, TUI는 결과를
+        /// `let _ =`로 버린 뒤 무조건 "변경됨"으로 표시했다 — 사용자는 저장된
+        /// 줄 알지만 실제로는 버려지는 조용한 유실이었다 (2026-08-27 발견).
+        fn parse_field<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, ConfigError> {
+            value.parse().map_err(|_| ConfigError::InvalidValue {
+                key: key.to_string(),
+                value: value.to_string(),
+                expected: std::any::type_name::<T>(),
+            })
         }
 
         match key {
             // general
-            "general.render_fps" => {
-                self.general.render_fps = parse_or(value, self.general.render_fps)
-            }
-            "general.show_preview" => {
-                self.general.show_preview = parse_or(value, self.general.show_preview)
-            }
+            "general.render_fps" => self.general.render_fps = parse_field(key, value)?,
+            "general.show_preview" => self.general.show_preview = parse_field(key, value)?,
             "general.preview_width_percent" => {
-                self.general.preview_width_percent =
-                    parse_or(value, self.general.preview_width_percent)
+                self.general.preview_width_percent = parse_field(key, value)?
             }
             "general.theme" => self.general.theme = value.to_string(),
             "general.editor" => {
@@ -775,11 +794,9 @@ impl Config {
                     Some(value.to_string())
                 }
             }
-            "general.emoji_icons" => {
-                self.general.emoji_icons = parse_or(value, self.general.emoji_icons)
-            }
+            "general.emoji_icons" => self.general.emoji_icons = parse_field(key, value)?,
             "general.reset_ime_on_launch" => {
-                self.general.reset_ime_on_launch = parse_or(value, self.general.reset_ime_on_launch)
+                self.general.reset_ime_on_launch = parse_field(key, value)?
             }
             // launcher
             "launcher.file_search_provider" => {
@@ -792,50 +809,37 @@ impl Config {
                     Some(PathBuf::from(value))
                 }
             }
-            "launcher.max_results" => {
-                self.launcher.max_results = parse_or(value, self.launcher.max_results)
-            }
-            "launcher.search_depth" => {
-                self.launcher.search_depth = parse_or(value, self.launcher.search_depth)
-            }
-            "launcher.quit_on_launch" => {
-                self.launcher.quit_on_launch = parse_or(value, self.launcher.quit_on_launch)
-            }
+            "launcher.max_results" => self.launcher.max_results = parse_field(key, value)?,
+            "launcher.search_depth" => self.launcher.search_depth = parse_field(key, value)?,
+            "launcher.quit_on_launch" => self.launcher.quit_on_launch = parse_field(key, value)?,
             "launcher.index_directories" => {
-                self.launcher.index_directories = parse_or(value, self.launcher.index_directories)
+                self.launcher.index_directories = parse_field(key, value)?
             }
-            "launcher.scan_drives" => {
-                self.launcher.scan_drives = parse_or(value, self.launcher.scan_drives)
-            }
+            "launcher.scan_drives" => self.launcher.scan_drives = parse_field(key, value)?,
             "launcher.index_refresh_minutes" => {
-                self.launcher.index_refresh_minutes =
-                    parse_or(value, self.launcher.index_refresh_minutes)
+                self.launcher.index_refresh_minutes = parse_field(key, value)?
             }
             "launcher.drive_scan_depth" => {
-                self.launcher.drive_scan_depth = parse_or(value, self.launcher.drive_scan_depth)
+                self.launcher.drive_scan_depth = parse_field(key, value)?
             }
             // kind_weights
             "launcher.kind_weights.directory" => {
-                self.launcher.kind_weights.directory =
-                    parse_or(value, self.launcher.kind_weights.directory)
+                self.launcher.kind_weights.directory = parse_field(key, value)?
             }
             "launcher.kind_weights.app" => {
-                self.launcher.kind_weights.app = parse_or(value, self.launcher.kind_weights.app)
+                self.launcher.kind_weights.app = parse_field(key, value)?
             }
             "launcher.kind_weights.file" => {
-                self.launcher.kind_weights.file = parse_or(value, self.launcher.kind_weights.file)
+                self.launcher.kind_weights.file = parse_field(key, value)?
             }
             "launcher.kind_weights.executable" => {
-                self.launcher.kind_weights.executable =
-                    parse_or(value, self.launcher.kind_weights.executable)
+                self.launcher.kind_weights.executable = parse_field(key, value)?
             }
             "launcher.kind_weights.system_cmd" => {
-                self.launcher.kind_weights.system_cmd =
-                    parse_or(value, self.launcher.kind_weights.system_cmd)
+                self.launcher.kind_weights.system_cmd = parse_field(key, value)?
             }
             "launcher.kind_weights.web_search" => {
-                self.launcher.kind_weights.web_search =
-                    parse_or(value, self.launcher.kind_weights.web_search)
+                self.launcher.kind_weights.web_search = parse_field(key, value)?
             }
             "launcher.multi_llm_providers" => {
                 self.launcher.multi_llm_providers = value
@@ -1015,11 +1019,234 @@ pub enum ConfigError {
     NoPath,
     #[error("Unknown config key: {0}")]
     UnknownKey(String),
+    #[error("설정 '{key}'에 '{value}'는 올바르지 않습니다 (필요: {expected})")]
+    InvalidValue {
+        key: String,
+        value: String,
+        expected: &'static str,
+    },
+}
+
+/// 직렬화 결과(`fresh`)를 기존 문서(`existing`)에 병합해 주석·키 순서를 살린다.
+///
+/// 기존 문서를 기준으로 값만 갈아끼우므로 키에 붙은 주석(decor)이 그대로 남는다.
+/// 기존 문서가 깨져서 파싱되지 않으면 병합을 포기하고 새 직렬화 결과를 쓴다 —
+/// 저장 자체를 실패시키는 것보다 낫다.
+fn merge_into_document(existing: &str, fresh: &str) -> Result<String, ConfigError> {
+    use toml_edit::DocumentMut;
+
+    let Ok(mut doc) = existing.parse::<DocumentMut>() else {
+        return Ok(fresh.to_string());
+    };
+    let new_doc = fresh
+        .parse::<DocumentMut>()
+        .map_err(|e| ConfigError::Serialize(e.to_string()))?;
+
+    merge_table(doc.as_table_mut(), new_doc.as_table());
+    Ok(doc.to_string())
+}
+
+/// `new`의 내용을 `old`에 재귀적으로 반영한다.
+///
+/// - 양쪽에 다 있는 하위 테이블은 재귀 (그 안의 주석도 보존)
+/// - 값이 바뀌면 값만 교체하고 기존 decor(주석·공백)를 되돌려 붙인다
+/// - `new`에 없는 키는 제거한다 (설정에서 사라진 항목)
+fn merge_table(old: &mut toml_edit::Table, new: &toml_edit::Table) {
+    let stale: Vec<String> = old
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .filter(|k| !new.contains_key(k))
+        .collect();
+    for key in stale {
+        old.remove(&key);
+    }
+
+    for (key, new_item) in new.iter() {
+        match (old.get_mut(key), new_item) {
+            // 양쪽 다 테이블 → 재귀해서 안쪽 주석까지 보존
+            (Some(toml_edit::Item::Table(old_t)), toml_edit::Item::Table(new_t)) => {
+                merge_table(old_t, new_t);
+            }
+            // 기존 키가 있으면 값만 교체하고 decor(주석/공백)를 복원
+            (Some(old_item), _) => {
+                let decor = old_item.as_value().map(|v| v.decor().clone());
+                *old_item = new_item.clone();
+                if let (Some(d), Some(v)) = (decor, old_item.as_value_mut()) {
+                    *v.decor_mut() = d;
+                }
+            }
+            // 새 키
+            (None, _) => {
+                old.insert(key, new_item.clone());
+            }
+        }
+    }
+}
+
+/// 임시 파일 → flush/sync → rename 으로 원자적으로 쓴다.
+///
+/// 중간에 실패해도 원본은 손상되지 않는다. 같은 디렉터리에 임시 파일을 만들어야
+/// rename이 같은 파일시스템 안에서 원자적으로 동작한다.
+fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
+    use std::io::Write;
+
+    let tmp = path.with_extension("toml.tmp");
+    let io_err = |e| ConfigError::Io(path.to_path_buf(), e);
+
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(io_err)?;
+        f.write_all(content.as_bytes()).map_err(io_err)?;
+        f.flush().map_err(io_err)?;
+        f.sync_all().map_err(io_err)?;
+    }
+
+    // Windows는 대상이 있으면 rename이 실패하므로 교체 전에 지운다.
+    // (그 사이 크래시가 나면 파일이 없는 상태가 되지만, 반쪽 파일보다는 낫다 —
+    //  없으면 기본값으로 뜨고, 반쪽이면 파싱 에러로 죽는다.)
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(path);
+
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(ConfigError::Io(path.to_path_buf(), e))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 잘못된 값 거부 (2026-08-27) ────────────────────────────────────
+    //
+    // 예전에는 파싱 실패 시 기존 값을 유지한 채 Ok(())를 반환해서,
+    // `kmd config set general.render_fps abc`가 성공 메시지 + 종료코드 0을
+    // 내면서 값은 그대로였다. TUI는 그 결과마저 버리고 "변경됨"으로 표시했다.
+
+    #[test]
+    fn 숫자_필드에_숫자가_아닌_값은_거부한다() {
+        let mut c = Config::default();
+        let before = c.general.render_fps;
+
+        let err = c
+            .set_value("general.render_fps", "이건숫자가아님")
+            .expect_err("파싱 실패는 오류여야 한다");
+
+        assert!(matches!(err, ConfigError::InvalidValue { .. }));
+        assert_eq!(c.general.render_fps, before, "실패 시 값이 바뀌면 안 된다");
+        // 메시지에 무엇이 잘못됐는지 담긴다
+        let msg = err.to_string();
+        assert!(msg.contains("general.render_fps"), "키 표시: {msg}");
+        assert!(msg.contains("이건숫자가아님"), "입력값 표시: {msg}");
+    }
+
+    #[test]
+    fn 불리언_필드에_아무_문자열이나_받지_않는다() {
+        let mut c = Config::default();
+        assert!(c.set_value("general.show_preview", "yes").is_err());
+        assert!(c.set_value("general.show_preview", "false").is_ok());
+        assert!(!c.general.show_preview);
+    }
+
+    #[test]
+    fn 유효한_값은_정상_반영된다() {
+        let mut c = Config::default();
+        c.set_value("general.render_fps", "45").unwrap();
+        assert_eq!(c.general.render_fps, 45);
+        assert_eq!(c.get_value("general.render_fps").as_deref(), Some("45"));
+    }
+
+    // ── 저장: 주석 보존 + 원자적 교체 ─────────────────────────────────
+
+    fn temp_config_path(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("kmd_cfg_test_{tag}_{}.toml", std::process::id()));
+        p
+    }
+
+    #[test]
+    fn 저장이_사용자_주석을_보존한다() {
+        let path = temp_config_path("comments");
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(
+            &path,
+            "# 내가 손으로 단 머리말
+[general]
+# FPS 설명 주석
+render_fps = 30
+",
+        )
+        .unwrap();
+
+        let mut c = Config {
+            config_path: Some(path.clone()),
+            ..Default::default()
+        };
+        c.set_value("general.render_fps", "45").unwrap();
+        c.save().unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("# 내가 손으로 단 머리말"),
+            "머리말 주석 보존
+{saved}"
+        );
+        assert!(
+            saved.contains("# FPS 설명 주석"),
+            "키 주석 보존
+{saved}"
+        );
+        assert!(
+            saved.contains("render_fps = 45"),
+            "값 반영
+{saved}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn 저장_후_임시파일이_남지_않는다() {
+        let path = temp_config_path("atomic");
+        let _ = std::fs::remove_file(&path);
+
+        let c = Config {
+            config_path: Some(path.clone()),
+            ..Default::default()
+        };
+        c.save().unwrap();
+
+        assert!(path.exists(), "저장된 파일 존재");
+        assert!(
+            !path.with_extension("toml.tmp").exists(),
+            "임시 파일은 rename으로 사라져야 한다"
+        );
+        // 저장 결과가 다시 읽히는 온전한 TOML인지
+        let reloaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded.general.render_fps, c.general.render_fps);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn 깨진_기존_파일이어도_저장은_성공한다() {
+        // 병합 대상이 파싱 안 되면 새 직렬화 결과로 대체한다 — 저장 실패보다 낫다
+        let path = temp_config_path("broken");
+        std::fs::write(&path, "이건 = = 올바른 TOML이 아니다 [[[").unwrap();
+
+        let c = Config {
+            config_path: Some(path.clone()),
+            ..Default::default()
+        };
+        c.save().unwrap();
+
+        let reloaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded.general.render_fps, 30);
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn test_default_config() {

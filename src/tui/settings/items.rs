@@ -336,4 +336,66 @@ mod tests {
             }
         }
     }
+
+    /// 위 테스트는 "현재 값 되쓰기"라 **항상 파싱에 성공**한다. 그래서
+    /// setter가 입력을 무시하거나 파싱 실패를 조용히 삼켜도 통과했다
+    /// (Codex 리뷰 2026-08-27 지적). 위젯 종류에 맞는 **다른 값**을 넣고
+    /// 되읽어 실제로 반영됐는지, 잘못된 값은 거부되는지까지 본다.
+    #[test]
+    fn 설정_항목이_실제로_값을_바꾸고_잘못된_값은_거부한다() {
+        let mut config = kmd_core::Config::default();
+
+        for tab in SettingsTab::ALL {
+            for item in items_for_tab(tab) {
+                let probe = match item.widget {
+                    // 표시 전용·마커는 대상 아님
+                    WidgetKind::ReadOnly | WidgetKind::ListAdd => continue,
+                    WidgetKind::Toggle => {
+                        let cur = config.get_value(item.key).unwrap();
+                        if cur == "true" {
+                            "false"
+                        } else {
+                            "true"
+                        }
+                    }
+                    WidgetKind::Slider | WidgetKind::Number => "7",
+                    WidgetKind::Select(options) => {
+                        let cur = config.get_value(item.key).unwrap();
+                        options
+                            .iter()
+                            .find(|o| **o != cur)
+                            .copied()
+                            .unwrap_or(options[0])
+                    }
+                    // 자유 텍스트는 타입이 제각각(경로/키 조합)이라 대표값을 못 정한다.
+                    // 존재 검사는 위 테스트가 이미 한다.
+                    WidgetKind::Text => continue,
+                };
+
+                config
+                    .set_value(item.key, probe)
+                    .unwrap_or_else(|e| panic!("'{}' 에 '{probe}' 설정 실패: {e}", item.label));
+
+                let after = config.get_value(item.key).unwrap();
+                assert_eq!(
+                    after, probe,
+                    "'{}' ({}) 를 '{probe}'로 바꿨는데 읽으면 '{after}' — setter가 입력을 무시한다",
+                    item.label, item.key
+                );
+
+                // 숫자·불리언 위젯은 아무 문자열이나 받아선 안 된다
+                if matches!(
+                    item.widget,
+                    WidgetKind::Slider | WidgetKind::Number | WidgetKind::Toggle
+                ) {
+                    assert!(
+                        config.set_value(item.key, "not-a-valid-value").is_err(),
+                        "'{}' ({}) 가 잘못된 값을 조용히 받아들인다",
+                        item.label,
+                        item.key
+                    );
+                }
+            }
+        }
+    }
 }
