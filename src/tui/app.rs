@@ -185,6 +185,8 @@ pub fn run_app(
     _show_on_ready: bool,
 ) -> color_eyre::Result<()> {
     // Load config and build index
+    // mut는 아래 #[cfg(windows)] 이모지 폴백 분기에서만 필요하다.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut config = crate::cmd::load_config()?;
 
     // conhost(레거시 콘솔)에서는 이모지 렌더링 불가 → ASCII 폴백 자동 적용
