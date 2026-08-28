@@ -22,6 +22,15 @@ jobs:
           fetch-depth: 0 # 이력 전수 검사에 필요
       - run: scripts/scan-secrets.sh --history
 
+  # Windows의 CP949 혼용 편집 환경에서 Cargo.toml 한글이 깨져 cargo-deb 빌드가
+  # 실패한 적이 있다(87955e0). 깨진 바이트는 눈에 안 띄고 릴리스 끝에서야 터진다.
+  encoding:
+    name: Encoding check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/check-encoding.sh
+
   check:
     name: Check
     runs-on: ${{ matrix.os }}

@@ -291,7 +291,7 @@ pub fn run_app(
                 state.mark_dirty();
                 // Route keys to settings if modal is open
                 if state.settings.is_some() {
-                    handle_settings_key_event(&mut state, key, &mut config, &mut engine);
+                    handle_settings_key_event(&mut state, key, &mut engine);
                 } else {
                     handle_key(&mut state, key, &mut engine, db.as_ref());
                 }
@@ -340,7 +340,6 @@ pub fn run_app(
 fn handle_settings_key_event(
     state: &mut AppState,
     key: crossterm::event::KeyEvent,
-    config: &mut kmd_core::Config,
     engine: &mut SearchEngine,
 ) {
     // Take ownership of settings state temporarily
@@ -360,42 +359,41 @@ fn handle_settings_key_event(
             state.settings = None;
         }
         SettingsAction::Save { needs_rebuild } => {
-            // Apply the edited config.
-            // `config`(메인 루프 소유)와 `state.config`(핸들러가 읽는 캐시)를
-            // 함께 갱신한다 — 한쪽만 고치면 `:keys`/`:keymap`이 옛 설정을 보게 된다.
-            *config = settings_state.config.clone();
+            // 편집 결과를 정본(`state.config`)에 반영한다.
+            // 예전에는 메인 루프가 소유한 `config`와 이 캐시 두 벌이 공존해
+            // 한쪽만 고치면 `:keys`/`:keymap`이 옛 설정을 보게 됐다 — 이제 한 벌이다.
             state.config = settings_state.config.clone();
             settings_state.dirty = false;
 
             // Save to file
-            if let Err(e) = config.save() {
+            if let Err(e) = state.config.save() {
                 state.status_message = Some(format!("[!] Save failed: {}", e));
                 state.settings = Some(settings_state);
                 return;
             }
 
             // Apply immediate settings
-            state.show_preview = config.general.show_preview;
-            state.preview_width_percent = config.general.preview_width_percent;
-            state.quit_on_launch = config.launcher.quit_on_launch;
-            state.selected_llm_providers = config.launcher.multi_llm_providers.clone();
-            state.multi_llm_prefixes = config.launcher.multi_llm_prefixes.clone();
-            state.llm_autopilot = config.launcher.llm_autopilot;
-            state.selected_multi_web_providers = config.launcher.multi_web_providers.clone();
-            state.multi_web_prefixes = config.launcher.multi_web_prefixes.clone();
-            state.spell_providers = config.launcher.spell_providers.clone();
-            state.spell_prefixes = config.launcher.spell_prefixes.clone();
-            state.translate_providers = config.launcher.translate_providers.clone();
-            state.translate_prefixes = config.launcher.translate_prefixes.clone();
-            engine.set_kind_weights(config.launcher.kind_weights.clone());
+            state.show_preview = state.config.general.show_preview;
+            state.preview_width_percent = state.config.general.preview_width_percent;
+            state.quit_on_launch = state.config.launcher.quit_on_launch;
+            state.selected_llm_providers = state.config.launcher.multi_llm_providers.clone();
+            state.multi_llm_prefixes = state.config.launcher.multi_llm_prefixes.clone();
+            state.llm_autopilot = state.config.launcher.llm_autopilot;
+            state.selected_multi_web_providers = state.config.launcher.multi_web_providers.clone();
+            state.multi_web_prefixes = state.config.launcher.multi_web_prefixes.clone();
+            state.spell_providers = state.config.launcher.spell_providers.clone();
+            state.spell_prefixes = state.config.launcher.spell_prefixes.clone();
+            state.translate_providers = state.config.launcher.translate_providers.clone();
+            state.translate_prefixes = state.config.launcher.translate_prefixes.clone();
+            engine.set_kind_weights(state.config.launcher.kind_weights.clone());
 
             if needs_rebuild {
-                let use_emoji = config.general.emoji_icons;
+                let use_emoji = state.config.general.emoji_icons;
                 state.use_emoji = use_emoji;
                 let (bin_path, json_path) = crate::cmd::index_cache_paths();
                 let _ = std::fs::remove_file(&json_path);
                 let _ = std::fs::remove_file(&bin_path);
-                let index = kmd_core::Index::build(&config.launcher, use_emoji);
+                let index = kmd_core::Index::build(&state.config.launcher, use_emoji);
                 kmd_core::index::store::save_both(&index, &bin_path, &json_path);
                 state.total_items = index.items.len();
                 engine.load(index.items);
@@ -1614,6 +1612,148 @@ mod tests {
                 None,
             );
         }
+    }
+
+    // ── 실행 분기 (execute_selected) ────────────────────────────────────
+    //
+    // 실행 경로는 상태를 크게 흔드는데(쿼리 교체, 모달 열기, 드릴 진입)
+    // 지금까지 검증이 없었다. **부작용이 상태 안에서 끝나는 분기만** 다룬다 —
+    // 셸 실행·클립보드·브라우저 열기·config 저장은 테스트에서 건드리지 않는다.
+
+    fn sysitem(name: &str, path: &str, keywords: &str) -> SearchResult {
+        SearchResult {
+            item: kmd_core::IndexItem {
+                name: name.to_string(),
+                path: path.to_string(),
+                kind: ItemKind::SystemCommand,
+                source: kmd_core::index::Source::Plugin,
+                icon: String::new(),
+                keywords: keywords.to_string(),
+                icon_path: None,
+            },
+            score: 0,
+        }
+    }
+
+    /// 선택 항목 하나를 놓고 실행한다.
+    fn run_selected(state: &mut AppState, engine: &mut SearchEngine, item: SearchResult) {
+        state.results = vec![item];
+        state.selected_index = 0;
+        execute_selected(state, engine, None);
+    }
+
+    #[test]
+    fn 미지_명령_안내를_실행하면_help로_이동한다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        run_selected(
+            &mut state,
+            &mut engine,
+            sysitem("안내", "", "kmd:unknown_cmd"),
+        );
+
+        assert_eq!(state.query, ":help");
+        assert!(!state.results.is_empty(), "도움말 결과가 채워져야 한다");
+    }
+
+    #[test]
+    fn bang_힌트를_실행하면_웹검색_쿼리로_전환된다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        run_selected(
+            &mut state,
+            &mut engine,
+            sysitem("웹으로 검색", "@g rust", "kmd:bang_hint:g"),
+        );
+
+        assert_eq!(state.query, "@g rust", "항목의 path가 새 쿼리가 된다");
+    }
+
+    #[test]
+    fn 설정_항목을_실행하면_모달이_열린다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+        assert!(state.settings.is_none());
+
+        run_selected(
+            &mut state,
+            &mut engine,
+            sysitem("설정", "", "kmd:tui:open_settings"),
+        );
+        assert!(state.settings.is_some(), "설정 모달이 열려야 한다");
+    }
+
+    #[test]
+    fn 도움말_항목을_실행하면_시작_쿼리로_전환된다() {
+        let mut engine = SearchEngine::new();
+        let mut state = test_state();
+
+        // 공용 도움말 목록에서 시작 쿼리가 있는 항목 하나를 고른다
+        let help = kmd_core::query_prefix::help_items(false);
+        let item = help
+            .into_iter()
+            .find(|i| kmd_core::query_prefix::help_query_seed(&i.name).is_some())
+            .expect("시작 쿼리가 있는 도움말 항목");
+        let seed = kmd_core::query_prefix::help_query_seed(&item.name)
+            .unwrap()
+            .to_string();
+
+        run_selected(&mut state, &mut engine, SearchResult { item, score: 0 });
+        assert_eq!(state.query, seed);
+    }
+
+    // ── 드릴다운 진입/복귀 ──────────────────────────────────────────────
+
+    #[test]
+    fn 드릴다운_진입후_복귀하면_이전_상태가_그대로_돌아온다() {
+        let mut state = test_state();
+
+        // 이 저장소의 docs/ 를 대상으로 실제 디렉터리 나열을 태운다
+        let dir = std::path::PathBuf::from("docs");
+        assert!(dir.is_dir(), "테스트 전제: docs/ 존재");
+
+        state.query = "원래쿼리".to_string();
+        state.results = vec![SearchResult {
+            item: kmd_core::IndexItem {
+                name: "docs".to_string(),
+                path: dir.to_string_lossy().to_string(),
+                kind: ItemKind::Directory,
+                source: kmd_core::index::Source::FileProvider,
+                icon: String::new(),
+                keywords: String::new(),
+                icon_path: None,
+            },
+            score: 0,
+        }];
+        state.selected_index = 0;
+
+        drill_into_folder(&mut state);
+        assert_eq!(
+            state.drill_path.as_deref(),
+            Some(dir.as_path()),
+            "드릴 경로 설정"
+        );
+        assert!(state.query.is_empty(), "드릴 진입 시 쿼리는 비운다");
+        assert!(!state.results.is_empty(), "디렉터리 내용이 채워져야 한다");
+
+        drill_back(&mut state);
+        assert!(state.drill_path.is_none(), "드릴에서 빠져나왔다");
+        assert_eq!(state.query, "원래쿼리", "이전 쿼리 복원");
+        assert_eq!(state.results.len(), 1, "이전 결과 복원");
+    }
+
+    #[test]
+    fn 디렉터리가_아니면_드릴다운하지_않는다() {
+        let mut state = test_state();
+        state.results = vec![sysitem("파일아님", "docs", "")];
+        state.selected_index = 0;
+
+        drill_into_folder(&mut state);
+        assert!(
+            state.drill_path.is_none(),
+            "SystemCommand 항목은 드릴 대상이 아니다"
+        );
+        assert!(state.drill_stack.is_empty(), "스택도 쌓이면 안 된다");
     }
 
     // ── 프리픽스 디스패치 테이블 ────────────────────────────────────────
