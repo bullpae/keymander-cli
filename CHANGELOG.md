@@ -5,6 +5,27 @@ All notable changes to keymander are documented here.
 ## [Unreleased]
 
 ### Changed
+- **`kmd-desktop`의 `update_inner` 359줄 → 84줄 (R2-2)** — 인라인 메시지 arm
+  11개(`QueryChanged`·`GotWindowId`·`EngineReady`·`QuickEngineReady`·
+  `ClipSearchFinished` 등)를 이 파일이 이미 쓰던 관례(`Message::X =>
+  self.handle_x()`)대로 핸들러 메서드로 추출했다. `app.rs`에 60줄 넘는 함수가
+  더는 없다. 동작 변경 없음 — 배포 후 런처 부팅(워밍업 → 퀵 엔진 → 풀 엔진)이
+  실제 경로에서 정상 동작함을 로그로 확인.
+- **TUI의 config 두 벌 공존 해소** — `handle_settings_key_event`에서 `config`
+  파라미터를 없애고 `AppState.config`를 유일한 정본으로 만들었다. 메인 루프의
+  `config`는 이제 시작 시 초기화에만 쓰인다.
+- 테스트 확충 — `src/` 18개 → **24개**. `execute_selected`의 상태 분기(도움말
+  시드 전환, bang 힌트, 미지 명령 → `:help`, 설정 모달)와 드릴다운 진입/복귀.
+
+### Added
+- **소스 인코딩 검사 (R2-4)** — `scripts/check-encoding.sh` + CI 잡.
+  UTF-8 유효성(CP949 혼입)과 BOM 규칙을 본다. **`.ps1`은 BOM이 필수**이고
+  (PS 5.1이 없으면 ANSI로 읽어 한글을 깨뜨린다) 나머지는 금지라는 점이 핵심이다.
+  도입하자마자 `scripts/assemble-config.ps1`에 BOM이 빠져 있던 것을 잡아 고쳤다.
+  검사 대상이 0개면 통과가 아니라 실패로 본다 — 조용한 통과가 가장 위험하다.
+- `scripts/code-metrics.sh` — 파일 규모·긴 함수·테스트 수 스냅샷.
+
+### Changed
 - **설정 키를 단일 레지스트리로 통합 (R2-5)** — `config_registry!` 매크로가
   **한 줄 선언에서 `get_value`/`set_value` 양쪽을 함께 생성**한다. 단순 키
   27개(숫자·불리언·문자열)에서 get/set 비대칭이 **원천적으로 불가능**해졌고,

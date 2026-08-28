@@ -1087,32 +1087,316 @@ impl App {
         }
     }
 
+    fn handle_query_changed(&mut self, query: String) -> Task<Message> {
+        self.query = query;
+        // macOS: 런처 프로세스 기동 직후 TSM이 한글 입력기를 연결하기 전에
+        // 입력된 키는 조합 없이 낱자 자모로 커밋된다(ㅎㅏㄴ). IME가 조합했을
+        // 결과(한)로 재조합해 표시/검색을 복원한다. 정상 텍스트는 항등(None).
+        if let Some(recomposed) = kmd_core::hangul::recompose_jamo(&self.query) {
+            self.log_ime_state("QueryChanged:recompose_jamo");
+            self.query = recomposed;
+        }
+        self.selected = 0;
+        self.last_query_changed_at = std::time::Instant::now();
+        self.log_ime_state("QueryChanged:assigned");
+        // 한글 IME 조합 중에는 검색/리렌더를 지연해 자모 분리 가능성을 줄인다.
+        if self.should_limit_reorder_for_ime() {
+            self.log_ime_state("QueryChanged:skip_search_due_to_jamo");
+            // 조합 중에도 warmup 유휴 타이머를 리셋한다. 그렇지 않으면 부팅 시
+            // 예약된 WarmupTick이 첫 조합 도중 발화해 loading 토글 재렌더로
+            // marked text가 깨지고 자모가 분리된다. (macOS)
+            return self.with_activity_warmup(Task::none());
+        }
+        let search_task = self.perform_search();
+        self.log_ime_state("QueryChanged:perform_search");
+        self.with_activity_warmup(search_task)
+    }
+
+    fn handle_got_window_id(&mut self, id: Option<window::Id>) -> Task<Message> {
+        self.window_id = id;
+        tracing::info!(
+            "Window id acquired {} ms after boot",
+            self.app_started_at.elapsed().as_millis()
+        );
+        match id {
+            Some(id) => {
+                let saved_x = self.window_state.x;
+                let saved_y = self.window_state.y;
+                let width = self.window_width;
+                let win_h = self.ui.full_window_height;
+                let ensure_visible = window::monitor_size(id).then(move |maybe_size| {
+                    let (Some(x), Some(y), Some(mon)) = (saved_x, saved_y, maybe_size) else {
+                        return Task::none();
+                    };
+
+                    let w = width.clamp(420.0, 1200.0);
+                    let h = win_h;
+                    let outside = x + w < 40.0
+                        || x > mon.width - 40.0
+                        || y + h < 20.0
+                        || y > mon.height - 20.0;
+
+                    if outside {
+                        let recentered =
+                            Point::new((mon.width - w) / 2.0, (mon.height / 3.0).max(0.0));
+                        window::move_to(id, recentered)
+                    } else {
+                        Task::none()
+                    }
+                });
+
+                Task::batch([
+                    window::raw_id::<Message>(id).map(Message::GotRawWindowId),
+                    ensure_visible,
+                ])
+            }
+            None => self.request_focus(),
+        }
+    }
+
+    fn handle_warmup_tick(&mut self, token: u64) -> Task<Message> {
+        if self.full_warmup_started || token != self.warmup_token {
+            return Task::none();
+        }
+
+        // IME 조합/최근 입력 중이면 warmup을 미룬다. loading 토글로 인한 뷰
+        // 재렌더가 첫 한글 조합(marked text)을 깨뜨리는 것을 방지. (macOS 자모 분리)
+        if self.is_typing_in_progress() {
+            self.log_ime_state("WarmupTick:defer_for_ime");
+            self.warmup_token = self.warmup_token.wrapping_add(1);
+            return Self::schedule_warmup_tick(self.warmup_token);
+        }
+
+        self.full_warmup_started = true;
+        self.loading = true;
+        tracing::info!(
+            "Starting full engine warmup after {}ms idle",
+            WARMUP_IDLE_MS
+        );
+        self.spawn_full_engine_load_task()
+    }
+
+    fn handle_engine_ready(&mut self) -> Task<Message> {
+        // warmup이 입력 전에 시작된 경우, 엔진 스왑/loading 토글이 조합 도중
+        // 재렌더를 일으켜 자모가 분리될 수 있다. 조합 중이면 스왑 전체를 미룬다.
+        // (engine_slot이 결과를 계속 보관하므로 이후 재발화 시 그대로 적용)
+        if self.is_typing_in_progress() {
+            self.log_ime_state("EngineReady:defer_for_ime");
+            return Task::future(async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                Message::EngineReady
+            });
+        }
+        let loaded = self
+            .engine_slot
+            .lock()
+            .unwrap_or_else(|e| {
+                tracing::error!("engine_slot mutex poisoned — 복구 시도");
+                e.into_inner()
+            })
+            .take();
+
+        if let Some(res) = loaded {
+            self.engine = res.engine;
+            self.full_engine_loaded = true;
+            self.use_emoji = res.use_emoji;
+            self.selected_llm_providers = res.llm_providers;
+            self.selected_multi_web_providers = res.multi_web_providers;
+            self.multi_llm_prefixes = res.llm_prefixes;
+            self.multi_web_prefixes = res.multi_web_prefixes;
+            self.spell_providers = res.spell_providers;
+            self.spell_prefixes = res.spell_prefixes;
+            self.translate_providers = res.translate_providers;
+            self.translate_prefixes = res.translate_prefixes;
+            self.runtime_config = crate::engine::load_config();
+            self.loading = false;
+            tracing::info!("Search engine ready");
+            if !self.query.trim().is_empty() {
+                // IME 조합 중이면 검색/뷰 갱신을 미뤄 자모 분리를 막는다.
+                if self.is_typing_in_progress() {
+                    return Task::future(async {
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        Message::EngineSwapSettled
+                    });
+                }
+                return self.perform_search();
+            }
+        } else {
+            self.loading = false;
+        }
+        Task::none()
+    }
+
+    fn handle_engine_swap_settled(&mut self) -> Task<Message> {
+        if self.query.trim().is_empty() {
+            return Task::none();
+        }
+        // 아직 입력 중이면 다시 미룬다 — 조합이 끝난 뒤에만 갱신.
+        if self.is_typing_in_progress() {
+            return Task::future(async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                Message::EngineSwapSettled
+            });
+        }
+        self.perform_search()
+    }
+
+    fn handle_quick_engine_ready(&mut self) -> Task<Message> {
+        // full 엔진이 먼저 준비된 경우 quick 결과는 폐기 (더 작은 인덱스)
+        if self.full_engine_loaded {
+            return Task::none();
+        }
+        // IME 조합 중이면 스왑을 미룬다 — EngineReady와 동일한 보호.
+        // 단, 쿼리가 비어 있으면 조합 중일 수 없으므로 즉시 스왑한다
+        // (last_query_changed_at이 부팅 시각으로 초기화되어 있어
+        //  is_typing_in_progress만 보면 부팅 직후 항상 지연된다).
+        if !self.query.is_empty() && self.is_typing_in_progress() {
+            self.log_ime_state("QuickEngineReady:defer_for_ime");
+            return Task::future(async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Message::QuickEngineReady
+            });
+        }
+        let loaded = self
+            .quick_engine_slot
+            .lock()
+            .unwrap_or_else(|e| {
+                tracing::error!("quick_engine_slot mutex poisoned — 복구 시도");
+                e.into_inner()
+            })
+            .take();
+        if let Some(engine) = loaded {
+            self.engine = engine;
+            self.loading = false;
+            tracing::info!(
+                "Quick engine applied {} ms after boot",
+                self.app_started_at.elapsed().as_millis()
+            );
+            if !self.query.trim().is_empty() {
+                return self.perform_search();
+            }
+        }
+        Task::none()
+    }
+
+    fn handle_autostart_status_loaded(&mut self, result: Result<bool, String>) -> Task<Message> {
+        self.daemon_autostart_check_in_flight = false;
+        self.daemon_autostart_last_checked_at = Some(std::time::Instant::now());
+        match result {
+            Ok(installed) => {
+                self.daemon_autostart_enabled = Some(installed);
+            }
+            Err(message) => {
+                tracing::warn!("autostart status 조회 실패: {message}");
+                self.daemon_autostart_enabled = None;
+            }
+        }
+        if crate::query_prefix::prefix_of(self.query.trim())
+            == crate::query_prefix::Prefix::Settings
+        {
+            let current_query = self.query.clone();
+            self.handle_settings_query(&current_query);
+        }
+        Task::none()
+    }
+
+    fn handle_autostart_toggle_finished(
+        &mut self,
+        result: Result<String, String>,
+    ) -> Task<Message> {
+        self.daemon_autostart_toggle_in_flight = false;
+        match result {
+            Ok(message) => tracing::info!("autostart: {message}"),
+            Err(message) => tracing::warn!("autostart toggle 실패: {message}"),
+        }
+        self.query = ":set".to_string();
+        self.handle_settings_query(":set");
+        let refresh = self.schedule_autostart_status_refresh(true);
+        let focus = self.request_focus();
+        Task::batch([refresh, focus])
+    }
+
+    fn handle_check_quit_signal(&mut self) -> Task<Message> {
+        if self.state_dirty {
+            self.window_state.save();
+            self.state_dirty = false;
+        }
+        if self._guard.should_quit() {
+            self._guard.consume_quit_signal();
+            tracing::info!("Received quit signal — exiting");
+            self.window_state.save();
+            return iced::exit();
+        }
+        Task::none()
+    }
+
+    fn handle_shell_done(&mut self, result: Result<String, String>) -> Task<Message> {
+        match result {
+            Ok(output) => {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Err(e) = clipboard.set_text(&output) {
+                        tracing::warn!("클립보드 쓰기 실패: {e}");
+                    }
+                }
+                let first_line = output.lines().next().unwrap_or("(no output)");
+                tracing::info!("Shell output copied: {first_line}");
+            }
+            Err(msg) => {
+                tracing::error!("Shell error: {msg}");
+            }
+        }
+        iced::exit()
+    }
+
+    fn handle_clip_search_finished(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<kmd_core::ipc::ClipHit>, String>,
+    ) -> Task<Message> {
+        // 오래된 응답(그 사이 쿼리가 바뀜)이나 클립보드 모드를 벗어난 뒤
+        // 도착한 응답은 폐기한다 — 현재 결과를 덮어쓰지 않는다.
+        if generation != self.search_generation
+            || crate::query_prefix::prefix_of(self.query.trim())
+                != crate::query_prefix::Prefix::Clipboard
+        {
+            return Task::none();
+        }
+        let use_emoji = self.use_emoji;
+        let query_is_empty = self
+            .query
+            .trim()
+            .strip_prefix(';')
+            .or_else(|| self.query.trim().strip_prefix(":clip"))
+            .unwrap_or("")
+            .trim()
+            .is_empty();
+        let items = match result {
+            Ok(hits) if !hits.is_empty() => hits
+                .iter()
+                .map(|hit| search_routing::clip_item(hit, use_emoji))
+                .collect(),
+            Ok(_) => vec![search_routing::clip_notice(
+                if query_is_empty {
+                    "클립보드 히스토리가 비어 있습니다"
+                } else {
+                    "일치하는 항목이 없습니다"
+                },
+                "복사를 하면 여기에 쌓입니다 (설정: [clipboard] history_enabled)",
+                use_emoji,
+            )],
+            Err(message) => vec![search_routing::clip_notice(
+                "클립보드 히스토리를 사용할 수 없습니다",
+                &message,
+                use_emoji,
+            )],
+        };
+        self.apply_contains_items(items);
+        self.spawn_icon_prefetch()
+    }
+
     fn update_inner(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::QueryChanged(query) => {
-                self.query = query;
-                // macOS: 런처 프로세스 기동 직후 TSM이 한글 입력기를 연결하기 전에
-                // 입력된 키는 조합 없이 낱자 자모로 커밋된다(ㅎㅏㄴ). IME가 조합했을
-                // 결과(한)로 재조합해 표시/검색을 복원한다. 정상 텍스트는 항등(None).
-                if let Some(recomposed) = kmd_core::hangul::recompose_jamo(&self.query) {
-                    self.log_ime_state("QueryChanged:recompose_jamo");
-                    self.query = recomposed;
-                }
-                self.selected = 0;
-                self.last_query_changed_at = std::time::Instant::now();
-                self.log_ime_state("QueryChanged:assigned");
-                // 한글 IME 조합 중에는 검색/리렌더를 지연해 자모 분리 가능성을 줄인다.
-                if self.should_limit_reorder_for_ime() {
-                    self.log_ime_state("QueryChanged:skip_search_due_to_jamo");
-                    // 조합 중에도 warmup 유휴 타이머를 리셋한다. 그렇지 않으면 부팅 시
-                    // 예약된 WarmupTick이 첫 조합 도중 발화해 loading 토글 재렌더로
-                    // marked text가 깨지고 자모가 분리된다. (macOS)
-                    return self.with_activity_warmup(Task::none());
-                }
-                let search_task = self.perform_search();
-                self.log_ime_state("QueryChanged:perform_search");
-                self.with_activity_warmup(search_task)
-            }
+            Message::QueryChanged(query) => self.handle_query_changed(query),
             Message::ResultClicked(index) => {
                 self.selected = index;
                 self.launch_selected()
@@ -1145,275 +1429,23 @@ impl App {
                     None => Task::none(),
                 }),
             },
-            Message::GotWindowId(id) => {
-                self.window_id = id;
-                tracing::info!(
-                    "Window id acquired {} ms after boot",
-                    self.app_started_at.elapsed().as_millis()
-                );
-                match id {
-                    Some(id) => {
-                        let saved_x = self.window_state.x;
-                        let saved_y = self.window_state.y;
-                        let width = self.window_width;
-                        let win_h = self.ui.full_window_height;
-                        let ensure_visible = window::monitor_size(id).then(move |maybe_size| {
-                            let (Some(x), Some(y), Some(mon)) = (saved_x, saved_y, maybe_size)
-                            else {
-                                return Task::none();
-                            };
-
-                            let w = width.clamp(420.0, 1200.0);
-                            let h = win_h;
-                            let outside = x + w < 40.0
-                                || x > mon.width - 40.0
-                                || y + h < 20.0
-                                || y > mon.height - 20.0;
-
-                            if outside {
-                                let recentered =
-                                    Point::new((mon.width - w) / 2.0, (mon.height / 3.0).max(0.0));
-                                window::move_to(id, recentered)
-                            } else {
-                                Task::none()
-                            }
-                        });
-
-                        Task::batch([
-                            window::raw_id::<Message>(id).map(Message::GotRawWindowId),
-                            ensure_visible,
-                        ])
-                    }
-                    None => self.request_focus(),
-                }
-            }
+            Message::GotWindowId(id) => self.handle_got_window_id(id),
             Message::GotRawWindowId(raw_id) => self.handle_got_raw_window_id(raw_id),
-            Message::WarmupTick(token) => {
-                if self.full_warmup_started || token != self.warmup_token {
-                    return Task::none();
-                }
-
-                // IME 조합/최근 입력 중이면 warmup을 미룬다. loading 토글로 인한 뷰
-                // 재렌더가 첫 한글 조합(marked text)을 깨뜨리는 것을 방지. (macOS 자모 분리)
-                if self.is_typing_in_progress() {
-                    self.log_ime_state("WarmupTick:defer_for_ime");
-                    self.warmup_token = self.warmup_token.wrapping_add(1);
-                    return Self::schedule_warmup_tick(self.warmup_token);
-                }
-
-                self.full_warmup_started = true;
-                self.loading = true;
-                tracing::info!(
-                    "Starting full engine warmup after {}ms idle",
-                    WARMUP_IDLE_MS
-                );
-                self.spawn_full_engine_load_task()
-            }
+            Message::WarmupTick(token) => self.handle_warmup_tick(token),
             Message::EnsureFocus(attempt) => self.handle_ensure_focus(attempt),
-            Message::EngineReady => {
-                // warmup이 입력 전에 시작된 경우, 엔진 스왑/loading 토글이 조합 도중
-                // 재렌더를 일으켜 자모가 분리될 수 있다. 조합 중이면 스왑 전체를 미룬다.
-                // (engine_slot이 결과를 계속 보관하므로 이후 재발화 시 그대로 적용)
-                if self.is_typing_in_progress() {
-                    self.log_ime_state("EngineReady:defer_for_ime");
-                    return Task::future(async {
-                        tokio::time::sleep(Duration::from_millis(400)).await;
-                        Message::EngineReady
-                    });
-                }
-                let loaded = self
-                    .engine_slot
-                    .lock()
-                    .unwrap_or_else(|e| {
-                        tracing::error!("engine_slot mutex poisoned — 복구 시도");
-                        e.into_inner()
-                    })
-                    .take();
-
-                if let Some(res) = loaded {
-                    self.engine = res.engine;
-                    self.full_engine_loaded = true;
-                    self.use_emoji = res.use_emoji;
-                    self.selected_llm_providers = res.llm_providers;
-                    self.selected_multi_web_providers = res.multi_web_providers;
-                    self.multi_llm_prefixes = res.llm_prefixes;
-                    self.multi_web_prefixes = res.multi_web_prefixes;
-                    self.spell_providers = res.spell_providers;
-                    self.spell_prefixes = res.spell_prefixes;
-                    self.translate_providers = res.translate_providers;
-                    self.translate_prefixes = res.translate_prefixes;
-                    self.runtime_config = crate::engine::load_config();
-                    self.loading = false;
-                    tracing::info!("Search engine ready");
-                    if !self.query.trim().is_empty() {
-                        // IME 조합 중이면 검색/뷰 갱신을 미뤄 자모 분리를 막는다.
-                        if self.is_typing_in_progress() {
-                            return Task::future(async {
-                                tokio::time::sleep(Duration::from_millis(400)).await;
-                                Message::EngineSwapSettled
-                            });
-                        }
-                        return self.perform_search();
-                    }
-                } else {
-                    self.loading = false;
-                }
-                Task::none()
-            }
-            Message::EngineSwapSettled => {
-                if self.query.trim().is_empty() {
-                    return Task::none();
-                }
-                // 아직 입력 중이면 다시 미룬다 — 조합이 끝난 뒤에만 갱신.
-                if self.is_typing_in_progress() {
-                    return Task::future(async {
-                        tokio::time::sleep(Duration::from_millis(400)).await;
-                        Message::EngineSwapSettled
-                    });
-                }
-                self.perform_search()
-            }
-            Message::QuickEngineReady => {
-                // full 엔진이 먼저 준비된 경우 quick 결과는 폐기 (더 작은 인덱스)
-                if self.full_engine_loaded {
-                    return Task::none();
-                }
-                // IME 조합 중이면 스왑을 미룬다 — EngineReady와 동일한 보호.
-                // 단, 쿼리가 비어 있으면 조합 중일 수 없으므로 즉시 스왑한다
-                // (last_query_changed_at이 부팅 시각으로 초기화되어 있어
-                //  is_typing_in_progress만 보면 부팅 직후 항상 지연된다).
-                if !self.query.is_empty() && self.is_typing_in_progress() {
-                    self.log_ime_state("QuickEngineReady:defer_for_ime");
-                    return Task::future(async {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        Message::QuickEngineReady
-                    });
-                }
-                let loaded = self
-                    .quick_engine_slot
-                    .lock()
-                    .unwrap_or_else(|e| {
-                        tracing::error!("quick_engine_slot mutex poisoned — 복구 시도");
-                        e.into_inner()
-                    })
-                    .take();
-                if let Some(engine) = loaded {
-                    self.engine = engine;
-                    self.loading = false;
-                    tracing::info!(
-                        "Quick engine applied {} ms after boot",
-                        self.app_started_at.elapsed().as_millis()
-                    );
-                    if !self.query.trim().is_empty() {
-                        return self.perform_search();
-                    }
-                }
-                Task::none()
-            }
+            Message::EngineReady => self.handle_engine_ready(),
+            Message::EngineSwapSettled => self.handle_engine_swap_settled(),
+            Message::QuickEngineReady => self.handle_quick_engine_ready(),
             Message::IconsReady => Task::none(),
-            Message::AutostartStatusLoaded(result) => {
-                self.daemon_autostart_check_in_flight = false;
-                self.daemon_autostart_last_checked_at = Some(std::time::Instant::now());
-                match result {
-                    Ok(installed) => {
-                        self.daemon_autostart_enabled = Some(installed);
-                    }
-                    Err(message) => {
-                        tracing::warn!("autostart status 조회 실패: {message}");
-                        self.daemon_autostart_enabled = None;
-                    }
-                }
-                if crate::query_prefix::prefix_of(self.query.trim())
-                    == crate::query_prefix::Prefix::Settings
-                {
-                    let current_query = self.query.clone();
-                    self.handle_settings_query(&current_query);
-                }
-                Task::none()
-            }
+            Message::AutostartStatusLoaded(result) => self.handle_autostart_status_loaded(result),
             Message::AutostartToggleFinished(result) => {
-                self.daemon_autostart_toggle_in_flight = false;
-                match result {
-                    Ok(message) => tracing::info!("autostart: {message}"),
-                    Err(message) => tracing::warn!("autostart toggle 실패: {message}"),
-                }
-                self.query = ":set".to_string();
-                self.handle_settings_query(":set");
-                let refresh = self.schedule_autostart_status_refresh(true);
-                let focus = self.request_focus();
-                Task::batch([refresh, focus])
+                self.handle_autostart_toggle_finished(result)
             }
-            Message::CheckQuitSignal => {
-                if self.state_dirty {
-                    self.window_state.save();
-                    self.state_dirty = false;
-                }
-                if self._guard.should_quit() {
-                    self._guard.consume_quit_signal();
-                    tracing::info!("Received quit signal — exiting");
-                    self.window_state.save();
-                    return iced::exit();
-                }
-                Task::none()
-            }
+            Message::CheckQuitSignal => self.handle_check_quit_signal(),
             Message::WindowEvent(_id, event) => self.handle_window_event(event),
-            Message::ShellDone(result) => {
-                match result {
-                    Ok(output) => {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            if let Err(e) = clipboard.set_text(&output) {
-                                tracing::warn!("클립보드 쓰기 실패: {e}");
-                            }
-                        }
-                        let first_line = output.lines().next().unwrap_or("(no output)");
-                        tracing::info!("Shell output copied: {first_line}");
-                    }
-                    Err(msg) => {
-                        tracing::error!("Shell error: {msg}");
-                    }
-                }
-                iced::exit()
-            }
+            Message::ShellDone(result) => self.handle_shell_done(result),
             Message::ClipSearchFinished { generation, result } => {
-                // 오래된 응답(그 사이 쿼리가 바뀜)이나 클립보드 모드를 벗어난 뒤
-                // 도착한 응답은 폐기한다 — 현재 결과를 덮어쓰지 않는다.
-                if generation != self.search_generation
-                    || crate::query_prefix::prefix_of(self.query.trim())
-                        != crate::query_prefix::Prefix::Clipboard
-                {
-                    return Task::none();
-                }
-                let use_emoji = self.use_emoji;
-                let query_is_empty = self
-                    .query
-                    .trim()
-                    .strip_prefix(';')
-                    .or_else(|| self.query.trim().strip_prefix(":clip"))
-                    .unwrap_or("")
-                    .trim()
-                    .is_empty();
-                let items = match result {
-                    Ok(hits) if !hits.is_empty() => hits
-                        .iter()
-                        .map(|hit| search_routing::clip_item(hit, use_emoji))
-                        .collect(),
-                    Ok(_) => vec![search_routing::clip_notice(
-                        if query_is_empty {
-                            "클립보드 히스토리가 비어 있습니다"
-                        } else {
-                            "일치하는 항목이 없습니다"
-                        },
-                        "복사를 하면 여기에 쌓입니다 (설정: [clipboard] history_enabled)",
-                        use_emoji,
-                    )],
-                    Err(message) => vec![search_routing::clip_notice(
-                        "클립보드 히스토리를 사용할 수 없습니다",
-                        &message,
-                        use_emoji,
-                    )],
-                };
-                self.apply_contains_items(items);
-                self.spawn_icon_prefetch()
+                self.handle_clip_search_finished(generation, result)
             }
             Message::ClipActionFinished(result) => match result {
                 Ok(message) => {
