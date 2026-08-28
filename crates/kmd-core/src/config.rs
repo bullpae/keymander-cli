@@ -199,6 +199,11 @@ pub struct ContentSearchConfig {
     pub extensions: Vec<String>,
     /// 본문 인덱스 대상 파일 수 상한 (기본 20000). 초과분은 건너뛰고 로그만 남긴다.
     pub max_files: usize,
+    /// 파일명에 포함되면 인덱싱에서 제외하는 마커 (소문자 부분일치).
+    /// 비어 있으면 내장 기본 목록(secret/credential/password/passwd)을 사용하고,
+    /// 지정하면 통째로 대체한다. 시크릿성 파일 본문이 인덱스 DB에 복제되는
+    /// 것을 막는 안전장치다.
+    pub exclude_names: Vec<String>,
 }
 
 impl Default for ContentSearchConfig {
@@ -208,6 +213,7 @@ impl Default for ContentSearchConfig {
             max_file_kb: 1024,
             extensions: Vec::new(),
             max_files: 20_000,
+            exclude_names: Vec::new(),
         }
     }
 }
@@ -1100,8 +1106,12 @@ fn merge_table(old: &mut toml_edit::Table, new: &toml_edit::Table) {
 
 /// 임시 파일 → flush/sync → rename 으로 원자적으로 쓴다.
 ///
-/// 중간에 실패해도 원본은 손상되지 않는다. 같은 디렉터리에 임시 파일을 만들어야
-/// rename이 같은 파일시스템 안에서 원자적으로 동작한다.
+/// 두 가지를 막는다.
+/// - 저장 도중 프로세스가 죽거나 디스크가 차서 **반쪽 파일**이 남는 것
+/// - 데몬의 주기적 config 재로드가 그 반쪽 파일을 읽고 기본값으로 폴백하는 창
+///
+/// 같은 디렉터리에 임시 파일을 만들어야 rename이 같은 파일시스템 안에서
+/// 원자적으로 동작한다.
 fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
     use std::io::Write;
 
@@ -1115,12 +1125,9 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ConfigError> {
         f.sync_all().map_err(io_err)?;
     }
 
-    // Windows는 대상이 있으면 rename이 실패하므로 교체 전에 지운다.
-    // (그 사이 크래시가 나면 파일이 없는 상태가 되지만, 반쪽 파일보다는 낫다 —
-    //  없으면 기본값으로 뜨고, 반쪽이면 파싱 에러로 죽는다.)
-    #[cfg(windows)]
-    let _ = std::fs::remove_file(path);
-
+    // Rust의 fs::rename은 Windows에서도 기존 파일을 덮어쓴다(MOVEFILE_REPLACE_EXISTING).
+    // 예전에 넣었던 "교체 전 remove_file"은 불필요했고, 오히려 파일이 없는 순간을
+    // 만들어 원자성을 깨뜨렸다 — 실측으로 확인하고 제거했다 (2026-08-28).
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {

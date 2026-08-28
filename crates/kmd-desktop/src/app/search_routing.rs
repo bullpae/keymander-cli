@@ -432,7 +432,7 @@ impl App {
 
     /// `?질의` — 문서 본문 검색 (FTS5, docs/15). 공유 kmd.db를 지연 오픈해 읽는다.
     pub(super) fn handle_content_search(&mut self, raw: &str) {
-        if self.content_db.is_none() {
+        if self.content_db.is_none() && self.runtime_config.launcher.content_search.enabled {
             let path = kmd_core::Config::default_data_dir().join(kmd_core::DB_FILENAME);
             match kmd_core::db::Database::open(&path) {
                 Ok(db) => self.content_db = Some(db),
@@ -444,6 +444,7 @@ impl App {
             raw,
             self.use_emoji,
             SEARCH_LIMIT,
+            self.runtime_config.launcher.content_search.enabled,
         );
         // 빈 질의(`?`만 입력) → 사용법 안내 아래에 "자주 변하는 폴더" 제안 (docs/15 P2)
         if kmd_core::content_index::strip_query(raw).is_empty() {

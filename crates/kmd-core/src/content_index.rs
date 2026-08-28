@@ -36,7 +36,6 @@ const DEFAULT_EXTENSIONS: &[&str] = &[
     "toml",
     "ini",
     "conf",
-    "env",
     "properties",
     // scripts / source
     "sh",
@@ -76,6 +75,25 @@ const DEFAULT_EXTENSIONS: &[&str] = &[
 /// 검색 최소 질의 길이(문자). 1자는 FTS 재현율도 낮고 결과가 폭주한다 —
 /// 런처는 모든 쿼리가 1자를 통과하므로 명시적 하한이 필요하다 (docs/15).
 pub const MIN_QUERY_CHARS: usize = 2;
+
+/// 내장 기본 파일명 제외 마커 — 시크릿성 파일(dotfile이 아니어서 숨김 필터를
+/// 통과하는 credentials.json, secrets.yaml 등)의 본문이 인덱스 DB에 평문으로
+/// 복제되지 않게 한다. config `content_search.exclude_names`로 통째 대체 가능.
+const DEFAULT_EXCLUDE_NAME_MARKERS: &[&str] = &["secret", "credential", "password", "passwd"];
+
+/// 파일명(소문자)이 제외 마커에 걸리는지.
+/// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
+pub(crate) fn excluded_name(cs: &crate::config::ContentSearchConfig, name_lower: &str) -> bool {
+    if cs.exclude_names.is_empty() {
+        DEFAULT_EXCLUDE_NAME_MARKERS
+            .iter()
+            .any(|m| name_lower.contains(m))
+    } else {
+        cs.exclude_names
+            .iter()
+            .any(|m| name_lower.contains(&m.to_lowercase()))
+    }
+}
 
 /// 유효 확장자 집합 — 설정이 비어 있으면 내장 기본 목록.
 /// (folder_suggest의 활동 스캔도 같은 대상 정의를 공유한다)
@@ -123,6 +141,12 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
     let cs = &launcher.content_search;
     let mut stats = SyncStats::default();
     if !cs.enabled {
+        // 비활성화 = 인덱스도 비운다 — 꺼도 과거 본문이 검색·보관되는 반쪽
+        // 비활성화를 막는다 (프라이버시 목적의 off를 존중).
+        stats.removed = purge(db)?;
+        if stats.removed > 0 {
+            tracing::info!("본문 검색 비활성 — 기존 인덱스 {}건 삭제", stats.removed);
+        }
         return Ok(stats);
     }
 
@@ -157,9 +181,12 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending: Vec<(String, u64, i64, String)> = Vec::new(); // (path, size, mtime, body)
     let mut truncated = false;
+    // 일시 소실된 루트(외장 디스크 언마운트 등) — 하위 인덱스를 지우지 않는다
+    let mut missing_roots: Vec<&std::path::PathBuf> = Vec::new();
 
     'roots: for root in &launcher.search_paths {
         if !root.is_dir() {
+            missing_roots.push(root);
             continue;
         }
         // depth 0(루트 자신)은 무시 규칙에서 제외 — 사용자가 숨김 폴더를
@@ -185,6 +212,9 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
             if !allowed.contains(&ext) {
+                continue;
+            }
+            if excluded_name(cs, &name.to_lowercase()) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -240,18 +270,41 @@ pub fn sync(db: &Database, launcher: &LauncherConfig) -> Result<SyncStats, DbErr
         );
     }
 
-    // 3. 디스크에서 사라진(또는 대상에서 빠진) 파일 제거
-    let tx = db.conn().unchecked_transaction()?;
-    for (path, (id, _, _)) in &existing {
-        if !seen.contains(path) {
+    // 3. 디스크에서 사라진(또는 대상에서 빠진) 파일 제거.
+    // 스캔이 상한에서 잘렸으면 통째로 건너뛴다 — 미도달 파일을 "사라짐"으로
+    // 오판해 삭제↔재인덱싱 churn을 만들지 않기 위해 (stale이 삭제보다 낫다).
+    if truncated {
+        tracing::warn!("스캔이 상한에서 잘려 이번 sync는 삭제 단계를 건너뜀");
+    } else {
+        let tx = db.conn().unchecked_transaction()?;
+        for (path, (id, _, _)) in &existing {
+            if seen.contains(path) {
+                continue;
+            }
+            // 소실된 루트 하위는 보존 — 재마운트 시 전량 재인덱싱을 피한다
+            if missing_roots
+                .iter()
+                .any(|root| Path::new(path).starts_with(root))
+            {
+                continue;
+            }
             tx.execute("DELETE FROM content_fts WHERE rowid = ?1", [id])?;
             tx.execute("DELETE FROM content_files WHERE id = ?1", [id])?;
             stats.removed += 1;
         }
+        tx.commit()?;
     }
-    tx.commit()?;
 
     Ok(stats)
+}
+
+/// 인덱스 전체 삭제 — 본문 검색 비활성화 시 호출된다. 삭제 건수를 반환.
+pub fn purge(db: &Database) -> Result<usize, DbError> {
+    let tx = db.conn().unchecked_transaction()?;
+    tx.execute("DELETE FROM content_fts", [])?;
+    let n = tx.execute("DELETE FROM content_files", [])?;
+    tx.commit()?;
+    Ok(n)
 }
 
 /// pending 배치를 한 트랜잭션으로 커밋. 성공적으로 반영한 건수를 반환.
@@ -291,7 +344,10 @@ fn flush_batch(
 /// 파일을 텍스트로 읽는다. UTF-8 → EUC-KR 폴백, 바이너리는 None.
 fn read_text(path: &Path, size_hint: usize) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
-    debug_assert!(bytes.len() <= size_hint.saturating_add(4096));
+    // stat→read 사이에 파일이 커졌으면(TOCTOU) 크기 상한을 우회하지 못하게 배제
+    if bytes.len() > size_hint.saturating_add(4096) {
+        return None;
+    }
     // NUL 스니핑: 텍스트 파일에 NUL이 들어갈 일은 사실상 없다
     let sniff = &bytes[..bytes.len().min(8192)];
     if sniff.contains(&0) {
@@ -405,6 +461,7 @@ pub fn launcher_results(
     raw: &str,
     use_emoji: bool,
     limit: usize,
+    enabled: bool,
 ) -> Vec<crate::search::SearchResult> {
     use crate::index::{IndexItem, ItemKind, Source};
     use crate::search::SearchResult;
@@ -423,6 +480,16 @@ pub fn launcher_results(
         },
         score: 0,
     };
+
+    // 비활성 상태에서는 (남아 있을 수 있는) 인덱스를 검색하지 않는다 —
+    // 끈 뒤에도 과거 본문이 노출되는 것을 막는다 (sync가 purge하지만 이중 방어).
+    if !enabled {
+        return vec![info(
+            "본문 검색이 꺼져 있습니다".to_string(),
+            "config.toml의 [launcher.content_search] enabled = true 로 켜세요".to_string(),
+            "\u{1F6AB}",
+        )];
+    }
 
     let Some(db) = db else {
         return vec![info(
@@ -645,7 +712,7 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         sync(&db, &test_launcher(dir.path())).unwrap();
 
-        let rs = launcher_results(Some(&db), "?예산", true, 10);
+        let rs = launcher_results(Some(&db), "?예산", true, 10, true);
         assert_eq!(rs.len(), 1);
         assert!(
             rs[0].item.name.starts_with("메모.md"),
@@ -657,19 +724,118 @@ mod tests {
         assert_eq!(rs[0].item.kind, ItemKind::File);
 
         // :grep 별칭도 같은 결과
-        assert_eq!(launcher_results(Some(&db), ":grep 예산", true, 10).len(), 1);
+        assert_eq!(
+            launcher_results(Some(&db), ":grep 예산", true, 10, true).len(),
+            1
+        );
 
-        // 안내 항목들: 짧은 질의 / DB 없음 / 매치 없음
-        let hint = launcher_results(Some(&db), "?", true, 10);
+        // 안내 항목들: 짧은 질의 / DB 없음 / 매치 없음 / 비활성
+        let hint = launcher_results(Some(&db), "?", true, 10, true);
         assert_eq!(hint[0].item.kind, ItemKind::SystemCommand);
-        assert!(launcher_results(None, "?예산", true, 10)[0]
+        assert!(launcher_results(None, "?예산", true, 10, true)[0]
             .item
             .name
             .contains("열 수 없습니다"));
-        assert!(launcher_results(Some(&db), "?존재안하는단어", true, 10)[0]
+        assert!(
+            launcher_results(Some(&db), "?존재안하는단어", true, 10, true)[0]
+                .item
+                .name
+                .contains("매치 없음")
+        );
+        // 비활성이면 인덱스에 매치가 있어도 검색하지 않는다
+        assert!(launcher_results(Some(&db), "?예산", true, 10, false)[0]
             .item
             .name
-            .contains("매치 없음"));
+            .contains("꺼져 있습니다"));
+    }
+
+    #[test]
+    fn 비활성화_sync는_기존_인덱스를_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "doc.md", b"confidential meeting minutes");
+        let db = Database::open_in_memory().unwrap();
+        let mut launcher = test_launcher(dir.path());
+
+        sync(&db, &launcher).unwrap();
+        assert_eq!(search(&db, "confidential", 10).unwrap().len(), 1);
+
+        launcher.content_search.enabled = false;
+        let s = sync(&db, &launcher).unwrap();
+        assert_eq!(s.removed, 1, "비활성화가 기존 인덱스를 비운다");
+        assert!(search(&db, "confidential", 10).unwrap().is_empty());
+        assert_eq!(stats(&db).unwrap().0, 0);
+    }
+
+    #[test]
+    fn 상한_절단_시_미도달_인덱스는_삭제하지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "a.md", b"alpha body");
+        write_file(dir.path(), "b.md", b"bravo body");
+        let db = Database::open_in_memory().unwrap();
+        let mut launcher = test_launcher(dir.path());
+
+        sync(&db, &launcher).unwrap();
+        assert_eq!(stats(&db).unwrap().0, 2);
+
+        // 상한 1로 줄이면 스캔이 잘린다 — 미도달 파일이 "사라짐"으로
+        // 오판돼 삭제되면 안 된다
+        launcher.content_search.max_files = 1;
+        let s = sync(&db, &launcher).unwrap();
+        assert_eq!(s.removed, 0, "절단된 sync는 삭제 단계를 건너뛴다");
+        assert_eq!(stats(&db).unwrap().0, 2);
+    }
+
+    #[test]
+    fn 소실된_루트_하위는_삭제하지_않는다() {
+        let keep = tempfile::tempdir().unwrap();
+        let volatile = tempfile::tempdir().unwrap();
+        write_file(keep.path(), "k.md", b"keep body");
+        write_file(volatile.path(), "v.md", b"volatile body");
+        let db = Database::open_in_memory().unwrap();
+        let launcher = LauncherConfig {
+            search_paths: vec![keep.path().to_path_buf(), volatile.path().to_path_buf()],
+            ..Default::default()
+        };
+
+        sync(&db, &launcher).unwrap();
+        assert_eq!(stats(&db).unwrap().0, 2);
+
+        // 루트 통째 소실(외장 디스크 언마운트 시나리오) — 하위 인덱스 보존
+        let volatile_path = volatile.path().to_path_buf();
+        drop(volatile);
+        let s = sync(&db, &launcher).unwrap();
+        assert_eq!(s.removed, 0, "소실 루트 하위는 보존: {volatile_path:?}");
+        assert_eq!(search(&db, "volatile", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn 시크릿성_파일명과_env_확장자는_기본_제외() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "notes.md", b"regular notes body");
+        write_file(dir.path(), "credentials.json", b"{\"token\": \"aaa\"}");
+        write_file(dir.path(), "db-Secrets.yaml", b"password: hunter2");
+        write_file(dir.path(), "prod.env", b"API_KEY=xyz");
+        let db = Database::open_in_memory().unwrap();
+
+        let s = sync(&db, &test_launcher(dir.path())).unwrap();
+        assert_eq!(s.indexed, 1, "notes.md만 인덱싱");
+        assert!(search(&db, "hunter2", 10).unwrap().is_empty());
+        assert!(search(&db, "API_KEY", 10).unwrap().is_empty());
+
+        // exclude_names를 지정하면 기본 마커를 통째로 대체
+        let mut launcher = test_launcher(dir.path());
+        launcher.content_search.exclude_names = vec!["zzz-none".into()];
+        let s = sync(&db, &launcher).unwrap();
+        assert!(s.indexed >= 2, "대체 목록에선 credentials.json도 인덱싱");
+    }
+
+    #[test]
+    fn 읽기_시점_크기_초과는_배제() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "grow.txt", &[b'x'; 64 * 1024]);
+        // stat 시점 크기(size_hint)보다 훨씬 커진 파일 — TOCTOU 상한 우회 차단
+        assert!(read_text(&p, 1024).is_none());
+        assert!(read_text(&p, 64 * 1024).is_some());
     }
 
     #[test]

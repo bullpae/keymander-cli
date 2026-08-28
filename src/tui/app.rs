@@ -1321,11 +1321,17 @@ fn handle_folder_search(query: &str, state: &mut AppState) {
 
 /// Handle `?` prefix — 문서 본문 검색 (FTS5, docs/15, kmd-core 공용 구현)
 fn handle_content_search(query: &str, state: &mut AppState, db: Option<&kmd_core::Database>) {
-    state.results =
-        kmd_core::content_index::launcher_results(db, query, state.use_emoji, SEARCH_RESULT_LIMIT);
+    // 캐시된 설정을 쓴다 — `?` 는 매 키 입력마다 도는 경로다 (R2-7)
+    let launcher = state.config.launcher.clone();
+    state.results = kmd_core::content_index::launcher_results(
+        db,
+        query,
+        state.use_emoji,
+        SEARCH_RESULT_LIMIT,
+        launcher.content_search.enabled,
+    );
     // 빈 질의(`?`만 입력) → 사용법 안내 아래에 "자주 변하는 폴더" 제안 (docs/15 P2)
     if kmd_core::content_index::strip_query(query).is_empty() {
-        let launcher = state.config.launcher.clone();
         state
             .results
             .extend(kmd_core::folder_suggest::suggestion_results(

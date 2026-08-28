@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.15.3] — 2026-08-23
+
 ### Changed
 - **`kmd-desktop`의 `update_inner` 359줄 → 84줄 (R2-2)** — 인라인 메시지 arm
   11개(`QueryChanged`·`GotWindowId`·`EngineReady`·`QuickEngineReady`·
@@ -175,6 +177,38 @@ All notable changes to keymander are documented here.
   동일하게 동작"*이라고 안내했지만 어댑터는 v0.9.3에 들어갔다. 이 주석을 믿고
   `passthrough`를 빼면 `LAlt` 트리거에서 `Ctrl+Alt+key`가 깨진다. Shift가
   투과 대상에서 제외된다는 점도 함께 명시.
+
+## [0.15.2] — 2026-08-20
+
+v0.15.0 본문 검색의 전수 코드 리뷰(보안·정확성·성능·UX 4관점)에서 나온
+개선 사항 일괄 반영.
+
+### Fixed
+- **본문 검색 비활성화가 반쪽만 동작하던 문제** — `content_search.enabled =
+  false`로 꺼도 기존 인덱스가 남아 `?` 검색에 과거 본문이 계속 노출됐다.
+  이제 끄면 다음 sync에서 인덱스를 전부 비우고, 런처도 비활성 안내만
+  보여준다 (프라이버시 목적의 off 존중).
+- **폴더 제안이 추가 직후에도 계속 뜨던 문제** — 제안 캐시(10분 TTL)가
+  Enter로 방금 추가한 폴더를 계속 반환했다. 캐시 반환 시에도 현재
+  search_paths와 겹치는 항목을 걸러낸다.
+- **max_files 상한 도달 시 인덱스 오삭제** — 스캔이 상한에서 잘리면
+  미도달 파일이 "사라짐"으로 오판돼 통째로 삭제·재인덱싱 churn이 생겼다.
+  절단된 sync는 삭제 단계를 건너뛴다. 외장 디스크 언마운트 등으로
+  search_path 루트가 일시 소실된 경우에도 하위 인덱스를 보존한다.
+- **config 저장이 비원자적이던 문제** — 데몬의 주기적 재로드가 쓰다 만
+  config.toml을 읽고 기본값으로 폴백할 수 있었다. tmp+rename 원자 쓰기로 교체.
+
+### Changed
+- **시크릿성 파일 기본 제외** — 파일명에 secret/credential/password/passwd가
+  들어가면 본문 인덱싱에서 제외한다 (`content_search.exclude_names`로 대체
+  가능). `env` 확장자도 기본 목록에서 제거 — `prod.env` 같은 시크릿 파일
+  본문이 인덱스 DB에 평문 복제되지 않게. 필요하면 `extensions`에 다시
+  추가하면 된다.
+- **macOS 인덱서 스레드 QoS 하향** — 본문 인덱싱·파일 감시 스레드를
+  QOS_CLASS_UTILITY로 강등 (Windows는 기존에 있었고 macOS는 no-op이었다).
+  큰 폴더 첫 인덱싱이 포그라운드·키 입력과 CPU를 다투지 않는다.
+- stat→read 사이에 파일이 커진 경우(TOCTOU) 크기 상한을 우회하지 못하게
+  읽기 시점에도 상한을 검사한다.
 
 ## [0.15.1] — 2026-08-19
 
