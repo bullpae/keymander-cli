@@ -4,20 +4,7 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
-## [0.15.3] — 2026-08-23
-
-### Changed
-- **`kmd-desktop`의 `update_inner` 359줄 → 84줄 (R2-2)** — 인라인 메시지 arm
-  11개(`QueryChanged`·`GotWindowId`·`EngineReady`·`QuickEngineReady`·
-  `ClipSearchFinished` 등)를 이 파일이 이미 쓰던 관례(`Message::X =>
-  self.handle_x()`)대로 핸들러 메서드로 추출했다. `app.rs`에 60줄 넘는 함수가
-  더는 없다. 동작 변경 없음 — 배포 후 런처 부팅(워밍업 → 퀵 엔진 → 풀 엔진)이
-  실제 경로에서 정상 동작함을 로그로 확인.
-- **TUI의 config 두 벌 공존 해소** — `handle_settings_key_event`에서 `config`
-  파라미터를 없애고 `AppState.config`를 유일한 정본으로 만들었다. 메인 루프의
-  `config`는 이제 시작 시 초기화에만 쓰인다.
-- 테스트 확충 — `src/` 18개 → **24개**. `execute_selected`의 상태 분기(도움말
-  시드 전환, bang 힌트, 미지 명령 → `:help`, 설정 모달)와 드릴다운 진입/복귀.
+## [0.16.0] — 2026-08-28
 
 ### Added
 - **소스 인코딩 검사 (R2-4)** — `scripts/check-encoding.sh` + CI 잡.
@@ -42,7 +29,6 @@ All notable changes to keymander are documented here.
   추가, 키맵 액션, 템플릿 add/remove)는 캐시를 직접 고쳐 어긋나지 않게 했다.
   `load_config()` 호출 **11곳 → 1곳**(시작 시 1회).
 
-### Changed
 - **`process_key` 451줄 단일 함수를 진입점 43줄 + 12단계로 분해** — 섹션
   우선순위가 곧 이 엔진의 의미라, 분해 **전에** 40스텝 시나리오의 결정
   시퀀스 전체를 채취해 `process_key_동작_스냅샷` characterization 테스트로
@@ -55,12 +41,23 @@ All notable changes to keymander are documented here.
 - 테스트 확충 — `src/` 7개 → 18개(프리픽스 디스패치 테이블, 선택 상태 전이,
   드릴다운 종료), core에 프리픽스 파싱 테스트 5개, 엔진에 동작 스냅샷 1개.
 
-### Documentation
 - `docs/11_refactor_backlog.md` 갱신 — 낡은 수치를 **적지 않기로** 하고
   `scripts/code-metrics.sh`를 추가했다(손으로 적은 줄 수는 며칠 만에 낡는다).
   완료·부분완료 항목을 반영하고, 이번에 발견한 R2-5(설정 키 4중 열거)·
   R2-6(라우팅 이중화)·R2-7(TUI가 검색마다 config를 디스크에서 읽음)을 추가.
   착수 순서를 현재 상태에 맞게 다시 매기고 보류 항목의 이유를 남겼다.
+
+- 설정 항목 왕복 테스트를 강화 — 위젯 종류에 맞는 **다른 값**을 넣고 되읽어
+  실제 반영을 확인하고, 숫자·불리언 위젯은 잘못된 값을 거부하는지도 본다.
+  기존 테스트는 키 존재만 보장했다.
+- `kmd-core`에 `toml_edit`를 명시 의존성으로 추가 (`toml`의 전이 의존이었으나
+  직접 사용하게 됨).
+
+- `daemon status` 출력 서식을 `kmd_core::ipc::Response::status_lines` 한 곳으로
+  통합 — `kmd daemon status`와 `kmd-daemon status`가 각자 30줄을 destructure해
+  출력하고 있었다. `hook_health` 추가 때 한쪽만 고쳐 컴파일 에러가 났던 지점이고,
+  다음엔 **한쪽에만 표시되는 조용한 불일치**가 될 수 있었다.
+- clippy 경고 2건 정리 (`needless_return`, `unnecessary_cast`) — 경고 0건 복귀.
 
 ### Fixed
 - **잘못된 설정값이 "저장됨"으로 보이면서 조용히 버려지던 문제** —
@@ -78,20 +75,6 @@ All notable changes to keymander are documented here.
   임시 파일 → flush/sync → rename 으로 원자적으로 교체한다. 기존 파일이 깨져
   파싱되지 않으면 병합을 포기하고 새로 쓴다(저장 실패보다 낫다).
 
-### Changed
-- 설정 항목 왕복 테스트를 강화 — 위젯 종류에 맞는 **다른 값**을 넣고 되읽어
-  실제 반영을 확인하고, 숫자·불리언 위젯은 잘못된 값을 거부하는지도 본다.
-  기존 테스트는 키 존재만 보장했다.
-- `kmd-core`에 `toml_edit`를 명시 의존성으로 추가 (`toml`의 전이 의존이었으나
-  직접 사용하게 됨).
-
-### Documentation
-- `docs/16` 모순 정리 — 열려 있는 과제 #4(kanata 드리프트)가 직전 커밋에서
-  해결됐는데 "미착수"로 남아 있던 것을 완료로 바꾸고 실행 검증 미완 단서를 명시.
-  결정 기록의 날짜 역순을 바로잡고, 08-26 행의 "`Alt+key`·`Alt+Shift+key`는
-  구조적으로 못 살린다"가 다음 날 정정됐음을 그 자리에 표시.
-
-### Fixed
 - **TUI 설정의 "Everything path"가 아무것도 저장하지 않던 버그** — 설정 화면은
   `launcher.everything_path` 키를 노출하는데 `Config::get_value`/`set_value`
   양쪽 모두 해당 분기가 없었다. 읽기는 항상 `None`이라 **값이 있어도 화면은
@@ -113,14 +96,18 @@ All notable changes to keymander are documented here.
   - ⚠️ 이 프리셋은 **kanata 실행으로 검증하지 못했다**(로컬 미설치). 데몬 내장
     엔진 경로에는 영향이 없다.
 
-### Changed
-- `daemon status` 출력 서식을 `kmd_core::ipc::Response::status_lines` 한 곳으로
-  통합 — `kmd daemon status`와 `kmd-daemon status`가 각자 30줄을 destructure해
-  출력하고 있었다. `hook_health` 추가 때 한쪽만 고쳐 컴파일 에러가 났던 지점이고,
-  다음엔 **한쪽에만 표시되는 조용한 불일치**가 될 수 있었다.
-- clippy 경고 2건 정리 (`needless_return`, `unnecessary_cast`) — 경고 0건 복귀.
+- **`unmapped = "passthrough"` 설명이 낡아 있던 것 수정** —
+  `dist/config.keymap.{windows,macos}.toml`이 *"어댑터 구현 전까지는 plain과
+  동일하게 동작"*이라고 안내했지만 어댑터는 v0.9.3에 들어갔다. 이 주석을 믿고
+  `passthrough`를 빼면 `LAlt` 트리거에서 `Ctrl+Alt+key`가 깨진다. Shift가
+  투과 대상에서 제외된다는 점도 함께 명시.
 
 ### Documentation
+- `docs/16` 모순 정리 — 열려 있는 과제 #4(kanata 드리프트)가 직전 커밋에서
+  해결됐는데 "미착수"로 남아 있던 것을 완료로 바꾸고 실행 검증 미완 단서를 명시.
+  결정 기록의 날짜 역순을 바로잡고, 08-26 행의 "`Alt+key`·`Alt+Shift+key`는
+  구조적으로 못 살린다"가 다음 날 정정됐음을 그 자리에 표시.
+
 - `docs/16` §5 정정 — `Alt+key` 충돌 범위는 **nav 매핑 11개 키뿐**이고 미매핑
   키는 `passthrough`로 보존된다(초판은 통째로 깨진다고 과장). `Alt+Shift+key`도
   "구조적 불가"가 아니라 **설계 선택**임을 AutoHotkey 대조로 명시 — AHK의 수정자
@@ -130,6 +117,18 @@ All notable changes to keymander are documented here.
   `Alt+H` 하나가 아니라 **`Alt` 탭 자체가 죽어 체계 전체**가 막힌다.
   완화책은 `tap_action = "LAlt"`.
 - 트리거 결정은 **실사용 검증 대기로 보류** 상태임을 문서 상단과 결정 기록에 명시.
+
+- **`docs/16` §5 트리거 재검토 추가** — "`LAlt`로 되돌리는 게 낫지 않나"에 대한
+  결론을 코드·문헌 근거와 함께 확정. `Ctrl+Alt+key`는 `unmapped="passthrough"`로
+  **이미 보존되지만**(4-pre2 + `EngageChord`, v0.9.3), `Alt+key`(리본 니모닉)와
+  `Alt+Shift+key`(HWP 자간좁히기)는 구조적으로 못 살린다 — 후자는 가드가
+  Shift를 일부러 제외하기 때문. CapsLock 유지 + **레이어 로컬 Shift**(왼손 키
+  홀드 = Shift)로 §3-2의 동시 입력 충돌만 떼어내는 쪽을 채택.
+- `docs/16` §2·§3·§4에 문헌 대조 추가 — 키 위치별 노력 비용 모델(Engram,
+  IJHCI 2026), "인접 + 같은 손가락"이 대체 오류의 조건이라는 오류 분류 연구,
+  자동화 패턴 변경 시의 선행간섭(JMB 2020). 원문 대조 한계는 §5-5에 명시.
+
+## [0.15.3] — 2026-08-23
 
 ### Changed
 - **nav 레이어 단어/줄 이동 더블탭을 `U`/`I` → `I`/`O`로 되돌림** (v0.14.0에서
@@ -161,22 +160,6 @@ All notable changes to keymander are documented here.
   CHANGELOG에 흩어져 있던 근거를 한곳에 모았다.
 - `docs/README.md` 색인 정정 — 13(v0.13.0부터 기본)·15(v0.15.0)를 "계획"에서
   "설계 이력"으로 옮기고, 누락돼 있던 14를 추가.
-- **`docs/16` §5 트리거 재검토 추가** — "`LAlt`로 되돌리는 게 낫지 않나"에 대한
-  결론을 코드·문헌 근거와 함께 확정. `Ctrl+Alt+key`는 `unmapped="passthrough"`로
-  **이미 보존되지만**(4-pre2 + `EngageChord`, v0.9.3), `Alt+key`(리본 니모닉)와
-  `Alt+Shift+key`(HWP 자간좁히기)는 구조적으로 못 살린다 — 후자는 가드가
-  Shift를 일부러 제외하기 때문. CapsLock 유지 + **레이어 로컬 Shift**(왼손 키
-  홀드 = Shift)로 §3-2의 동시 입력 충돌만 떼어내는 쪽을 채택.
-- `docs/16` §2·§3·§4에 문헌 대조 추가 — 키 위치별 노력 비용 모델(Engram,
-  IJHCI 2026), "인접 + 같은 손가락"이 대체 오류의 조건이라는 오류 분류 연구,
-  자동화 패턴 변경 시의 선행간섭(JMB 2020). 원문 대조 한계는 §5-5에 명시.
-
-### Fixed
-- **`unmapped = "passthrough"` 설명이 낡아 있던 것 수정** —
-  `dist/config.keymap.{windows,macos}.toml`이 *"어댑터 구현 전까지는 plain과
-  동일하게 동작"*이라고 안내했지만 어댑터는 v0.9.3에 들어갔다. 이 주석을 믿고
-  `passthrough`를 빼면 `LAlt` 트리거에서 `Ctrl+Alt+key`가 깨진다. Shift가
-  투과 대상에서 제외된다는 점도 함께 명시.
 
 ## [0.15.2] — 2026-08-20
 
