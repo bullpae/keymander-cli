@@ -4,6 +4,14 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **앱 아이콘 전면 교체 — "키캡 베이더"** — 헬멧=정면 키캡(사다리꼴 윗면 +
+  상·하 모서리 연결선), 얼굴=키보드 아이콘 어휘(기울어진 눈 키 2개·삼각 벤트 키
+  코·키+스페이스바 그릴 입)인 오리지널 캐릭터. keyboard + commander라는 이름의
+  기획 의도를 도상으로 옮겼다. `assets/icon.svg`(구 버전은 » 글리프가 U+FFFD로
+  손상돼 있었다)·`icon.png`(1024px)·`icon.ico`(256/48/32/16) 일괄 재생성.
+  눈 색은 다크 배경 `#56D2FF`, 라이트 배경 단독 글리프는 `#0A7FB5` 규정.
+
 ## [0.16.0] — 2026-08-28
 
 ### Added
