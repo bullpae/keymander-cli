@@ -4,6 +4,8 @@ All notable changes to keymander are documented here.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-08-30
+
 ### Changed
 - **앱 아이콘 전면 교체 — "키캡 베이더"** — 헬멧=정면 키캡(사다리꼴 윗면 +
   상·하 모서리 연결선), 얼굴=키보드 아이콘 어휘(기울어진 눈 키 2개·삼각 벤트 키
